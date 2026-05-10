@@ -1,0 +1,19 @@
+{
+  "enabled": false,
+  "engine": "llamacpp",
+  "correction_prompt": "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。输入：[原始文本]，输出：[纠正后文本]",
+  "retry_on_failure": 2,
+  "api_key": "",
+  "base_url": "http://127.0.0.1:8080",
+  "model": "",
+  "timeout": 30,
+  "batch_size": 5,
+  "context_window": 3,
+  "retry": 2,
+  "summary_prompt": "请根据以下OCR识别文本，总结出这段内容的：\n1. 领域/类型（如：小说、新闻、游戏对话、学术论文等）\n2. 整体氛围/语气（如：严肃、欢快、悲伤、紧张等）\n3. 主要内容/主题（一句话概括）\n\n请用简洁的中文回答，格式：\n领域：xxx\n氛围：xxx\n内容：xxx",
+  "correction_system_prompt": "你是一个专业的文本校对助手。只返回修正后的文本，不要添加任何解释。如果当前文本的环境上下文信息（如有），请参考它来辅助校对。",
+  "output_format": "[纠正后文本]",
+  "prompts": {
+    "default": ""
+  }
+}

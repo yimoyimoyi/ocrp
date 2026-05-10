@@ -1,0 +1,30 @@
+{
+  "templates": [
+    {
+      "name": "游戏对话提取",
+      "description": "适用于游戏视频字幕提取",
+      "prompt": "你是剧本提取专家。请精准识别文字。对话格式：『人名：内容』。选项格式：『选项：内容』。无内容回SKIP",
+      "applicable_regions": [
+        "center",
+        "bottom"
+      ]
+    },
+    {
+      "name": "UI/菜单识别",
+      "description": "适用于菜单、按钮文字识别",
+      "prompt": "请识别界面中的菜单项和按钮文字，按行输出",
+      "applicable_regions": [
+        "top",
+        "full"
+      ]
+    },
+    {
+      "name": "通用OCR",
+      "description": "识别所有可见文字",
+      "prompt": "请识别图片中的所有文字，保持原有排版",
+      "applicable_regions": [
+        "any"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "window": {
+    "default_width": 1280,
+    "default_height": 800,
+    "min_width": 900,
+    "min_height": 600
+  },
+  "labels": {
+    "app_title": "ORCP - OCR 处理工具",
+    "status_ready": "就绪",
+    "status_processing": "处理中...",
+    "tab_regions": "📐 区域管理",
+    "tab_config": "⚙ 配置",
+    "tab_results": "📋 识别结果",
+    "btn_start": "▶ 开始处理",
+    "btn_stop": "⏹ 停止",
+    "btn_export_txt": "导出 TXT",
+    "btn_export_json": "导出 JSON",
+    "btn_export_csv": "导出 CSV",
+    "btn_capture_frame": "📸 截取测试帧",
+    "btn_add_region": "+ 添加区域",
+    "btn_remove_region": "- 删除区域",
+    "btn_clear_regions": "清空区域"
+  },
+  "theme": {
+    "default": "dark"
+  },
+  "messages": {
+    "vram_unknown_label": "  |  显存: 未检测",
+    "mode_label": "  |  引擎: {engine}"
+  },
+  "buttons": {
+    "launch": {
+      "text": "▶ 开始处理",
+      "tooltip": "开始视频OCR处理"
+    },
+    "stop": {
+      "text": "⏹ 停止",
+      "tooltip": "停止当前处理"
+    },
+    "theme": {
+      "text_dark": "🌙 暗色",
+      "text_light": "☀ 亮色",
+      "tooltip": "切换亮色/暗色主题"
+    },
+    "export_txt": {
+      "text": "📄 TXT",
+      "tooltip": "导出为TXT格式"
+    },
+    "export_json": {
+      "text": "📋 JSON",
+      "tooltip": "导出为JSON格式"
+    },
+    "export_csv": {
+      "text": "📊 CSV",
+      "tooltip": "导出为CSV格式"
+    },
+    "capture": {
+      "text": "📸 截取测试帧",
+      "tooltip": "从视频预览中截取当前帧用于区域标注"
+    }
+  },
+  "theme_colors": {
+    "dark": {
+      "exe_label": "#aaaaaa",
+      "btn_delete_preset": "#ff6666"
+    },
+    "light": {
+      "exe_label": "#555555",
+      "btn_delete_preset": "#cc0000"
+    }
+  }
+}

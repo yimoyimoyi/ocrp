@@ -1,0 +1,23 @@
+{
+  "enabled": false,
+  "engine": "whisperx",
+  "model_size": "faster-whisper-large-v2",
+  "model_dir": "models/asr",
+  "language": "zh",
+  "device": "cuda",
+  "compute_type": "float16",
+  "batch_size": 16,
+  "vad_enabled": false,
+  "vad_min_silence_ms": 500,
+  "vad_threshold": 0.5,
+  "word_timestamps": true,
+  "max_silence_sec": 0.5,
+  "beam_size": 5,
+  "initial_prompt": "",
+  "condition_on_previous_text": true,
+  "no_speech_threshold": 0.6,
+  "compression_ratio_threshold": 2.4,
+  "temperature": "0.0,0.2,0.4,0.6,0.8,1.0",
+  "hotwords": "",
+  "asr_region_name": "语音"
+}

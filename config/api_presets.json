@@ -1,0 +1,17 @@
+{
+  "presets": {
+    "默认 (llama.cpp)": {
+      "api_key": "not-needed",
+      "base_url": "http://127.0.0.1:8080",
+      "model": "",
+      "timeout": 30
+    },
+    "OpenAI GPT-4o": {
+      "api_key": "sk-xxx",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-4o",
+      "timeout": 30
+    }
+  },
+  "default_preset": "默认 (llama.cpp)"
+}
