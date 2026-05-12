@@ -15,5 +15,7 @@
   "output_format": "[纠正后文本]",
   "prompts": {
     "default": ""
-  }
+  },
+  "stream_mode": false,
+  "json_mode": false
 }

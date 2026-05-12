@@ -322,7 +322,9 @@ class PresetManageDialog(QDialog):
         names = self._mgr.get_names()
         self._list.addItems(names)
         if cur in names:
-            self._list.setCurrentRow(self._list.findItems(cur, Qt.MatchExactly)[0])
+            items = self._list.findItems(cur, Qt.MatchExactly)
+            if items:
+                self._list.setCurrentRow(self._list.row(items[0]))
         self._list.blockSignals(False)
 
 class CorrectionConfigDialog(QDialog):
@@ -670,7 +672,7 @@ class MainWindow(QMainWindow):
     def _restore_window_geometry(self):
         g = self._config_mgr.get_window_geometry()
         if g: self.setGeometry(g.get("x", 100), g.get("y", 100),
-                               g.get("width", 1280), g.get("height", 800))
+                                g.get("width", 1280), g.get("height", 800))
         else: self.resize(1280, 800)
 
     def _save_window_geometry(self):
@@ -697,50 +699,47 @@ class MainWindow(QMainWindow):
         self._config_mgr.save_settings()
 
     def closeEvent(self, ev):
-        """关闭窗口 —— 强制终止所有线程和子进程。"""
-        print(f"[MainWindow] 🧹 窗口关闭，开始强制清理...")
+        """关闭窗口 —— 优先隐藏 UI，后台静默清理。"""
+        # ── 第一步：立即隐藏窗口，用户感知到 UI 已关闭 ──
+        self.hide()
+
+        # ── 第二步：保存状态 ──
         self._save_window_geometry()
         self._save_mode_params()
 
-        # ── 1. 停止 WorkflowManager 所有线程 ──
-        self._workflow.cleanup()
-
-        # ── 2. 强制停止视频预览的一切子进程 ──
-        vp = self._video_preview
-        if vp:
-            # 停止播放
-            if getattr(vp, '_is_playing', False):
-                vp._pause_video()
-            # 强制杀死 ffplay 进程
-            if vp._player_proc:
-                try:
-                    print(f"[MainWindow]   ⏹ 杀死 ffplay 进程")
-                    vp._player_proc.kill()
-                    vp._player_proc.wait(2)
-                except Exception:
-                    pass
-                vp._player_proc = None
-            # 关闭 FFmpeg 读取器
-            if vp._ffmpeg:
-                try:
-                    print(f"[MainWindow]   ⏹ 关闭 FFmpeg 读取器")
-                    vp._ffmpeg.close()
-                except Exception:
-                    pass
-                vp._ffmpeg = None
-
-        # ── 3. 强制停止 ASR 子进程 ──
-        if self._asr_mgr:
+        # ── 第三步：后台线程静默清理所有子进程/线程 ──
+        def _silent_cleanup():
             try:
-                engine = self._asr_mgr.get_engine()
-                if engine and hasattr(engine, '_proc') and engine._proc:
-                    print(f"[MainWindow]   ⏹ 杀死 ASR 子进程 (PID {engine._proc.pid})")
-                    engine._proc.kill()
-                    engine._proc.wait(3)
-            except Exception:
-                pass
+                self._workflow.cleanup()
+                vp = self._video_preview
+                if vp:
+                    if getattr(vp, '_is_playing', False):
+                        vp._pause_video()
+                    if vp._player_proc:
+                        try:
+                            vp._player_proc.kill()
+                        except Exception:
+                            pass
+                    if vp._ffmpeg:
+                        try:
+                            vp._ffmpeg.close()
+                        except Exception:
+                            pass
+                if self._asr_mgr:
+                    try:
+                        engine = self._asr_mgr.get_engine()
+                        if engine and hasattr(engine, '_proc') and engine._proc:
+                            engine._proc.kill()
+                    except Exception:
+                        pass
+                print(f"[MainWindow] ✅ 后台清理完成")
+            except Exception as e:
+                print(f"[MainWindow] ⚠ 后台清理异常: {e}")
 
-        print(f"[MainWindow] ✅ 强制清理完成")
+        import threading
+        threading.Thread(target=_silent_cleanup, daemon=True).start()
+
+        # 立即接受关闭事件（UI 已隐藏，后台静默清理）
         super().closeEvent(ev)
 
     # ── 刷新 ──
@@ -1181,6 +1180,7 @@ class MainWindow(QMainWindow):
         if "corr_preset" in p and p["corr_preset"] != old_params.get("corr_preset", ""):
             self._corrector.apply_preset(p["corr_preset"])
         self._last_mode_params = dict(p)
+        self._save_mode_params()  # 🔥 每次参数变化自动持久化
 
     def _sync_asr_config(self, params: dict):
         """将 UI 中的 ASR 参数同步写入 asr_engines.json。"""
@@ -1350,10 +1350,6 @@ class MainWindow(QMainWindow):
                     return
             self._video_preview.regions = regions
             self._region_manager.regions = regions
-            self._result_table.clear_results()
-            self._all_raw_results.clear()
-            self._correction_results.clear()
-            self._correction_pending.clear()
             self._progress_bar.setValue(0)
             self._workflow.start_batch()
         else:
@@ -1423,6 +1419,8 @@ class MainWindow(QMainWindow):
         wf._get_is_audio_file = lambda: self._is_audio_file()
         wf._get_results = lambda: self._result_table.get_results()
         wf._clear_results_table = lambda: self._result_table.clear_results()
+        wf._clear_results_by_type = lambda rgn, eng: self._result_table.clear_by_type(rgn, eng)
+        wf._asr_region_name = lambda: self._mode_params.get("asr_region_name", "语音")
         wf._sort_results_table = lambda order: self._result_table.sort_by_order(order)
         wf._get_polished_results = lambda sim, ml: self._result_table.get_polished_results(
             post_sim_threshold=sim, post_min_text_len=ml)
@@ -1511,9 +1509,12 @@ class MainWindow(QMainWindow):
         self._btn_start.setEnabled(True); self._btn_stop.setEnabled(False)
         self._btn_correction.setEnabled(True); self._btn_correction_all.setEnabled(True)
         self._progress_bar.setValue(0)
-        # 按时间和自定义区域顺序排序（图片模式跳过排序，避免区域名被替换为内容）
-        region_order = self._mode_params.get("region_order", "")
+        # 按时间戳升序排序（所有模式默认执行）
         if not self._video_preview.is_image:
+            self._result_table.sort_by_time()
+        # 区域顺序模板排序（可选叠加）
+        region_order = self._mode_params.get("region_order", "")
+        if not self._video_preview.is_image and region_order:
             self._result_table.sort_by_order(region_order)
         # ── 回填 end_sec + 置信度过滤 ──
         self._recalculate_end_seconds()
@@ -1601,7 +1602,8 @@ class MainWindow(QMainWindow):
             if not polished:
                 QMessageBox.information(self, "提示", "无有效结果可导出。")
                 return
-            export_results(polished, path, fmt, bool(cmap), cmap)
+            export_results(polished, path, fmt, bool(cmap), cmap,
+                           keep_original=self._mode_params.get("export_keep_original", False))
             self._status_label.setText(f"✅ 已导出: {Path(path).name}")
         except Exception as e:
             QMessageBox.critical(self, "导出失败", str(e))

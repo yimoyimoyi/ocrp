@@ -98,6 +98,8 @@ dependencies = [
     "nvidia-cusparse-cu12",
     "nvidia-nvjitlink-cu12",
     "nvidia-cudnn-cu12",
+    # cuDNN 8 ops-infer DLL 不在 pip 中（Python 3.12+ 无 nvidia-cudnn-cu11）
+    # setup.bat / setup.sh 会从 NVIDIA redist 自动下载
     # 以下为补充组件（部分可能被上述包自动拉取）
     "nvidia-cuda-nvrtc-cu12",
     "nvidia-nvjpeg-cu12",

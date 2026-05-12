@@ -55,6 +55,9 @@ models/asr/**/*.txt
 models/asr/.locks/
 models/asr/CACHEDIR.TAG
 
+# ── 用户放置 cuDNN 8 DLL（large binary）──
+models/asr/lib/
+
 # =============================================================================
 # 输出目录
 # =============================================================================
@@ -77,3 +80,5 @@ Thumbs.db
 *.log
 *.tmp
 *.temp
+orcp_asr_*.wav         # ASR 临时音频
+ASR_ISSUES_ANALYSIS.md # 一次性分析报告

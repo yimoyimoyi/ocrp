@@ -165,8 +165,10 @@ class BatchCorrectionWorker(QThread):
             if self._stop_flag:
                 return
 
-            # 发射每条结果（用原始列表遍历避免 key 丢失）
-            for row_idx, raw_text in self._texts:
+            # 发射每条结果（兼容 (row, raw) 和 (row, raw, ts, te) 两种格式）
+            for item in self._texts:
+                row_idx = item[0]
+                raw_text = item[1]
                 if row_idx in corrected_map:
                     self.correction_ready.emit(row_idx, raw_text,
                                                 corrected_map[row_idx])
@@ -315,12 +317,14 @@ class AudioProcessWorker(QThread):
         self._stop_flag = True
 
     def run(self):
+        audio_path = None
         try:
             if self._stop_flag:
                 return
 
             self.progress.emit("正在提取音频...")
-            from core.asr_engine import extract_audio_from_video
+            from core.asr_engine import extract_audio_from_video, convert_to_wav
+            import os
 
             if self._is_video:
                 audio_path = extract_audio_from_video(
@@ -331,9 +335,9 @@ class AudioProcessWorker(QThread):
                 if not audio_path:
                     self.error.emit("音频提取失败")
                     return
+                self._was_converted = False
             else:
                 # 音频文件：非 WAV 格式先转换为标准 16kHz/mono WAV
-                from core.asr_engine import convert_to_wav
                 converted = convert_to_wav(self._audio_source)
                 if converted:
                     audio_path = converted
@@ -346,23 +350,15 @@ class AudioProcessWorker(QThread):
                 return
 
             self.progress.emit("正在语音识别...")
-            segments = self._asr_engine.transcribe(audio_path)
 
-            # 清理临时文件
-            if (self._is_video or getattr(self, '_was_converted', False)) and audio_path != self._audio_source:
-                try:
-                    import os
-                    os.unlink(audio_path)
-                except Exception:
-                    pass
-
-            if self._stop_flag:
-                return
-
-            # 将 segments 转换为统一格式的结果
             from core.frame_processor import format_time
             results = []
-            for seg in segments:
+            error_holder = [None]
+
+            def _on_segment(seg):
+                """每识别出一段立即发射信号，UI 实时更新。"""
+                if self._stop_flag:
+                    return
                 ts = seg.get("start", 0.0)
                 end_ts = seg.get("end", ts + 3.0)
                 t_str = format_time(ts)
@@ -378,11 +374,42 @@ class AudioProcessWorker(QThread):
                         "raw": text,
                     })
 
+            # 🔥 流式调用：每识别出一段就实时发射 result_item
+            # transcribe 仍可用作兼容（收集全部后一次性返回）
+            if hasattr(self._asr_engine, 'transcribe_stream'):
+                self._asr_engine.transcribe_stream(audio_path, on_segment=_on_segment, error_holder=error_holder)
+            else:
+                segments, err = self._asr_engine.transcribe(audio_path)
+                if err:
+                    error_holder[0] = err
+                else:
+                    for seg in (segments or []):
+                        _on_segment(seg)
+
+            if error_holder[0]:
+                self.error.emit(f"语音识别失败: {error_holder[0]}")
+                return
+
+            if self._stop_flag:
+                return
+
+            # 无语音内容时给出提示
+            if not results:
+                self.log.emit("ASR 未检测到语音内容")
+
             self.finished_all.emit(results)
         except Exception as e:
             import traceback
             traceback.print_exc()
             self.error.emit(str(e))
+        finally:
+            # 确保临时文件被清理
+            if audio_path and audio_path != self._audio_source:
+                try:
+                    import os
+                    os.unlink(audio_path)
+                except Exception:
+                    pass
 
 
 class BatchProcessWorker(QThread):

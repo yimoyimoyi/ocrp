@@ -117,13 +117,126 @@ def _parse_temperature(val: str) -> list:
         return [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
 
-def _resolve_local_model_path(model_dir: str) -> str:
+def _resolve_local_model_path(model_dir: str, model_size: str = "") -> str:
+    """在 model_dir 中查找模型目录。
+
+    优先级：
+    1. model_size 指向的本地路径（如 "models--Systran--faster-whisper-large-v3"）
+    2. 递归搜索包含 model.bin + config.json 的目录
+    3. 空字符串表示找不到
+    """
     if not model_dir or not os.path.isdir(model_dir):
         return ""
+
+    # 1. 尝试 model_size 作为子目录
+    if model_size:
+        candidate = os.path.join(model_dir, model_size)
+        if os.path.isdir(candidate):
+            # 检查该目录是否直接包含 model.bin
+            if os.path.isfile(os.path.join(candidate, "model.bin")):
+                return candidate
+            # 否则递归搜索该目录
+            for root, dirs, files in os.walk(candidate):
+                if "model.bin" in files and "config.json" in files:
+                    return root
+
+    # 2. 递归搜索整个 model_dir
     for root, dirs, files in os.walk(model_dir):
         if "model.bin" in files and "config.json" in files:
+            print(f"[ASR_SERVER] found model at: {root}", file=sys.stderr, flush=True)
             return root
+
     return ""
+
+
+def _check_cudnn8_gpu_ready() -> bool:
+    """检测 cuDNN 8 必需的 3 个 DLL 是否全部可用。
+
+    ctranslate2 GPU 语音识别需要：
+      - cudnn_ops_infer64_8.dll   (基础 ops)
+      - cudnn_cnn_infer64_8.dll   (卷积推理)
+      - cudnn64_8.dll             (运行时)
+
+    检查顺序：系统 PATH → models/asr/lib/ → ctranslate2 包目录
+
+    返回 True 表示 GPU 可用，False 表示需回退 CPU。
+    """
+    import ctypes
+
+    # ── 用户手动放置目录 ──
+    lib_dir = os.path.join(BASE_DIR, "models", "asr", "lib")
+    if os.path.isdir(lib_dir) and sys.platform == "win32":
+        try:
+            os.add_dll_directory(lib_dir)
+        except (AttributeError, OSError):
+            pass
+
+    if sys.platform == "win32":
+        REQUIRED_DLLS = ("cudnn_ops_infer64_8.dll", "cudnn_cnn_infer64_8.dll", "cudnn64_8.dll")
+        missing = []
+        for dll in REQUIRED_DLLS:
+            found = False
+            # 1. 系统 PATH
+            try:
+                ctypes.CDLL(dll)
+                found = True
+            except OSError:
+                pass
+            # 2. models/asr/lib/
+            if not found:
+                dll_path = os.path.join(lib_dir, dll)
+                if os.path.isfile(dll_path):
+                    try:
+                        ctypes.CDLL(dll_path)
+                        found = True
+                    except OSError:
+                        pass
+            # 3. ctranslate2 包目录
+            if not found:
+                try:
+                    import ctranslate2
+                    pkg_dir = os.path.dirname(ctranslate2.__file__)
+                    dll_path = os.path.join(pkg_dir, dll)
+                    if os.path.isfile(dll_path):
+                        os.add_dll_directory(pkg_dir)
+                        ctypes.CDLL(dll)
+                        found = True
+                except Exception:
+                    pass
+            if not found:
+                missing.append(dll)
+
+        if not missing:
+            print(f"[ASR_SERVER] cuDNN 8 found: all 3 DLLs OK", file=sys.stderr, flush=True)
+            return True
+        else:
+            print(f"[ASR_SERVER] cuDNN 8 INCOMPLETE - missing: {', '.join(missing)}", file=sys.stderr, flush=True)
+            return False
+    else:
+        REQUIRED_SO = ("libcudnn_ops_infer.so.8", "libcudnn_cnn_infer.so.8", "libcudnn.so.8")
+        missing = []
+        for soname in REQUIRED_SO:
+            found = False
+            try:
+                ctypes.CDLL(soname)
+                found = True
+            except OSError:
+                so_path = os.path.join(lib_dir, soname)
+                if os.path.isfile(so_path):
+                    try:
+                        ctypes.CDLL(so_path)
+                        found = True
+                    except OSError:
+                        pass
+            if not found:
+                missing.append(soname)
+
+        if not missing:
+            print(f"[ASR_SERVER] cuDNN 8 found: all 3 SOs OK", file=sys.stderr, flush=True)
+            return True
+        else:
+            print(f"[ASR_SERVER] cuDNN 8 INCOMPLETE - missing: {', '.join(missing)}", file=sys.stderr, flush=True)
+            return False
 
 
 def main():
@@ -151,10 +264,22 @@ def main():
     vad_threshold = cfg.get("vad_threshold", 0.5)
     word_timestamps = cfg.get("word_timestamps", True)
 
+    # ── cuDNN 8 预检（GPU 模式）──
+    # ctranslate2 < 5 的 CUDA 推理依赖 cuDNN 8 DLL。
+    # 如果缺失，直接回退到 CPU 模式加载模型，避免 model.transcribe() 硬崩溃。
+    _using_gpu = (device == "cuda")
+    if _using_gpu and not _check_cudnn8_gpu_ready():
+        print(f"[ASR_SERVER] ⚠ cuDNN 8 不可用，自动回退 CPU 模式", file=sys.stderr, flush=True)
+        device = "cpu"
+        compute_type = "int8"
+        _using_gpu = False
+
     # ── 加载模型 ──
     print(f"[ASR_SERVER] loading model...", file=sys.stderr, flush=True)
+    model_arg = None
+    dl_root = None
     try:
-        local = _resolve_local_model_path(model_dir)
+        local = _resolve_local_model_path(model_dir, model_size)
         if local:
             model_arg = local
             dl_root = None
@@ -181,7 +306,7 @@ def main():
                 model_arg,
                 device="cpu",
                 compute_type="int8",
-                download_root=dl_root if 'dl_root' in dir() else None,
+                download_root=dl_root,
             )
             print(f"[ASR_SERVER] CPU model loaded OK", file=sys.stderr, flush=True)
         except Exception as e2:
@@ -189,6 +314,14 @@ def main():
             sys.exit(1)
 
     print(f"[ASR_SERVER] ready", file=sys.stderr, flush=True)
+
+    # ── 辅助函数：原子写入 stderr（绕过 Python 缓冲，确保进程崩溃时数据不丢失）──
+    def _log_stderr(msg: str):
+        """使用原始文件描述符写入 stderr，确保硬崩溃时数据可送达父进程。"""
+        try:
+            os.write(2, (msg + "\n").encode("utf-8", errors="replace"))
+        except Exception:
+            pass
 
     # ── 主循环 ──
     for line in sys.stdin:
@@ -211,6 +344,8 @@ def main():
                 _send({"status": "error", "message": f"Audio not found: {audio_path}"})
                 continue
 
+            print(f"[ASR_SERVER] transcribe request: {os.path.basename(audio_path)}", file=sys.stderr, flush=True)
+
             # 使用请求中的参数覆盖，否则用默认配置
             lang = req.get("language", language)
             lang = None if lang == "auto" else lang
@@ -229,10 +364,12 @@ def main():
             vad_params = None
             if vad:
                 vad_params = {"min_silence_duration_ms": vms}
-                # threshold 在新版 faster-whisper 中可能改名/移除，安全忽略
 
-            try:
-                segments, info = model.transcribe(
+            def _do_transcribe(_model):
+                import time as _t
+                t0 = _t.time()
+                _log_stderr(f"[ASR_SERVER] >>> model.transcribe() START: audio={os.path.basename(audio_path)} lang={lang}")
+                segs, inf = _model.transcribe(
                     audio_path,
                     language=lang,
                     beam_size=bs,
@@ -246,19 +383,63 @@ def main():
                     vad_filter=vad,
                     vad_parameters=vad_params,
                 )
-                results = []
-                for seg in segments:
-                    if seg.text.strip():
-                        results.append({
-                            "start": seg.start,
-                            "end": seg.end,
-                            "text": seg.text.strip(),
-                        })
-                _send({"status": "ok", "results": results,
-                       "detected_lang": info.language,
-                       "lang_prob": info.language_probability})
+                res = []
+                total = 0
+                for s in segs:
+                    total += 1
+                    if s.text.strip():
+                        seg_obj = {
+                            "start": s.start,
+                            "end": s.end,
+                            "text": s.text.strip(),
+                        }
+                        res.append(seg_obj)
+                        # 🔥 逐段发送，UI 实时更新
+                        _send({"status": "segment",
+                               "start": s.start,
+                               "end": s.end,
+                               "text": s.text.strip()})
+                elapsed = _t.time() - t0
+                print(f"[ASR_SERVER] transcribe done ({elapsed:.1f}s): {len(res)}/{total} segments, lang={inf.language}", file=sys.stderr, flush=True)
+                if total > 0 and len(res) == 0:
+                    print(f"[ASR_SERVER] WARNING: all {total} segments had empty text! Check no_speech_threshold (current={nst})", file=sys.stderr, flush=True)
+                # 最终确认帧
+                _send({"status": "done",
+                       "detected_lang": inf.language,
+                       "lang_prob": inf.language_probability,
+                       "total_segments": total,
+                       "valid_segments": len(res)})
+
+            # ── 尝试 GPU / 已加载模型 ──
+            try:
+                _do_transcribe(model)
+                continue
             except Exception as e:
-                _send({"status": "error", "message": str(e)})
+                err_msg = str(e)
+                print(f"[ASR_SERVER] transcribe FAILED: {err_msg[:200]}", file=sys.stderr, flush=True)
+
+                # GPU OOM 等运行时错误 → 回退 CPU
+                is_gpu_error = any(kw in err_msg.lower() for kw in
+                    ("cuda", "cublas", "gpu", "device", "out of memory"))
+
+                if not is_gpu_error or not _using_gpu:
+                    _send({"status": "error", "message": err_msg})
+                    continue
+
+            # ── 回退到 CPU ──
+            print(f"[ASR_SERVER] falling back to CPU...", file=sys.stderr, flush=True)
+            try:
+                from faster_whisper import WhisperModel as _WM
+                cpu_model = _WM(
+                    model_arg,
+                    device="cpu",
+                    compute_type="int8",
+                    download_root=dl_root,
+                )
+                _do_transcribe(cpu_model)
+            except Exception as e2:
+                print(f"[ASR_SERVER] CPU transcribe also FAILED: {e2}", file=sys.stderr, flush=True)
+                _send({"status": "error", "message": f"GPU+CPU both failed: {e2}"})
         else:
             _send({"status": "error", "message": f"Unknown cmd: {cmd}"})
 

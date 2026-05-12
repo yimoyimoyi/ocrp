@@ -119,7 +119,8 @@ class BaseASREngine(ABC):
         self.engine_name = "base"
 
     @abstractmethod
-    def transcribe(self, audio_path: str) -> List[dict]:
+    def transcribe(self, audio_path: str) -> tuple:
+        """返回 (results: List[dict], error: str|None)。"""
         pass
 
     def is_available(self):
@@ -234,31 +235,187 @@ class WhisperXEngine(BaseASREngine):
         try:
             _send_json(self._proc.stdin, {"cmd": "shutdown"})
             self._proc.wait(timeout=10)
-        except Exception:
+        except BrokenPipeError:
+            # stdin 已关闭，直接 kill
             try:
                 self._proc.kill()
+                self._proc.wait(timeout=2)
             except Exception:
                 pass
-        self._proc = None
-        self._ready = False
+        except Exception:
+            # 其他异常，尝试 kill
+            try:
+                self._proc.kill()
+                self._proc.wait(timeout=2)
+            except Exception:
+                pass
+        finally:
+            self._proc = None
+            self._ready = False
 
-    def _send_request(self, req: dict) -> dict:
-        """发送请求并等待响应。"""
+    def _send_request(self, req: dict, timeout: float = 300.0) -> dict:
+        """发送请求并等待响应（带超时保护）。
+
+        关键设计：
+        - stderr 读取线程在请求发送前启动，确保 GPU 崩溃信息不丢失
+        - stdout 读取放入独立线程，Windows 上 readline 可被超时中断
+
+        Args:
+            req: 请求字典
+            timeout: 读取响应的超时秒数（默认 5 分钟）
+        """
         if not self._start_server():
             return {"status": "error", "message": "ASR server not available"}
 
         try:
+            # 检查子进程是否意外退出
+            if self._proc.poll() is not None:
+                poll_code = self._proc.poll()
+                err_output = ""
+                try:
+                    err_output = self._proc.stderr.read()
+                except Exception:
+                    pass
+                self._proc = None
+                self._ready = False
+                return {"status": "error",
+                        "message": f"ASR server exited before request (code={poll_code}): {err_output[:200]}"}
+
+            from threading import Thread
+            import time
+
+            _result = [None]
+            _exception = [None]
+            _stderr_lines = []  # 收集 server 端 stderr 日志
+            _stdout = self._proc.stdout
+            _stderr = self._proc.stderr
+
+            def _read_response():
+                try:
+                    line = _stdout.readline()
+                    if line:
+                        _result[0] = json.loads(line)
+                    else:
+                        _result[0] = None  # EOF
+                except Exception as e:
+                    _exception[0] = e
+
+            def _read_stderr():
+                """持续读取 stderr，收集所有日志（包括崩溃堆栈）。"""
+                try:
+                    for line in _stderr:
+                        stripped = line.rstrip()
+                        _stderr_lines.append(stripped)
+                        # 实时打印到主进程日志
+                        print(f"[ASR_SERVER] {stripped}")
+                except Exception:
+                    pass
+
+            # ⚠️ 1️⃣ 先启动 stderr 收集线程（确保崩溃信息不丢失）
+            stderr_reader = Thread(target=_read_stderr, daemon=True)
+            stderr_reader.start()
+
+            # ⚠️ 2️⃣ 再发送请求
             _send_json(self._proc.stdin, req)
-            line = self._proc.stdout.readline()
-            if not line:
-                return {"status": "error", "message": "No response from ASR server"}
-            return json.loads(line)
+            print(f"[ASR] 请求已发送: cmd={req.get('cmd')}, audio={Path(req.get('audio_path','')).name}")
+
+            # ⚠️ 3️⃣ 启动 stdout 读取线程
+            reader = Thread(target=_read_response, daemon=True)
+            reader.start()
+
+            # 轮询等待，每 0.5s 检查进程存活和超时
+            deadline = time.time() + timeout
+            while reader.is_alive() and time.time() < deadline:
+                reader.join(timeout=0.5)
+                if self._proc.poll() is not None:
+                    break  # 进程退出，跳出循环统一处理
+
+            # ── 进程已退出（崩溃）──
+            if self._proc is not None and self._proc.poll() is not None:
+                exit_code = self._proc.poll()
+                # 等待 stderr 线程收集完
+                if stderr_reader.is_alive():
+                    stderr_reader.join(timeout=2)
+                stderr_text = "\n".join(_stderr_lines[-30:]) if _stderr_lines else "(no stderr)"
+                print(f"[ASR] ❌ 服务器进程退出 (code={exit_code}):\n{stderr_text[:600]}")
+                self._proc = None
+                self._ready = False
+                return {"status": "error",
+                        "message": f"ASR server exited (code={exit_code}): {stderr_text[:300]}"}
+
+            # ── 超时 ──
+            if reader.is_alive():
+                print(f"[ASR] ⏱ 请求超时 ({timeout}s)，强制终止")
+
+                # 收集已有 stderr 用于诊断
+                if stderr_reader.is_alive():
+                    stderr_reader.join(timeout=1)
+                stderr_text = "\n".join(_stderr_lines[-20:]) if _stderr_lines else "(no stderr)"
+                print(f"[ASR] 超时时 stderr:\n{stderr_text[:500]}")
+
+                try:
+                    self._proc.kill()
+                    self._proc.wait(2)
+                except Exception:
+                    pass
+                self._proc = None
+                self._ready = False
+                return {"status": "error",
+                        "message": f"ASR request timeout after {timeout}s. stderr: {stderr_text[:200]}"}
+
+            # ── 读取出错 ──
+            if _exception[0]:
+                raise _exception[0]
+
+            # ── 处理响应 ──
+            resp = _result[0]
+            if resp is None:
+                # EOF — 服务器静默退出（stderr 线程可能已捕获）
+                self._proc = None
+                self._ready = False
+                stderr_text = "\n".join(_stderr_lines[-20:]) if _stderr_lines else "(no stderr)"
+                print(f"[ASR] ❌ stdout EOF，stderr:\n{stderr_text[:500]}")
+                return {"status": "error",
+                        "message": f"ASR server crashed: {stderr_text[:300]}"}
+
+            if resp.get("status") == "ok":
+                lang = resp.get("detected_lang", "?")
+                prob = resp.get("lang_prob", 0)
+                print(f"[ASR] ✅ 响应 OK: lang={lang} prob={prob:.2%}, results={len(resp.get('results',[]))}条")
+            else:
+                err_msg = resp.get("message", "unknown")
+                print(f"[ASR] ❌ 响应错误: {err_msg}")
+            return resp
+
         except Exception as e:
+            import traceback
+            print(f"[ASR] _send_request 异常: {e}")
+            traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
-    def transcribe(self, audio_path: str) -> List[dict]:
+    def transcribe(self, audio_path: str) -> tuple:
+        """兼容旧接口：收集全部结果后一次性返回。"""
+        results = []
+        error = [None]
+
+        def _collect(seg):
+            results.append(seg)
+
+        self.transcribe_stream(audio_path, on_segment=_collect, error_holder=error)
+        return results, error[0]
+
+    def transcribe_stream(self, audio_path: str,
+                          on_segment: callable = None,
+                          error_holder: list = None) -> None:
+        """流式语音识别。每识别出一段就调用 on_segment({"start","end","text"})。
+
+        on_segment 在子线程中调用，请确保线程安全。
+        error_holder 用于存放错误消息（如有）。
+        """
         if not self._start_server():
-            return []
+            if error_holder is not None:
+                error_holder[0] = "ASR server not available"
+            return
 
         req = {
             "cmd": "transcribe",
@@ -277,15 +434,110 @@ class WhisperXEngine(BaseASREngine):
             "word_timestamps": self._word_timestamps,
         }
 
-        resp = self._send_request(req)
-        if resp.get("status") == "ok":
-            lang = resp.get("detected_lang", "?")
-            prob = resp.get("lang_prob", 0)
-            print(f"[ASR] detected lang: {lang} prob: {prob:.2%}")
-            return resp.get("results", [])
-        else:
-            print(f"[ASR] fail: {resp.get('message', 'unknown')}")
-            return []
+        try:
+            # 检查子进程是否意外退出
+            if self._proc.poll() is not None:
+                poll_code = self._proc.poll()
+                if error_holder is not None:
+                    error_holder[0] = f"ASR server exited (code={poll_code})"
+                return
+
+            from threading import Thread
+            import time
+
+            _stderr_lines = []
+            _stdout = self._proc.stdout
+            _stderr = self._proc.stderr
+
+            def _read_stderr():
+                try:
+                    for line in _stderr:
+                        stripped = line.rstrip()
+                        _stderr_lines.append(stripped)
+                        print(f"[ASR_SERVER] {stripped}")
+                except Exception:
+                    pass
+
+            stderr_reader = Thread(target=_read_stderr, daemon=True)
+            stderr_reader.start()
+
+            _send_json(self._proc.stdin, req)
+            print(f"[ASR] 流式请求已发送: audio={Path(audio_path).name}")
+
+            # 逐行读取 segment / done / error
+            deadline = time.time() + 300  # 5 分钟总超时
+            while time.time() < deadline:
+                # 检查进程存活
+                if self._proc.poll() is not None:
+                    exit_code = self._proc.poll()
+                    if stderr_reader.is_alive():
+                        stderr_reader.join(timeout=1)
+                    stderr_text = "\n".join(_stderr_lines[-20:]) if _stderr_lines else "(no stderr)"
+                    print(f"[ASR] ❌ 服务器退出 (code={exit_code}):\n{stderr_text[:500]}")
+                    self._proc = None
+                    self._ready = False
+                    if error_holder is not None:
+                        error_holder[0] = f"Server crashed: {stderr_text[:200]}"
+                    return
+
+                line = _stdout.readline()
+                if not line:
+                    # EOF — 服务器静默退出
+                    if self._proc.poll() is not None:
+                        # 进程已死，上面已经处理过
+                        continue
+                    # 进程还活着但 stdout 关闭了？异常情况
+                    stderr_text = "\n".join(_stderr_lines[-10:]) if _stderr_lines else "(no stderr)"
+                    print(f"[ASR] ❌ stdout EOF while server alive: {stderr_text[:300]}")
+                    if error_holder is not None:
+                        error_holder[0] = f"Server stopped responding: {stderr_text[:200]}"
+                    return
+
+                try:
+                    resp = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                status = resp.get("status", "")
+                if status == "segment":
+                    seg = {
+                        "start": resp.get("start", 0.0),
+                        "end": resp.get("end", 0.0),
+                        "text": resp.get("text", ""),
+                    }
+                    if on_segment:
+                        on_segment(seg)
+                elif status == "done":
+                    lang = resp.get("detected_lang", "?")
+                    prob = resp.get("lang_prob", 0)
+                    n = resp.get("valid_segments", 0)
+                    print(f"[ASR] ✅ 流式完成: lang={lang} prob={prob:.2%}, segments={n}")
+                    return
+                elif status == "error":
+                    err_msg = resp.get("message", "unknown")
+                    print(f"[ASR] ❌ 流式错误: {err_msg}")
+                    if error_holder is not None:
+                        error_holder[0] = err_msg
+                    return
+
+            # 超时
+            print(f"[ASR] ⏱ 流式超时 (300s)")
+            try:
+                self._proc.kill()
+                self._proc.wait(2)
+            except Exception:
+                pass
+            self._proc = None
+            self._ready = False
+            if error_holder is not None:
+                error_holder[0] = "ASR request timeout after 300s"
+
+        except Exception as e:
+            import traceback
+            print(f"[ASR] transcribe_stream 异常: {e}")
+            traceback.print_exc()
+            if error_holder is not None:
+                error_holder[0] = str(e)
 
     def warm_up(self):
         """主线程同步预加载模型（通过启动子进程）。"""
@@ -361,8 +613,17 @@ class ASREngineManager:
         self._default_name = self._config.get("engine", "whisperx")
 
     def reload_config(self):
-        self._config = load_asr_config()
+        """重新加载配置并重启引擎（如有运行中的子进程会先停止）。"""
+        # 先停止所有运行中的子进程
+        for eng in self._engines.values():
+            if hasattr(eng, '_stop_server'):
+                try:
+                    eng._stop_server()
+                except Exception:
+                    pass
         self._engines.clear()
+        self._config = load_asr_config()
+        self._default_name = self._config.get("engine", "whisperx")
 
     def set_hw_accel(self, e: bool):
         for eng in self._engines.values():

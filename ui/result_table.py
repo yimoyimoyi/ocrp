@@ -259,6 +259,80 @@ class ResultTableWidget(QWidget):
         self._is_templated = False
         self._update_count()
 
+    def clear_by_type(self, region_name: str = "", engine_name: str = ""):
+        """选择性地清除结果行。
+
+        region_name="语音": 仅清除 ASR 结果
+        engine_name="whisperx": 仅清除 whisperx 引擎结果
+        两者都不传则清除所有（等效 clear_results）。
+        两者都传则必须同时匹配。
+        """
+        if not region_name and not engine_name:
+            self.clear_results()
+            return
+
+        removed = 0
+        n = len(self._results)
+        for i in range(n - 1, -1, -1):
+            r = self._results[i]
+            match_region = not region_name or r.get("region", "") == region_name
+            match_engine = not engine_name or r.get("engine", "") == engine_name
+            if match_region and match_engine:
+                self._table.removeRow(i)
+                del self._results[i]
+                removed += 1
+        if removed:
+            print(f"[ResultTable] clear_by_type(region={region_name!r}, engine={engine_name!r}): removed {removed} rows, {len(self._results)} remaining")
+        self._update_count()
+
+    def sort_by_time(self):
+        """按时间戳升序排列所有结果行（不改变内容）。"""
+        n = self._table.rowCount()
+        if n <= 1:
+            return
+
+        # 按 time_sec 升序，相同时间按 region 排序
+        indices = list(range(n))
+        indices.sort(key=lambda i: (
+            self._results[i].get("time_sec", 0.0) or 0.0,
+            self._results[i].get("region", ""),
+        ))
+
+        # 原地重排 _results
+        old = list(self._results)
+
+        self._table.blockSignals(True)
+        self._table.setRowCount(0)
+
+        new_results = []
+        for i, idx in enumerate(indices):
+            r = old[idx]
+            new_results.append(r)
+            self._table.insertRow(i)
+            for col, val in enumerate([
+                r.get("time", ""), r.get("region", ""), r.get("engine", ""),
+                r.get("raw", ""),
+                r.get("corrected", ""),
+                f"{r.get('confidence', 0.0) or 0.0:.0%}" if r.get('confidence') else "-",
+            ]):
+                item = QTableWidgetItem(val)
+                if col == 4 and r.get("corrected"):
+                    item.setForeground(QBrush(QColor("#66cc66")))
+                elif col == 4 and not r.get("corrected"):
+                    item.setForeground(QBrush(QColor("#555555")))
+                self._table.setItem(i, col, item)
+
+            # 恢复过滤按钮
+            btn = QPushButton("+")
+            btn.setToolTip("将此条内容加入过滤器")
+            btn.setMaximumWidth(30)
+            btn.setMaximumHeight(22)
+            btn.clicked.connect(lambda checked, rb=i: self._on_filter_row(rb))
+            self._table.setCellWidget(i, self._table.columnCount() - 1, btn)
+
+        self._results = new_results
+        self._table.blockSignals(False)
+
     def sort_by_order(self, region_order: str = ""):
         """按排序模板对表格行排序 + 替换区域名 token 为内容。
 

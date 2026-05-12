@@ -26,6 +26,16 @@ from config_manager import _load_json_with_comments
 # ── 批量纠错 ID 前缀常量 ──
 ID_PREFIX = "[ID:"
 ID_PATTERN = re.compile(r'\[ID:(\d+)\](.*?)(?=\n\[ID:\d+\]|\Z)', re.DOTALL)
+# 匹配时间标记 [hh:mm:ss.ms -> hh:mm:ss.ms] 或 [hh:mm:ss]
+TIME_MARKER = re.compile(r'\s*\[\s*\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:->|→)\s*\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*\]\s*')
+ID_TAG = re.compile(r'\[ID:\d+\]\s*')
+
+
+def _clean_content(text: str) -> str:
+    """去除 AI 可能附带的时间标记和 [ID:n] 标记。"""
+    text = TIME_MARKER.sub('', text)
+    text = ID_TAG.sub('', text)
+    return text.strip()
 
 
 def load_correction_config() -> dict:
@@ -301,6 +311,8 @@ class AICorrector:
         """批量对多条文本进行 AI 纠错，使用 [ID:行号] 标记保证顺序与完整性。
         texts 每项支持 (row_index, raw_text) 或 (row_index, raw_text, time_sec, end_sec)。
 
+        时间轴仅影响存入位置，不嵌入 prompt（避免 AI 回显时间标记）。
+
         Args:
             texts: 待处理文本列表
             context_window: 上下文窗口大小
@@ -314,6 +326,8 @@ class AICorrector:
             return {}
 
         has_time = len(texts[0]) >= 3
+        # 记录时间信息（仅用于存储，不嵌入 prompt）
+        time_map = {}
         lines = []
         id_map = {}
         for idx, item in enumerate(texts):
@@ -323,15 +337,9 @@ class AICorrector:
             if has_time:
                 ts = item[2] if len(item) > 2 and item[2] else None
                 te = item[3] if len(item) > 3 and item[3] else None
-                time_tag = ""
                 if ts is not None:
-                    time_tag = f" [{self._fmt_time(ts)}"
-                    if te and te > ts:
-                        time_tag += f" -> {self._fmt_time(te)}"
-                    time_tag += "]"
-                lines.append(f"{ID_PREFIX}{idx}]{time_tag} {safe_text}")
-            else:
-                lines.append(f"{ID_PREFIX}{idx}] {safe_text}")
+                    time_map[row_idx] = (ts, te)
+            lines.append(f"{ID_PREFIX}{idx}] {safe_text}")
             id_map[idx] = row_idx
 
         # ── 构建上下文 ──
@@ -360,38 +368,26 @@ class AICorrector:
 
         # ── 核心 prompt ──
         user_hint = self._prompt_template.strip()
-        time_instruction = (
-            "每条数据带有时间轴标记 [起始时间 -> 结束时间]。"
-            "你可以根据语义合并多条相近条目或拆分长句，并重新设定合理的起止时间。"
-        )
-        # 用户提示词仅作参考
         custom_hint = ""
         if user_hint:
-            # 只取非默认的提示词作为参考
             if "文本校对" not in user_hint[:20] and "翻译以下" not in user_hint[:20]:
                 custom_hint = f"用户额外参考（按需采纳，不必拘泥）：{user_hint}\n"
 
         if self._translate_mode:
-            # ── 翻译模式 prompt ──
             prompt = (
                 f"{context_block}"
                 f"以下是需要处理的内容：\n"
                 f"{batch_text}\n\n"
-                f"{time_instruction if has_time else ''}\n"
                 f"{custom_hint}"
-                f"请将上述 OCR 文本翻译为中文。保持每行 {ID_PREFIX}行号] 前缀，行号从0开始连续。"
-                f"时间轴标记可选，可合并可拆分。"
+                f"请将上述 OCR 文本翻译为中文。每行保持 {ID_PREFIX}行号] 前缀，行号从0开始连续。"
             )
         else:
-            # ── 常规纠错模式 prompt ──
             prompt = (
                 f"{context_block}"
                 f"以下是需要处理的内容：\n"
                 f"{batch_text}\n\n"
-                f"{time_instruction if has_time else ''}\n"
                 f"{custom_hint}"
                 f"请校对文本错误。输出格式：每行保持 {ID_PREFIX}行号] 前缀，行号从0开始连续。"
-                f"时间轴标记可选，可合并可拆分。"
             )
 
         # ── 重试循环 ──
@@ -403,23 +399,102 @@ class AICorrector:
             if result is None:
                 last_error = "API 返回空"
                 continue
+
+            # ── JSON 模式：直接解析 JSON ──
+            if self._json_mode:
+                try:
+                    data = json.loads(result) if isinstance(result, str) else result
+                    items = None
+                    if isinstance(data, dict):
+                        items = data.get("results") or data.get("items")
+                    if isinstance(items, list):
+                        corrected_map = {}
+                        for entry in items:
+                            if isinstance(entry, dict):
+                                eid = entry.get("id") if "id" in entry else entry.get("index")
+                                etext = entry.get("text") or entry.get("content") or ""
+                                if eid is None:
+                                    continue
+                                try:
+                                    idx_in_batch = int(eid)
+                                except (ValueError, TypeError):
+                                    continue
+                                if idx_in_batch in id_map:
+                                    row_idx = id_map[idx_in_batch]
+                                    original_text = dict([(r[0], r[1]) for r in texts]).get(row_idx, "")
+                                    clean = _clean_content(etext)
+                                    if clean and clean != original_text.strip():
+                                        corrected_map[row_idx] = clean
+                        if corrected_map:
+                            return corrected_map
+                        if attempt < max_retries:
+                            last_error = f"JSON 解析后全部为空 (共 {len(items)} 条)"
+                            print(f"[AI纠错] 批量 JSON 全部为空 (第{attempt+1}次)，重试...")
+                            prompt += (
+                                "\n\n[[系统：上次返回中 id 字段无效或内容为空，"
+                                "请确保返回 \"id\" 从0开始连续对应输入行。]]"
+                            )
+                            continue
+                    else:
+                        last_error = f"JSON 中未找到 results/items 数组 (keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__})"
+                        print(f"[AI纠错] JSON 结构异常 (第{attempt+1}次): {last_error}")
+                        if attempt < max_retries:
+                            prompt += (
+                                f'\n\n[[系统：上次返回 JSON 中缺少 "results" 数组。]]'
+                            )
+                            continue
+                        else:
+                            print(f"[AI纠错] 批量 JSON 解析最终失败: {last_error}")
+                            return {}
+                except (json.JSONDecodeError, TypeError) as e:
+                    last_error = f"JSON 解析失败: {e}"
+                    print(f"[AI纠错] JSON 解析失败 (第{attempt+1}次): {e}，回退到文本解析...")
+                    # 继续走下面的文本解析
+
             parsed = self._parse_batch_result(result)
-            valid, error_msg = self._validate_batch_result(parsed, n)
-            if valid:
-                corrected_map = {}
-                for idx_in_batch, content in parsed.items():
-                    if idx_in_batch in id_map:
-                        row_idx = id_map[idx_in_batch]
-                        original_text = dict([(r[0], r[1]) for r in texts]).get(row_idx, "")
-                        if content.strip() and content.strip() != original_text.strip():
-                            corrected_map[row_idx] = content.strip()
-                return corrected_map
-            else:
-                last_error = error_msg
-                print(f"[AI纠错] 批量校验失败 (第{attempt+1}次): {error_msg}")
+
+            # ── 解析后处理 ──
+            if not parsed and attempt < max_retries:
+                last_error = "未能解析出任何 [ID:行号]"
+                print(f"[AI纠错] 解析全空 (第{attempt+1}次)，重试...")
                 prompt += (
-                    f"\n\n[[系统：校验失败 {error_msg}，确保 {ID_PREFIX}行号] 连续且完整。]]"
+                    f"\n\n[[系统：上次未返回任何 {ID_PREFIX}行号] 标记。]]"
                 )
+                continue
+
+            if not parsed:
+                print(f"[AI纠错] 批量解析最终空（已达最大重试次数），跳过本批")
+                return {}
+
+            corrected_map = {}
+            all_empty = True
+            for idx_in_batch, content in parsed.items():
+                if idx_in_batch in id_map:
+                    row_idx = id_map[idx_in_batch]
+                    original_text = dict([(r[0], r[1]) for r in texts]).get(row_idx, "")
+                    clean = _clean_content(content)
+                    if clean and clean != original_text.strip():
+                        corrected_map[row_idx] = clean
+                        all_empty = False
+
+            # 🔥 仅检查全空，不检查行数匹配（AI 可能合并不返回某些行）
+            if all_empty and attempt < max_retries:
+                last_error = "解析后全部为空"
+                print(f"[AI纠错] 所有行解析为空 (第{attempt+1}次)，重试...")
+                prompt += (
+                    f"\n\n[[系统：上次返回内容全部为空。]]"
+                )
+                continue
+
+            # 🔥 缺失行自动填充原文：AI 没返回的行用原文代替
+            original_map = dict([(r[0], r[1]) for r in texts])
+            for idx_in_batch in range(n):
+                if idx_in_batch in id_map:
+                    row_idx = id_map[idx_in_batch]
+                    if row_idx not in corrected_map:
+                        corrected_map[row_idx] = original_map.get(row_idx, "")
+
+            return corrected_map
 
         print(f"[AI纠错] 批量纠错最终失败: {last_error}")
         return {}
@@ -440,38 +515,6 @@ class AICorrector:
             except ValueError:
                 continue
         return result
-
-    @staticmethod
-    def _validate_batch_result(parsed: Dict[int, str],
-                                expected_count: int) -> Tuple[bool, str]:
-        """校验解析结果是否完整。
-
-        Returns:
-            (is_valid, error_message)
-        """
-        if not parsed:
-            return False, "未能从返回中解析出任何 [ID:行号] 标记"
-
-        # 检查行数
-        if len(parsed) != expected_count:
-            return False, (
-                f"行数不匹配: 期望 {expected_count} 行，实际返回 {len(parsed)} 行"
-            )
-
-        # 检查 ID 是否连续且完整
-        expected_ids = set(range(expected_count))
-        actual_ids = set(parsed.keys())
-        if actual_ids != expected_ids:
-            missing = expected_ids - actual_ids
-            extra = actual_ids - expected_ids
-            parts = []
-            if missing:
-                parts.append(f"缺失行号: {sorted(missing)}")
-            if extra:
-                parts.append(f"多余行号: {sorted(extra)}")
-            return False, "ID 不完整: " + "; ".join(parts)
-
-        return True, ""
 
     def _is_local_engine(self) -> bool:
         """若引擎配置 type 为 local，则为本地引擎模式。"""

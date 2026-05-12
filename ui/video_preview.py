@@ -250,7 +250,7 @@ class VideoPreviewWidget(QWidget):
         # 播放定时器
         from PyQt5.QtCore import QTimer
         self._play_timer = QTimer()
-        self._play_timer.setInterval(500)  # 极低频检查 ffplay 是否结束（0.5次/秒），不更新预览条
+        self._play_timer.setInterval(200)  # 默认 200ms，播放时动态切 40ms
         self._play_timer.timeout.connect(self._on_play_tick)
         self._is_playing = False
         self._play_start_real: float = 0.0
@@ -399,7 +399,7 @@ class VideoPreviewWidget(QWidget):
             self._play_video()
 
     def _play_video(self):
-        """开始播放（ffplay -nodisp 播音频 + QTimer 同步预览条）。"""
+        """开始播放（ffplay -nodisp 播音频 + QTimer 同步预览条和帧渲染）。"""
         vp = self._video_path
         if not vp:
             return
@@ -426,6 +426,7 @@ class VideoPreviewWidget(QWidget):
             return
         self._play_start_real = self._current_position
         self._play_start_ts = time.time()
+        self._play_timer.setInterval(40)  # ~25fps 帧更新
         self._play_timer.start()
 
     def _pause_video(self):
@@ -457,13 +458,52 @@ class VideoPreviewWidget(QWidget):
             self._player_proc = None
 
     def _on_play_tick(self):
-        """播放定时器回调：仅检查播放是否结束，不更新预览条。"""
+        """播放定时器回调：检查 ffplay 退出、更新进度条、渲染当前帧。"""
         if self._player_proc and self._player_proc.poll() is not None:
-            self._pause_video()
+            # ffplay 自然结束 → 停在视频末尾
+            self._is_playing = False
+            self._btn_play.setText("▶")
+            self._play_timer.stop()
+            self._play_timer.setInterval(200)
+            self._current_position = self._video_duration
+            self._stop_player()
+            self._update_preview_label()
+            val = int(self._current_position * 10)
+            if 0 <= val <= self._preview_slider.maximum():
+                self._preview_slider.blockSignals(True)
+                self._preview_slider.setValue(val)
+                self._preview_slider.blockSignals(False)
             return
 
+        # 播放中：用实际流逝时间更新进度条
+        import time
+        elapsed = time.time() - self._play_start_ts
+        self._current_position = min(self._play_start_real + elapsed, self._video_duration)
+        val = int(self._current_position * 10)
+        if 0 <= val <= self._preview_slider.maximum():
+            self._preview_slider.blockSignals(True)
+            self._preview_slider.setValue(val)
+            self._preview_slider.blockSignals(False)
+        self._update_preview_label()
+
+        # 渲染当前帧（从 ffmpeg 读取最新帧）
+        ff = self._ffmpeg
+        if ff and hasattr(ff, 'is_opened') and ff.is_opened():
+            try:
+                frame = ff.read()
+                if frame is not None and frame.size > 0:
+                    self._current_frame = frame.copy()
+                    self._display_frame(self._current_frame)
+            except Exception:
+                pass
+
     def _on_preview_slider_press(self):
-        self._pause_video()
+        # 仅终止播放，不 seek（位置由 move/release 处理）
+        if self._is_playing:
+            self._is_playing = False
+            self._btn_play.setText("▶")
+            self._play_timer.stop()
+        self._stop_player()
         if self._video_duration <= 0:
             return
         self._current_position = self._preview_slider.value() / 10.0
@@ -475,7 +515,7 @@ class VideoPreviewWidget(QWidget):
             return
         self._current_position = val / 10.0
         self._update_preview_label()
-        self.seek_to(self._current_position)
+        # 拖拽过程中只追逐帧，最后 release 时再精确 seek
 
     def _on_preview_slider_release(self):
         if self._video_duration <= 0:

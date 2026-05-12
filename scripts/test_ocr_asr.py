@@ -77,13 +77,16 @@ mgr = ASREngineManager()
 mgr.set_hw_accel(True)
 eng = mgr.get_engine()
 t0 = time.time()
-segs = eng.transcribe(audio_path)
+segs, err = eng.transcribe(audio_path)
 elapsed = time.time() - t0
-print(f"[ASR] done ({elapsed:.1f}s), {len(segs)} segments:")
-for s in segs[:8]:
-    print(f"  [{s['start']:.1f}s-{s['end']:.1f}s] {s['text']}")
-if len(segs) > 8:
-    print(f"  ... {len(segs)} total segments")
+if err:
+    print(f"[ASR] FAILED: {err}")
+else:
+    print(f"[ASR] done ({elapsed:.1f}s), {len(segs)} segments:")
+    for s in segs[:8]:
+        print(f"  [{s['start']:.1f}s-{s['end']:.1f}s] {s['text']}")
+    if len(segs) > 8:
+        print(f"  ... {len(segs)} total segments")
 try: os.unlink(audio_path)
 except Exception: pass
 

@@ -243,6 +243,35 @@ if [ $? -ne 0 ]; then
     fi
 fi
 
+# ── cuDNN 8 检查（GPU 语音识别加速）──
+if $USE_GPU; then
+    info "检查 cuDNN 8 (GPU 语音识别加速)..."
+
+    mkdir -p models/asr/lib
+
+    if uv run python -c "import ctypes; ctypes.CDLL('libcudnn_ops_infer.so.8'); print('OK')" 2>/dev/null; then
+        info "✅ cuDNN 8 已就绪，GPU ASR 可用"
+    else
+        warn "⚠ cuDNN 8 未找到，ASR 将使用 CPU 模式"
+        echo ""
+        echo "   如需 GPU 语音识别加速，请手动安装 cuDNN 8："
+        echo "   1. 访问 https://developer.nvidia.com/cudnn（免费注册账号）"
+        echo "   2. 下载 cuDNN 8.9 for CUDA 12.x (Linux tar.xz)"
+        echo "   3. 解压后将以下 3 个 SO 复制到 models/asr/lib/:"
+        echo "        libcudnn_ops_infer.so.8"
+        echo "        libcudnn_cnn_infer.so.8"
+        echo "        libcudnn.so.8"
+        echo ""
+        echo "   或通过系统包管理器安装:"
+        echo "   Ubuntu/Debian: sudo apt install libcudnn8"
+        echo "   Fedora/RHEL:   sudo dnf install libcudnn8"
+        echo "   Arch:          sudo pacman -S cudnn"
+        echo ""
+        echo "   💡 不影响 OCR 功能和 CPU ASR，可稍后安装。"
+        echo ""
+    fi
+fi
+
 info "Python 依赖安装完成"
 
 # ── 7. 验证安装 ─────────────────────────────────────────────────────────────

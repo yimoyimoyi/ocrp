@@ -586,13 +586,16 @@ class ConfigPanel(QWidget):
 
         add_row = QHBoxLayout(); add_row.setSpacing(4)
         self._filter_input = QLineEdit()
-        self._filter_input.setPlaceholderText("输入要过滤的关键词...")
+        self._filter_input.setPlaceholderText("输入要过滤的关键词，回车添加...")
+        self._filter_input.returnPressed.connect(self._on_add_filter)
         add_row.addWidget(self._filter_input, 1)
         btn_add = QPushButton("➕ 添加"); btn_add.clicked.connect(self._on_add_filter); add_row.addWidget(btn_add)
         layout.addRow("", add_row)
 
         self._filter_list = QListWidget()
-        self._filter_list.setMaximumHeight(80)
+        self._filter_list.setMinimumHeight(60)
+        self._filter_list.setMaximumHeight(160)
+        self._filter_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addRow("", self._filter_list)
 
         filter_btn_row = QHBoxLayout(); filter_btn_row.setSpacing(4)

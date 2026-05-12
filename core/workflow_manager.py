@@ -90,7 +90,8 @@ class WorkflowManager(QObject):
         self._get_results: Callable[[], list] = lambda: []
         self._update_correction_cell: Callable[[int, str], None] = lambda row, text: None
         self._clear_results_table: Callable[[], None] = lambda: None
-        self._sort_results_table: Callable[[str], None] = lambda order: None
+        self._clear_results_by_type: Callable[[str, str], None] = lambda rgn, eng: None
+        self._sort_results_table: Callable[[str], None] = lambda _: None
         self._get_polished_results: Callable[[float, int], list] = lambda sim, ml: []
         self._get_table_row_count: Callable[[], int] = lambda: 0
 
@@ -171,7 +172,6 @@ class WorkflowManager(QObject):
             }]
             self._set_regions(regions)
 
-        self._clear_results_table()
         self._correction_results.clear()
         self._correction_pending.clear()
 
@@ -198,7 +198,9 @@ class WorkflowManager(QObject):
             return
         is_audio = self._get_is_audio_file()
 
-        self._clear_results_table()
+        # 🔥 仅清除 ASR 结果
+        asr_region = self._get_mode_params().get("asr_region_name", "语音")
+        self._clear_results_by_type(asr_region, "whisperx")
         self._correction_results.clear()
         self._correction_pending.clear()
 
@@ -251,7 +253,9 @@ class WorkflowManager(QObject):
             }]
             self._set_regions(regions)
 
-        self._clear_results_table()
+        # 🔥 仅清除 OCR 区域结果
+        for r in regions:
+            self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
         self._correction_results.clear()
         self._correction_pending.clear()
 
@@ -278,17 +282,47 @@ class WorkflowManager(QObject):
         self._pending_ename = self._get_current_engine()
 
         mp = self._get_mode_params()
+        mode = mp.get("process_mode", "OCR + ASR（完整流程）")
         asr_enabled = mp.get("asr_enabled", False)
-        has_ocr = any(
-            r.get("name", "") != mp.get("asr_region_name", "语音")
+        asr_region_name = mp.get("asr_region_name", "语音")
+
+        # 完整流程模式 → ASR 默认启用（UI 复选框仅对"仅OCR"/"仅ASR"分组生效）
+        if mode == "OCR + ASR（完整流程）":
+            asr_enabled = True
+
+        # 判断是否有 OCR 区域（排除纯 ASR 区域）
+        has_ocr_regions = any(
+            r.get("name", "") != asr_region_name
             for r in regions
         )
 
-        if asr_enabled and has_ocr:
+        # 根据模式和实际可用性决定流程
+        do_asr = False
+        do_ocr = False
+
+        if mode == "仅语音识别 (ASR)":
+            do_asr = True
+        elif mode == "仅 OCR":
+            do_ocr = True
+        elif mode == "OCR + ASR（完整流程）":
+            do_asr = asr_enabled
+            do_ocr = has_ocr_regions
+
+        # 执行流程
+        if do_asr and do_ocr:
+            print(f"[Workflow]   🔀 流程: ASR + OCR 串行")
+            self._clear_results_by_type(asr_region_name, "whisperx")
+            for r in regions:
+                self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
             self._start_asr_worker(vp)
-        elif asr_enabled and not has_ocr:
+        elif do_asr and not do_ocr:
+            print(f"[Workflow]   🔀 流程: 仅 ASR")
+            self._clear_results_by_type(asr_region_name, "whisperx")
             self._start_asr_worker(vp)
-        elif not asr_enabled and has_ocr:
+        elif not do_asr and do_ocr:
+            print(f"[Workflow]   🔀 流程: 仅 OCR")
+            for r in regions:
+                self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
             self._do_ocr_pass(vp)
         else:
             self._show_error("提示", "未启用任何处理（请启用 ASR 或定义 OCR 区域）")
@@ -335,8 +369,6 @@ class WorkflowManager(QObject):
 
     def _start_asr_worker(self, video_path: str):
         mp = self._get_mode_params()
-        if not mp.get("asr_enabled"):
-            return
         asr_engine = self._asr_mgr.get_engine() if self._asr_mgr else None
         if not asr_engine:
             self.status_msg.emit("⚠ ASR 引擎未加载")
@@ -731,7 +763,11 @@ class WorkflowManager(QObject):
         output_dir = Path(__file__).resolve().parent.parent / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        self._clear_results_table()
+        # 批量处理：清除所有 OCR 区域 + ASR 区域结果
+        asr_region = self._get_mode_params().get("asr_region_name", "语音")
+        self._clear_results_by_type(asr_region, "whisperx")
+        for r in regions:
+            self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
         self._correction_results.clear()
         self._correction_pending.clear()
 
@@ -812,7 +848,8 @@ class WorkflowManager(QObject):
             self._show_info("提示", "无有效结果可导出。")
             return None, None
 
-        export_results(polished, path, fmt, bool(cmap), cmap)
+        export_results(polished, path, fmt, bool(cmap), cmap,
+                       keep_original=mp.get("export_keep_original", False))
         self.status_msg.emit(f"✅ 已导出: {Path(path).name}")
         return polished, cmap
 
@@ -849,73 +886,65 @@ class WorkflowManager(QObject):
     # ═══════════════════════════════════════════════════════════════
 
     def cleanup(self):
-        """强制停止所有运行中的线程并等待结束。"""
-        print(f"[Workflow] 🧹 开始强制清理所有线程...")
-        import signal as _signal
+        """快速清理所有线程 —— 立即 terminate，不阻塞 UI 关闭。"""
+        print(f"[Workflow] 🧹 开始快速清理...")
 
-        # ── 1. 停止所有纠错线程（加锁访问） ──
+        # 收集所有活跃的 worker（不等待，直接收集）
+        workers = []
         if self._batch_correction_worker and self._batch_correction_worker.isRunning():
-            print(f"[Workflow]   ⏹ 停止批量纠错线程")
-            self._batch_correction_worker.stop()
-            if not self._batch_correction_worker.wait(2000):
-                print(f"[Workflow]   ⚠ 批量纠错线程未退出，强制终止")
-                self._batch_correction_worker.terminate()
-                self._batch_correction_worker.wait(1000)
-
+            workers.append(self._batch_correction_worker)
         with self._correction_workers_lock:
-            workers_snapshot = list(self._correction_workers)
+            workers.extend([w for w in self._correction_workers if w.isRunning()])
             self._correction_workers.clear()
-        for w in workers_snapshot:
-            if w.isRunning():
-                print(f"[Workflow]   ⏹ 停止纠错线程")
-                if not w.wait(500):
-                    w.terminate()
-                    w.wait(1000)
-
-        # ── 2. 停止视频处理线程 ──
         if self._video_worker and self._video_worker.isRunning():
-            print(f"[Workflow]   ⏹ 停止视频处理线程")
-            self._video_worker.stop()
-            if not self._video_worker.wait(3000):
-                print(f"[Workflow]   ⚠ 视频线程未退出，强制终止")
-                self._video_worker.terminate()
-                self._video_worker.wait(1000)
-
-        # ── 3. 停止音频处理线程 ──
+            workers.append(self._video_worker)
         if self._audio_worker and self._audio_worker.isRunning():
-            print(f"[Workflow]   ⏹ 停止音频处理线程")
-            self._audio_worker.stop()
-            if not self._audio_worker.wait(3000):
-                print(f"[Workflow]   ⚠ 音频线程未退出，强制终止")
-                self._audio_worker.terminate()
-                self._audio_worker.wait(1000)
-
-        # ── 4. 停止批量处理线程 ──
+            workers.append(self._audio_worker)
         if self._batch_worker and self._batch_worker.isRunning():
-            print(f"[Workflow]   ⏹ 停止批量文件处理线程")
-            self._batch_worker.stop()
-            if not self._batch_worker.wait(3000):
-                print(f"[Workflow]   ⚠ 批量线程未退出，强制终止")
-                self._batch_worker.terminate()
-                self._batch_worker.wait(1000)
-
-        # ── 5. 停止图片处理线程 ──
+            workers.append(self._batch_worker)
         if self._image_worker and self._image_worker.isRunning():
-            print(f"[Workflow]   ⏹ 停止图片处理线程")
-            self._image_worker.quit()
-            if not self._image_worker.wait(2000):
-                print(f"[Workflow]   ⚠ 图片线程未退出，强制终止")
-                self._image_worker.terminate()
-                self._image_worker.wait(1000)
+            workers.append(self._image_worker)
 
-        # ── 6. 停止 ASR 子进程 ──
+        # ── 第一步：对所有线程发 stop 信号 + 立即 terminate ──
+        for w in workers:
+            try:
+                if hasattr(w, 'stop'):
+                    w.stop()
+            except Exception:
+                pass
+        # 给 100ms 让它们有机会自行退出
+        for w in workers:
+            try:
+                w.wait(100)
+            except Exception:
+                pass
+        # 直接 terminate 所有仍未退出的
+        for w in workers:
+            try:
+                if w.isRunning():
+                    w.terminate()
+            except Exception:
+                pass
+
+        # ── ASR 子进程：kill 而非优雅 shutdown ──
         if self._asr_mgr:
             try:
                 engine = self._asr_mgr.get_engine()
                 if engine and hasattr(engine, '_stop_server'):
-                    print(f"[Workflow]   ⏹ 停止 ASR 子进程")
                     engine._stop_server()
             except Exception as e:
                 print(f"[Workflow]   ⚠ ASR 引擎关闭异常: {e}")
 
-        print(f"[Workflow] ✅ 所有线程清理完成")
+        # ── 后台线程静默等待 terminate 完成 ──
+        def _wait_workers():
+            for w in workers:
+                try:
+                    w.wait(5000)  # 最长等 5 秒（后台，不影响 UI）
+                except Exception:
+                    pass
+            print(f"[Workflow] ✅ 后台清理完成")
+
+        if workers:
+            threading.Thread(target=_wait_workers, daemon=True).start()
+
+        print(f"[Workflow] ✅ 清理信号已发出")

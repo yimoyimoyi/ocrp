@@ -161,25 +161,32 @@ def _fmt_srt_time(total_seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
 
 
-def _export_srt(results: list, output_path: str, include_corrected: bool, corrected_map: Dict[int, str]):
-    """导出为 SRT 字幕格式。"""
+def _export_srt(results: list, output_path: str, include_corrected: bool,
+                corrected_map: Dict[int, str], keep_original: bool = False):
+    """导出为 SRT 字幕格式。
+
+    纠正模式下：纠错文本作为主字幕，无 [纠错] 标记。
+    保留原文模式：仅输出原文。
+    """
     with open(output_path, "w", encoding="utf-8") as f:
         idx = 1
         for i, item in enumerate(results):
-            text = item.get("raw", "").strip()
-            if not text:
+            raw = item.get("raw", "").strip()
+            if not raw:
                 continue
             start = item.get("time_sec", 0.0) or 0.0
             end = item.get("end_sec", start + 3.0) or (start + 3.0)
 
+            # 选择输出文本
+            if not keep_original and include_corrected and i in corrected_map:
+                corrected = _clean_id_markers(corrected_map[i])
+                text = corrected if (corrected and corrected != raw) else raw
+            else:
+                text = raw
+
             f.write(f"{idx}\n")
             f.write(f"{_fmt_srt_time(start)} --> {_fmt_srt_time(end)}\n")
-            f.write(f"{text}\n")
-            if include_corrected and i in corrected_map:
-                corrected = corrected_map[i]
-                if corrected and corrected != text:
-                    f.write(f"[纠错] {corrected}\n")
-            f.write("\n")
+            f.write(f"{text}\n\n")
             idx += 1
 
 
@@ -188,44 +195,66 @@ def export_results(
     output_path: str,
     fmt: str = "txt",
     include_corrected: bool = False,
-    corrected_map: Optional[Dict[int, str]] = None
+    corrected_map: Optional[Dict[int, str]] = None,
+    keep_original: bool = False,
 ):
+    """导出结果。
+
+    Args:
+        results: 结果列表
+        output_path: 导出路径
+        fmt: 格式 (txt/json/csv/srt)
+        include_corrected: 是否输出纠错内容
+        corrected_map: {行号: 纠错文本}
+        keep_original: True=保留原文(忽略纠错), False=纠错文本替换原文
+    """
     corrected_map = corrected_map or {}
 
     if fmt == "txt":
-        _export_txt(results, output_path, include_corrected, corrected_map)
+        _export_txt(results, output_path, include_corrected, corrected_map, keep_original)
     elif fmt == "json":
-        _export_json(results, output_path, include_corrected, corrected_map)
+        _export_json(results, output_path, include_corrected, corrected_map, keep_original)
     elif fmt == "csv":
-        _export_csv(results, output_path, include_corrected, corrected_map)
+        _export_csv(results, output_path, include_corrected, corrected_map, keep_original)
     elif fmt == "srt":
-        _export_srt(results, output_path, include_corrected, corrected_map)
+        _export_srt(results, output_path, include_corrected, corrected_map, keep_original)
 
 
-def _export_txt(results: list, output_path: str, include_corrected: bool, corrected_map: Dict[int, str]):
+def _clean_id_markers(text: str) -> str:
+    """去除 AI 可能残留的 [ID:n] 标记。"""
+    import re
+    return re.sub(r'\[ID:\d+\]\s*', '', text).strip()
+
+
+def _export_txt(results: list, output_path: str, include_corrected: bool,
+                corrected_map: Dict[int, str], keep_original: bool = False):
     seen = set()
     with open(output_path, "w", encoding="utf-8") as f:
         for i, item in enumerate(results):
-            final_text = item['raw']
-            if "：" in final_text:
-                for char in "『』「」[]":
-                    final_text = final_text.replace(char, "")
-                final_text = final_text.strip()
+            raw = item.get('raw', '').strip()
+            if not raw:
+                continue
 
-            output_line = f"[{item['time']}] {final_text}"
+            # 选择输出文本
+            if not keep_original and include_corrected and i in corrected_map:
+                corrected = _clean_id_markers(corrected_map[i])
+                if corrected and corrected != raw:
+                    output_line = f"[{item['time']}] {corrected}"
+                else:
+                    output_line = f"[{item['time']}] {raw}"
+            else:
+                output_line = f"[{item['time']}] {raw}"
+
             if output_line not in seen:
                 f.write(output_line + "\n")
                 seen.add(output_line)
 
-                if include_corrected and i in corrected_map:
-                    corrected = corrected_map[i]
-                    if corrected and corrected != final_text:
-                        f.write(f"  ✏ 纠错: {corrected}\n")
 
-
-def _export_json(results: list, output_path: str, include_corrected: bool, corrected_map: Dict[int, str]):
+def _export_json(results: list, output_path: str, include_corrected: bool,
+                 corrected_map: Dict[int, str], keep_original: bool = False):
     data = []
     for i, item in enumerate(results):
+        raw = item.get("raw", "").strip()
         entry = {
             "timestamp": item["time"],
             "timestamp_seconds": round(item["time_sec"], 1),
@@ -233,17 +262,22 @@ def _export_json(results: list, output_path: str, include_corrected: bool, corre
             "engine": item["engine"],
             "speaker": item["speaker"],
             "content": item["content"],
-            "raw": item["raw"]
+            "raw": raw
         }
         if include_corrected and i in corrected_map:
-            entry["corrected"] = corrected_map[i]
+            corrected = _clean_id_markers(corrected_map[i])
+            if corrected and corrected != raw:
+                if not keep_original:
+                    entry["content"] = corrected
+                entry["corrected"] = corrected
         data.append(entry)
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def _export_csv(results: list, output_path: str, include_corrected: bool, corrected_map: Dict[int, str]):
+def _export_csv(results: list, output_path: str, include_corrected: bool,
+                corrected_map: Dict[int, str], keep_original: bool = False):
     fieldnames = ["timestamp", "region", "engine", "speaker", "content", "raw"]
     if include_corrected:
         fieldnames.append("corrected")
@@ -252,14 +286,19 @@ def _export_csv(results: list, output_path: str, include_corrected: bool, correc
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for i, item in enumerate(results):
+            raw = item.get("raw", "").strip()
             row = {
                 "timestamp": item["time"],
                 "region": item["region"],
                 "engine": item["engine"],
                 "speaker": item["speaker"],
-                "content": item["content"],
-                "raw": item["raw"]
+                "content": raw,
+                "raw": raw
             }
             if include_corrected and i in corrected_map:
-                row["corrected"] = corrected_map[i]
+                corrected = _clean_id_markers(corrected_map[i])
+                if corrected and corrected != raw:
+                    if not keep_original:
+                        row["content"] = corrected
+                    row["corrected"] = corrected
             writer.writerow(row)
