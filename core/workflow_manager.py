@@ -853,8 +853,11 @@ class WorkflowManager(QObject):
             self._show_info("提示", "无有效结果可导出。")
             return None, None
 
+        srt_mode_map = {"仅纠正结果": "corrected", "仅原文": "original", "双语对照（原文+纠正）": "dual"}
+        srt_mode = srt_mode_map.get(mp.get("srt_export_mode", "仅纠正结果"), "corrected")
         export_results(polished, path, fmt, bool(cmap), cmap,
-                       keep_original=mp.get("export_keep_original", False))
+                       keep_original=mp.get("export_keep_original", False),
+                       srt_mode=srt_mode)
         self.status_msg.emit(f"✅ 已导出: {Path(path).name}")
         return polished, cmap
 
