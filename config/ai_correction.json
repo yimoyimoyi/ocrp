@@ -16,6 +16,6 @@
   "prompts": {
     "default": ""
   },
-  "stream_mode": false,
-  "json_mode": false
+  "stream_mode": true,
+  "json_mode": true
 }

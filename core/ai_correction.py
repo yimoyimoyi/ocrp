@@ -218,18 +218,29 @@ class AICorrector:
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.3,
-                "max_tokens": 300
             }
             url = base_url.rstrip('/') + "/chat/completions"
             resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
             if resp.status_code == 200:
                 data = resp.json()
                 result = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                self._env_context = result.strip()
-                print(f"[AI纠错] 环境提取完成:\n{self._env_context}")
+                self._env_context = (result or "").strip()
+                if self._env_context:
+                    print(f"[AI纠错] 环境提取完成 ({len(self._env_context)} chars):\n{self._env_context}")
+                else:
+                    # 🔥 API 返回了 200 但 content 为空——打印完整响应排查
+                    print(f"[AI纠错] 环境提取返回空 content! raw:\n{json.dumps(data, ensure_ascii=False)[:500]}")
+                    # 尝试从 reasoning_content 或 text 字段兜底
+                    msg = data.get("choices", [{}])[0].get("message", {})
+                    for key in ("reasoning_content", "text", "content"):
+                        val = msg.get(key, "")
+                        if val and val.strip():
+                            self._env_context = val.strip()
+                            print(f"[AI纠错] 环境提取兜底: {key} ({len(self._env_context)} chars)")
+                            return self._env_context
                 return self._env_context
             else:
-                print(f"[AI纠错] 环境提取 HTTP {resp.status_code}")
+                print(f"[AI纠错] 环境提取 HTTP {resp.status_code}: {resp.text[:300]}")
                 return ""
         except Exception as e:
             print(f"[AI纠错] 环境提取失败: {e}")
@@ -282,6 +293,21 @@ class AICorrector:
             result = self._call_api(prompt, env_context=self._env_context,
                                     stream_callback=stream_callback)
             if result is not None:
+                # ── JSON 模式：解析 JSON 提取实际文本 ──
+                if self._json_mode:
+                    try:
+                        data = json.loads(result) if isinstance(result, str) else result
+                        if isinstance(data, dict):
+                            items = data.get("results") or data.get("items") or data.get("data") or []
+                            if isinstance(items, list) and items:
+                                first = items[0]
+                                if isinstance(first, dict):
+                                    result = first.get("text") or first.get("content") or result
+                            elif isinstance(data, dict):
+                                result = data.get("text") or data.get("content") or data.get("corrected") or result
+                    except (json.JSONDecodeError, TypeError):
+                        pass  # 非 JSON → 保持原文本
+
                 # 用自定义输出格式标记剔除格式外壳
                 fmt = self._output_format.strip()
                 if fmt:
@@ -394,7 +420,6 @@ class AICorrector:
         last_error = ""
         for attempt in range(max_retries + 1):
             result = self._call_api(prompt, env_context=self._env_context,
-                                    max_tokens=4096 if has_time else 2048,
                                     stream_callback=stream_callback)
             if result is None:
                 last_error = "API 返回空"
@@ -549,19 +574,8 @@ class AICorrector:
             return None
 
     def _call_api(self, prompt: str, env_context: str = "",
-                  max_tokens: int = 1024,
                   stream_callback: Optional[Callable[[str], None]] = None) -> Optional[str]:
-        """调用 AI API 进行纠错（从引擎配置读取连接信息）。
-
-        Args:
-            prompt: 用户提示词
-            env_context: 环境上下文
-            max_tokens: 最大 token 数
-            stream_callback: 流式模式下的增量回调（接收每次 SSE chunk 的文本片段）
-
-        Returns:
-            完整响应的文本内容，失败返回 None
-        """
+        """调用 AI API 进行纠错（从引擎配置读取连接信息）。"""
         t_start = time.time()
         try:
             ec = self._get_engine_config()
@@ -569,7 +583,6 @@ class AICorrector:
             base_url = ec.get("base_url", "https://api.openai.com/v1")
             model = ec.get("model", "gpt-4o")
             timeout = ec.get("timeout", 30)
-            mtokens = max_tokens
 
             headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -604,7 +617,6 @@ class AICorrector:
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.1,
-                "max_tokens": mtokens
             }
 
             # ── JSON 模式：添加 response_format ──
@@ -623,7 +635,6 @@ class AICorrector:
             print(f"[AI纠错]   🤖 Model: {model}")
             print(f"[AI纠错]   📝 Prompt({len(prompt)} chars): {prompt_preview}{'...' if len(prompt) > 120 else ''}")
             print(f"[AI纠错]   ⚙️  stream={use_stream}, json_mode={self._json_mode}, translate={self._translate_mode}")
-            print(f"[AI纠错]   🎯 max_tokens={mtokens}")
 
             if use_stream:
                 payload["stream"] = True
@@ -640,27 +651,34 @@ class AICorrector:
                 return None
 
             if use_stream:
-                # ── 流式解析 SSE ──
+                # ── 流式解析 SSE（按字节读取，避免 decode_unicode 破坏 UTF-8）──
                 full_content = ""
                 chunk_count = 0
-                for line in resp.iter_lines(decode_unicode=True):
-                    if not line:
+                buffer = b""
+                for raw_chunk in resp.iter_content(chunk_size=1):
+                    if not raw_chunk:
                         continue
-                    if line.startswith("data: "):
-                        data_str = line[6:]
-                        if data_str.strip() == "[DONE]":
-                            break
-                        try:
-                            chunk_data = json.loads(data_str)
-                            delta = (chunk_data.get("choices", [{}])[0]
-                                     .get("delta", {}).get("content", ""))
-                            if delta:
-                                full_content += delta
-                                chunk_count += 1
-                                if stream_callback:
-                                    stream_callback(delta)
-                        except json.JSONDecodeError:
+                    buffer += raw_chunk
+                    if buffer.endswith(b"\n"):
+                        line = buffer.decode("utf-8", errors="replace").strip()
+                        buffer = b""
+                        if not line:
                             continue
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
+                            try:
+                                chunk_data = json.loads(data_str)
+                                delta = (chunk_data.get("choices", [{}])[0]
+                                         .get("delta", {}).get("content", ""))
+                                if delta:
+                                    full_content += delta
+                                    chunk_count += 1
+                                    if stream_callback:
+                                        stream_callback(delta)
+                            except json.JSONDecodeError:
+                                continue
 
                 elapsed_total = time.time() - t_start
                 print(f"[AI纠错]   📦 流式接收: {chunk_count} chunks, {len(full_content)} chars")

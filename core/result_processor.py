@@ -162,11 +162,14 @@ def _fmt_srt_time(total_seconds: float) -> str:
 
 
 def _export_srt(results: list, output_path: str, include_corrected: bool,
-                corrected_map: Dict[int, str], keep_original: bool = False):
+                corrected_map: Dict[int, str], keep_original: bool = False,
+                srt_mode: str = "corrected"):
     """导出为 SRT 字幕格式。
 
-    纠正模式下：纠错文本作为主字幕，无 [纠错] 标记。
-    保留原文模式：仅输出原文。
+    srt_mode:
+        "original"   — 仅输出原文
+        "corrected"  — 仅输出纠错文本（默认）
+        "dual"       — 双语对照：原文在上，纠错在下
     """
     with open(output_path, "w", encoding="utf-8") as f:
         idx = 1
@@ -177,17 +180,28 @@ def _export_srt(results: list, output_path: str, include_corrected: bool,
             start = item.get("time_sec", 0.0) or 0.0
             end = item.get("end_sec", start + 3.0) or (start + 3.0)
 
-            # 选择输出文本
-            if not keep_original and include_corrected and i in corrected_map:
+            if include_corrected and i in corrected_map:
                 corrected = _clean_id_markers(corrected_map[i])
-                text = corrected if (corrected and corrected != raw) else raw
+                has_correction = (corrected and corrected != raw)
             else:
-                text = raw
+                corrected = ""
+                has_correction = False
 
+            line_count = 0
             f.write(f"{idx}\n")
             f.write(f"{_fmt_srt_time(start)} --> {_fmt_srt_time(end)}\n")
-            f.write(f"{text}\n\n")
             idx += 1
+
+            if srt_mode == "original":
+                f.write(f"{raw}\n")
+            elif srt_mode == "corrected":
+                f.write(f"{corrected if has_correction else raw}\n")
+            elif srt_mode == "dual":
+                if has_correction:
+                    f.write(f"{raw}\n{corrected}\n")
+                else:
+                    f.write(f"{raw}\n")
+            f.write("\n")
 
 
 def export_results(
@@ -197,6 +211,7 @@ def export_results(
     include_corrected: bool = False,
     corrected_map: Optional[Dict[int, str]] = None,
     keep_original: bool = False,
+    srt_mode: str = "corrected",
 ):
     """导出结果。
 
@@ -207,6 +222,7 @@ def export_results(
         include_corrected: 是否输出纠错内容
         corrected_map: {行号: 纠错文本}
         keep_original: True=保留原文(忽略纠错), False=纠错文本替换原文
+        srt_mode: SRT 导出模式 "original"/"corrected"/"dual"
     """
     corrected_map = corrected_map or {}
 
@@ -217,7 +233,7 @@ def export_results(
     elif fmt == "csv":
         _export_csv(results, output_path, include_corrected, corrected_map, keep_original)
     elif fmt == "srt":
-        _export_srt(results, output_path, include_corrected, corrected_map, keep_original)
+        _export_srt(results, output_path, include_corrected, corrected_map, keep_original, srt_mode)
 
 
 def _clean_id_markers(text: str) -> str:

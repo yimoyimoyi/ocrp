@@ -1074,10 +1074,15 @@ class MainWindow(QMainWindow):
             return
         env = self._corrector.extract_environment(all_texts)
         if env:
-            # 回填到总结提示词栏
+            # 回填到总结提示词栏（AI 纠错 Tab）
             if hasattr(self._config_panel, '_corr_summary_prompt_text'):
                 self._config_panel._corr_summary_prompt_text.setPlainText(env)
-            self._status_label.setText(f"✅ 全文环境已提取并回填到总结提示词栏")
+            # 🔥 同时回填到自定义提示词栏（提示词模板 Tab）
+            if hasattr(self._config_panel, '_prompt_edit'):
+                self._config_panel._prompt_edit.setPlainText(env)
+            # 🔥 触发参数自动保存
+            self._config_panel._on_apply_mode()
+            self._status_label.setText(f"✅ 全文环境已提取并回填到总结提示词 + 自定义提示词栏")
         else:
             self._status_label.setText("⚠ 环境提取失败，请检查 API 配置")
 
@@ -1602,8 +1607,12 @@ class MainWindow(QMainWindow):
             if not polished:
                 QMessageBox.information(self, "提示", "无有效结果可导出。")
                 return
+            # 映射 UI 文本到内部模式
+            srt_mode_map = {"仅纠正结果": "corrected", "仅原文": "original", "双语对照（原文+纠正）": "dual"}
+            srt_mode = srt_mode_map.get(self._mode_params.get("srt_export_mode", "仅纠正结果"), "corrected")
             export_results(polished, path, fmt, bool(cmap), cmap,
-                           keep_original=self._mode_params.get("export_keep_original", False))
+                           keep_original=self._mode_params.get("export_keep_original", False),
+                           srt_mode=srt_mode)
             self._status_label.setText(f"✅ 已导出: {Path(path).name}")
         except Exception as e:
             QMessageBox.critical(self, "导出失败", str(e))

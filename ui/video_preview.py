@@ -426,7 +426,7 @@ class VideoPreviewWidget(QWidget):
             return
         self._play_start_real = self._current_position
         self._play_start_ts = time.time()
-        self._play_timer.setInterval(40)  # ~25fps 帧更新
+        self._play_timer.setInterval(250)  # ~4fps，用 seek_sec 抓帧
         self._play_timer.start()
 
     def _pause_video(self):
@@ -458,9 +458,8 @@ class VideoPreviewWidget(QWidget):
             self._player_proc = None
 
     def _on_play_tick(self):
-        """播放定时器回调：检查 ffplay 退出、更新进度条、渲染当前帧。"""
+        """播放定时器回调：检查 ffplay 退出、更新进度条、渲染当前时间轴帧。"""
         if self._player_proc and self._player_proc.poll() is not None:
-            # ffplay 自然结束 → 停在视频末尾
             self._is_playing = False
             self._btn_play.setText("▶")
             self._play_timer.stop()
@@ -475,7 +474,7 @@ class VideoPreviewWidget(QWidget):
                 self._preview_slider.blockSignals(False)
             return
 
-        # 播放中：用实际流逝时间更新进度条
+        # 播放中：用实际流逝时间计算当前时间轴位置
         import time
         elapsed = time.time() - self._play_start_ts
         self._current_position = min(self._play_start_real + elapsed, self._video_duration)
@@ -486,11 +485,11 @@ class VideoPreviewWidget(QWidget):
             self._preview_slider.blockSignals(False)
         self._update_preview_label()
 
-        # 渲染当前帧（从 ffmpeg 读取最新帧）
+        # 根据当前时间轴位置抓取并渲染帧（subprocess seek，约 4fps）
         ff = self._ffmpeg
         if ff and hasattr(ff, 'is_opened') and ff.is_opened():
             try:
-                frame = ff.read()
+                frame = ff.seek_sec(self._current_position)
                 if frame is not None and frame.size > 0:
                     self._current_frame = frame.copy()
                     self._display_frame(self._current_frame)

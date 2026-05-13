@@ -7,7 +7,7 @@
   "device": "cuda",
   "compute_type": "float16",
   "batch_size": 16,
-  "vad_enabled": false,
+  "vad_enabled": true,
   "vad_min_silence_ms": 500,
   "vad_threshold": 0.5,
   "word_timestamps": true,

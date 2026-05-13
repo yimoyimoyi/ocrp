@@ -87,6 +87,7 @@ class ConfigPanel(QWidget):
             "r_interval": self._r_interval_spin.value(),
             "subtitle_duration": self._subtitle_duration_spin.value(),
             "region_order": order_text,
+            "srt_export_mode": _g("_srt_export_combo", "仅纠正结果"),
             "post_keep_longest": self._post_keep_longest.isChecked(),
             "post_sim_dedup": self._post_sim_dedup.isChecked(),
             "post_conf_enabled": self._post_conf_check.isChecked(),
@@ -150,6 +151,8 @@ class ConfigPanel(QWidget):
             self._corr_enabled_check.setChecked(params["corr_enabled"])
         if "subtitle_duration" in params:
             self._subtitle_duration_spin.setValue(params["subtitle_duration"])
+        if "srt_export_mode" in params:
+            self._srt_export_combo.setCurrentText(params["srt_export_mode"])
         if "ocr_retry" in params:
             self._ocr_retry_spin.setValue(params["ocr_retry"])
         if "ocr_timeout" in params:
@@ -331,6 +334,16 @@ class ConfigPanel(QWidget):
         self._subtitle_duration_spin.setSuffix(" 秒")
         self._subtitle_duration_spin.setToolTip("OCR 字幕默认显示时长")
         layout.addRow("字幕时长:", self._subtitle_duration_spin)
+
+        # ── SRT 导出模式 ──
+        self._srt_export_combo = QComboBox()
+        self._srt_export_combo.addItems(["仅纠正结果", "仅原文", "双语对照（原文+纠正）"])
+        self._srt_export_combo.setToolTip(
+            "SRT 导出时的字幕内容模式：\n"
+            "仅纠正结果 = AI 纠错后的文本\n"
+            "仅原文 = 原始 OCR/ASR 文本\n"
+            "双语对照 = 原文在上，纠正在下")
+        layout.addRow("SRT 导出:", self._srt_export_combo)
 
         # ── 失败重试参数 ──
         sep_retry = QLabel("── 流程失败重试 ──")

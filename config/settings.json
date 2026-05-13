@@ -4,8 +4,8 @@
   "last_engine": "paddleocr",
   "last_directory": "F:\\Downloads",
   "window_geometry": {
-    "x": 281,
-    "y": 97,
+    "x": 348,
+    "y": 90,
     "width": 2190,
     "height": 1180
   },
@@ -14,16 +14,16 @@
     1460
   ],
   "recent_videos": [
-    "F:/Downloads/I Fixed Every Bug in Minecraft.mp4",
     "F:/Downloads/WHEN WILL YOU LEARN TO NOT CHALLENGE ME!!!!.mp4",
+    "F:/Downloads/I Fixed Every Bug in Minecraft.mp4",
+    "F:/Downloads/37749722223-1-192.mp4",
     "F:/Downloads/你干嘛～哎哟～.m4a",
     "F:/Downloads/关于“小嘴巴”和“接线员”的二三事 狐狸出洞了！ 选择跳跳猪挑战23分钟登顶记录中…… 依旧毒奶 于是此狐开始闭麦玩游戏 #胡夏 #直播 #游戏 #攀爬动物 #什么电话这么难打 - 抖音.mp3",
     "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-08-17 204549.png",
     "F:/Downloads/116764878_p0_master1200.jpg",
     "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-09-15 195634.png",
     "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-09-15 195244.png",
-    "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-08-15 004938.png",
-    "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-08-09 003037.png"
+    "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-08-15 004938.png"
   ],
   "ai_correction_enabled": true,
   "hw_accel": true,
@@ -63,14 +63,14 @@
     "corr_system_prompt": "",
     "corr_output_format": "",
     "corr_translate": true,
-    "corr_stream": false,
-    "corr_json": false,
+    "corr_stream": true,
+    "corr_json": true,
     "corr_preset": "默认 (llama.cpp)",
     "asr_enabled": false,
     "asr_model_size": "models--Systran--faster-whisper-large-v3",
     "asr_model_path": "E:\\orcp\\models\\asr\\models--Systran--faster-whisper-large-v3",
     "asr_language": "en",
-    "asr_vad": false,
+    "asr_vad": true,
     "asr_word_ts": true,
     "asr_region_name": "语音",
     "asr_beam_size": 5,

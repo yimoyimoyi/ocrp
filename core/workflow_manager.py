@@ -621,16 +621,20 @@ class WorkflowManager(QObject):
 
         # 按 batch_size 分批提交
         total_batches = (len(texts) + batch_size - 1) // batch_size
-        self.status_msg.emit(f"⏳ AI 纠错: 正在批量纠错 {len(texts)} 条 ({total_batches} 批)...")
         self._set_buttons(correction_all=False, correction=False)
-        self._remaining_batches = total_batches
+        self._total_correction_batches = total_batches
         self._is_auto_correction = is_auto
 
-        self._submit_correction_batch(texts, batch_size, 0, context_window, max_retries)
+        self._submit_correction_batch(texts, batch_size, 0, context_window, max_retries,
+                                       total_batches)
 
     def _submit_correction_batch(self, texts: list, batch_size: int, offset: int,
-                                  context_window: int, max_retries: int):
+                                  context_window: int, max_retries: int,
+                                  total_batches: int = 1):
         """递归分批提交批量纠错。"""
+        batch_num = offset // batch_size + 1
+        # 🔥 实时显示批次进度
+        self.status_msg.emit(f"⏳ AI 纠错: 正在批量纠错 [{batch_num}/{total_batches}] 批...")
         batch = texts[offset:offset + batch_size]
 
         self._batch_correction_worker = BatchCorrectionWorker(
@@ -650,7 +654,8 @@ class WorkflowManager(QObject):
         else:
             self._batch_correction_worker.batch_finished.connect(
                 lambda: self._submit_correction_batch(
-                    texts, batch_size, offset + batch_size, context_window, max_retries))
+                    texts, batch_size, offset + batch_size, context_window, max_retries,
+                    total_batches))
 
         self._batch_correction_worker.batch_error.connect(self._on_batch_correction_error)
         self._batch_correction_worker.start()
@@ -875,7 +880,7 @@ class WorkflowManager(QObject):
             if env:
                 if summary_prompt_setter:
                     summary_prompt_setter(env)
-                self.status_msg.emit("✅ 全文环境已提取并回填到总结提示词栏")
+                self.status_msg.emit("✅ 全文环境已提取")
             else:
                 self.status_msg.emit("⚠ 环境提取失败，请检查 API 配置")
             return env
