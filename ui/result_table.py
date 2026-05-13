@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QFileDialog, QMessageBox, QSizePolicy, QLineEdit, QFrame,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEvent
 from PyQt5.QtGui import QColor, QBrush
 from typing import List, Tuple, Optional
 
@@ -26,15 +26,41 @@ class ResultTableWidget(QWidget):
     delete_filtered_requested = pyqtSignal()  # 一键删除带关键词的结果
     cell_edit_activated = pyqtSignal(int)  # row → time_sec jump
     COLUMNS = ["时间戳", "区域", "引擎", "原始结果", "纠错结果", "置信度", ""]
-    COL_WIDTHS = [80, 100, 100, 260, 260, 60, 40]
+    COL_WIDTHS = [70, 70, 70, 200, 200, 55, 36]
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._results: List[dict] = []  # [{time_sec, time, region, engine, raw, corrected, confidence}, ...]
+        self._results: List[dict] = []
         self._is_templated: bool = False
         self._search_matches: List[int] = []
         self._search_current_idx: int = -1
         self._init_ui()
+        # 表格首次显示时做自适应列宽，之后监听 resize
+        self._table.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """拦截表格 resize 事件做流式列宽分配。"""
+        if obj is self._table and event.type() == QEvent.Resize:
+            QTimer.singleShot(0, self._adjust_column_widths)
+        return super().eventFilter(obj, event)
+
+    def _adjust_column_widths(self):
+        """按比例分配所有列的宽度（最后一列固定），完全自适应。"""
+        n = len(self.COLUMNS)
+        if self._table.columnCount() < n:
+            return
+        total = self._table.viewport().width()
+        btn_w = self.COL_WIDTHS[-1]
+        available = total - btn_w - 4  # 留 4px 余量
+        if available <= 0:
+            return
+        sum_ratios = sum(self.COL_WIDTHS[:-1])
+        self._table.blockSignals(True)
+        for i in range(n - 1):
+            w = max(int(available * self.COL_WIDTHS[i] / sum_ratios), 30)
+            self._table.setColumnWidth(i, w)
+        self._table.setColumnWidth(n - 1, btn_w)
+        self._table.blockSignals(False)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -85,6 +111,16 @@ class ResultTableWidget(QWidget):
         self._btn_delete_filtered.setMinimumHeight(22)
         self._btn_delete_filtered.clicked.connect(self._on_delete_filtered)
         header.addWidget(self._btn_delete_filtered)
+
+        # 批量队列显示
+        header.addSpacing(8)
+        self._batch_sep = QFrame()
+        self._batch_sep.setFrameShape(QFrame.VLine)
+        self._batch_sep.setFixedHeight(18)
+        header.addWidget(self._batch_sep)
+        header.addWidget(QLabel("📋 队列:"))
+        self._batch_count_label = QLabel("(空)")
+        header.addWidget(self._batch_count_label)
 
         layout.addLayout(header)
 
@@ -159,14 +195,10 @@ class ResultTableWidget(QWidget):
         self._table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setStretchLastSection(False)
-        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
 
-        for i, w in enumerate(self.COL_WIDTHS):
-            if i not in (3, 4):
-                self._table.setColumnWidth(i, w)
-
-        self._table.setColumnWidth(len(self.COLUMNS) - 1, 40)
+        # 全部使用交互式 → 由 _adjust_column_widths 按比例动态分配
+        for i in range(len(self.COLUMNS)):
+            self._table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Interactive)
 
         self._table.verticalHeader().setVisible(False)
         # 编辑单元格或点击行时触发跳转信号
@@ -640,6 +672,15 @@ class ResultTableWidget(QWidget):
 
     def _update_count(self):
         self._count_label.setText(f"({self._table.rowCount()} 条)")
+
+    def set_batch_count(self, count: int, total_size: int = 0):
+        """更新批量队列显示。"""
+        if count == 0:
+            self._batch_count_label.setText("(空)")
+        elif total_size > 0:
+            self._batch_count_label.setText(f"{count} 个文件")
+        else:
+            self._batch_count_label.setText(f"{count} 个文件")
 
     def _on_export(self, fmt: str):
         """触发导出操作。"""

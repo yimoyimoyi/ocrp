@@ -13,6 +13,7 @@ STYLES_DIR = BASE_DIR / "styles"
 DEFAULT_DARK_QSS = """
 QMainWindow, QDialog { background-color: #1e1e1e; color: #d4d4d4; }
 QLabel { color: #d4d4d4; }
+QWidget { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; font-size: 12px; }
 QPushButton { 
     background-color: #2d2d2d; color: #d4d4d4; border: 1px solid #3e3e3e;
     padding: 4px 12px; border-radius: 3px; min-height: 24px;
@@ -84,6 +85,7 @@ QProgressBar::chunk { background-color: #007acc; border-radius: 2px; }
 DEFAULT_LIGHT_QSS = """
 QMainWindow, QDialog { background-color: #f5f5f5; color: #333333; }
 QLabel { color: #333333; }
+QWidget { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; font-size: 12px; }
 QPushButton { 
     background-color: #ffffff; color: #333333; border: 1px solid #cccccc;
     padding: 4px 12px; border-radius: 3px; min-height: 24px;

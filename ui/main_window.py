@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """主窗口 —— ORCP OCR 处理工具。
-引擎/纠错/模板选择 → 顶端菜单栏；处理参数/提示词模板管理 → 配置面板。"""
+引擎/模板选择 → 顶端菜单栏；所有参数设置 → 统一的「参数设置」对话框。"""
 
 import os, sys, json
 from pathlib import Path
@@ -12,9 +12,10 @@ from PyQt5.QtWidgets import (
     QPushButton, QSpinBox, QDoubleSpinBox, QFileDialog,
     QFrame, QMessageBox, QStatusBar, QProgressBar, QSplitter,
     QTextEdit, QAction, QActionGroup, QDialog, QDialogButtonBox,
-    QFormLayout, QListWidget, QListWidgetItem
+    QFormLayout, QListWidget, QListWidgetItem,
+    QAbstractSpinBox,
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QEvent
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if str(BASE_DIR) not in sys.path:
@@ -33,6 +34,8 @@ from ui.video_preview import VideoPreviewWidget
 from ui.region_manager import RegionManagerWidget
 from ui.config_panel import ConfigPanel
 from ui.result_table import ResultTableWidget
+from ui.settings_dialog import SettingsDialog
+from ui.display_dialog import DisplayDialog
 from ui.workers import (VideoProcessWorker, AICorrectionWorker,
                         BatchCorrectionWorker, ImageProcessWorker,
                         BatchProcessWorker, AudioProcessWorker)
@@ -327,111 +330,12 @@ class PresetManageDialog(QDialog):
                 self._list.setCurrentRow(self._list.row(items[0]))
         self._list.blockSignals(False)
 
-class CorrectionConfigDialog(QDialog):
-    """AI 纠错配置对话框（从菜单栏唤起）—— 独立 API 配置。"""
-
-    def __init__(self, config: dict, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("AI 纠错设置")
-        self.setMinimumWidth(480)
-        self._result = dict(config)
-
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setSpacing(6)
-
-        self._enabled_check = QCheckBox("启用 AI 纠错")
-        self._enabled_check.setChecked(config.get("enabled", False))
-        form.addRow("", self._enabled_check)
-
-        self._api_key_edit = QLineEdit()
-        self._api_key_edit.setPlaceholderText("sk-xxx（可选）")
-        self._api_key_edit.setText(config.get("api_key", ""))
-        form.addRow("API Key:", self._api_key_edit)
-
-        self._base_url_edit = QLineEdit()
-        self._base_url_edit.setPlaceholderText("http://127.0.0.1:8080")
-        self._base_url_edit.setText(config.get("base_url", "http://127.0.0.1:8080"))
-        form.addRow("Base URL:", self._base_url_edit)
-
-        self._model_edit = QLineEdit()
-        self._model_edit.setPlaceholderText("gpt-4o / gemma 等")
-        self._model_edit.setText(config.get("model", ""))
-        form.addRow("模型:", self._model_edit)
-
-        self._timeout_spin = QSpinBox()
-        self._timeout_spin.setRange(1, 300)
-        self._timeout_spin.setValue(config.get("timeout", 30))
-        self._timeout_spin.setSuffix(" 秒")
-        form.addRow("超时:", self._timeout_spin)
-
-        self._retry_spin = QSpinBox()
-        self._retry_spin.setRange(0, 10)
-        self._retry_spin.setValue(config.get("retry_on_failure", 2))
-        form.addRow("重试次数:", self._retry_spin)
-
-        layout.addLayout(form)
-
-        # ── 自定义总结提示词 ──
-        layout.addWidget(QLabel("总结/概括提示词（可选，留空则用默认）:"))
-        self._summary_prompt_edit = QTextEdit()
-        self._summary_prompt_edit.setPlainText(config.get("summary_prompt", ""))
-        self._summary_prompt_edit.setMaximumHeight(60)
-        self._summary_prompt_edit.setPlaceholderText("用于从全文提取环境上下文的提示词")
-        layout.addWidget(self._summary_prompt_edit)
-
-        # ── 自定义纠错 System Prompt ──
-        layout.addWidget(QLabel("纠错系统提示词（可选，留空则用默认）:"))
-        self._sys_prompt_edit = QTextEdit()
-        self._sys_prompt_edit.setPlainText(config.get("correction_system_prompt", ""))
-        self._sys_prompt_edit.setMaximumHeight(60)
-        self._sys_prompt_edit.setPlaceholderText("注入到纠错请求的 system message")
-        layout.addWidget(self._sys_prompt_edit)
-
-        # ── 纠错用户提示词 ──
-        layout.addWidget(QLabel("纠错用户提示词:"))
-        self._prompt_edit = QTextEdit()
-        self._prompt_edit.setPlainText(config.get("correction_prompt", ""))
-        self._prompt_edit.setMaximumHeight(80)
-        layout.addWidget(self._prompt_edit)
-
-        # ── 输出格式 ──
-        layout.addWidget(QLabel("输出格式标记（可选）:"))
-        self._output_format_edit = QLineEdit()
-        self._output_format_edit.setText(config.get("output_format", ""))
-        self._output_format_edit.setPlaceholderText("[纠正后文本]")
-        layout.addWidget(self._output_format_edit)
-
-        layout.addSpacing(8)
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-
-    def _on_accept(self):
-        self._result = {
-            "enabled": self._enabled_check.isChecked(),
-            "api_key": self._api_key_edit.text(),
-            "base_url": self._base_url_edit.text(),
-            "model": self._model_edit.text(),
-            "timeout": self._timeout_spin.value(),
-            "retry_on_failure": self._retry_spin.value(),
-            "correction_prompt": self._prompt_edit.toPlainText(),
-            "summary_prompt": self._summary_prompt_edit.toPlainText(),
-            "correction_system_prompt": self._sys_prompt_edit.toPlainText(),
-            "output_format": self._output_format_edit.text(),
-        }
-        self.accept()
-
-    def get_config(self) -> dict:
-        return dict(self._result)
-
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(WIN_TITLE)
-        self.setMinimumSize(960, 640)
+        self.setMinimumSize(1024, 680)
 
         self._config_mgr = ConfigManager()
         self._engine_mgr = OCREngineManager()
@@ -494,6 +398,31 @@ class MainWindow(QMainWindow):
         # ── 配置 WorkflowManager ──
         self._configure_workflow()
 
+        # ── 禁用所有数值控件的滚轮操作 ──
+        self._install_wheel_blocker()
+
+    def _install_wheel_blocker(self):
+        """安装全局事件过滤器，完全阻止滚轮改变 SpinBox/ComboBox 的值。"""
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        class WheelBlocker(QWidget):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.setVisible(False)
+
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.Wheel:
+                    if isinstance(obj, (QAbstractSpinBox, QComboBox)):
+                        event.ignore()
+                        return True
+                return super().eventFilter(obj, event)
+
+        blocker = WheelBlocker(self)
+        app.installEventFilter(blocker)
+        self._wheel_blocker = blocker
+
     # ── 菜单栏 ──
     def _build_menu_bar(self):
         mb = self.menuBar()
@@ -507,11 +436,34 @@ class MainWindow(QMainWindow):
         self._engine_config_action.triggered.connect(self._on_menu_engine_config)
         self._engine_menu.addAction(self._engine_config_action)
 
-        # ── 纠错菜单 ──
+        # ── 参数设置菜单 ──
+        self._settings_menu = mb.addMenu("参数设置(&P)")
+        for label, tab_idx in [
+            ("⚙ 全部参数...", -1),
+            ("基础设置...", 0),
+            ("语音识别...", 1),
+            ("OCR 字幕处理...", 2),
+            ("AI 纠错...", 3),
+            ("结果输出...", 4),
+        ]:
+            action = QAction(label, self)
+            action.triggered.connect(lambda checked, idx=tab_idx: self._open_settings(idx))
+            self._settings_menu.addAction(action)
+            if label == "⚙ 全部参数...":
+                self._settings_menu.addSeparator()
+
+        # ── 显示菜单 ──
+        self._display_menu = mb.addMenu("显示(&V)")
+        self._display_theme_action = QAction("切换主题 (亮色/暗色)", self)
+        self._display_theme_action.triggered.connect(self._toggle_theme)
+        self._display_menu.addAction(self._display_theme_action)
+        self._display_menu.addSeparator()
+        self._display_settings_action = QAction("显示设置...", self)
+        self._display_settings_action.triggered.connect(self._open_display_settings)
+        self._display_menu.addAction(self._display_settings_action)
+
+        # ── 纠错快捷菜单 ──
         self._corr_menu = mb.addMenu("纠错(&C)")
-        self._corr_config_action = QAction("纠错设置...", self)
-        self._corr_config_action.triggered.connect(self._on_menu_correction_config)
-        self._corr_menu.addAction(self._corr_config_action)
         self._corr_preset_action = QAction("API 预设管理...", self)
         self._corr_preset_action.triggered.connect(self._on_menu_preset_manage)
         self._corr_menu.addAction(self._corr_preset_action)
@@ -541,17 +493,23 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(4, 4, 4, 4); root.setSpacing(4)
 
-        self._main_splitter = QSplitter(Qt.Horizontal)
+        # ── 主拆分器：上（视频+控制） / 下（结果+操作） ──
+        self._main_splitter = QSplitter(Qt.Vertical)
+        self._main_splitter.setObjectName("mainSplitter")
+        self._main_splitter.setChildrenCollapsible(False)
+        self._main_splitter.setOpaqueResize(True)
+        self._main_splitter.setHandleWidth(4)
 
-        # 左侧：视频预览
+        # ═══ 上半区：视频预览 + 右侧区域管理/快速控制 ═══
+        self._top_splitter = QSplitter(Qt.Horizontal)
+        self._top_splitter.setObjectName("topSplitter")
+        self._top_splitter.setChildrenCollapsible(False)
+        self._top_splitter.setOpaqueResize(True)
+        self._top_splitter.setHandleWidth(4)
+
+        # 左：视频预览 + 工具栏
         left = QWidget()
-        ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0)
-        self._video_preview = VideoPreviewWidget()
-        self._video_preview.video_loaded.connect(self._on_video_loaded)
-        self._video_preview.frame_captured.connect(self._on_frame_captured)
-        self._video_preview.regions_changed.connect(self._on_preview_regions_changed)
-        self._video_preview.files_dropped.connect(self._on_batch_files_dropped)
-
+        ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(4)
         vc = QHBoxLayout()
         self._btn_capture = QPushButton("📸 截取测试帧")
         self._btn_capture.clicked.connect(self._on_capture_test_frame)
@@ -563,23 +521,97 @@ class MainWindow(QMainWindow):
         self._btn_batch_clear.setObjectName("btnBatchClear")
         self._btn_batch_clear.clicked.connect(self._on_batch_clear)
         vc.addWidget(self._btn_batch_clear); vc.addStretch()
-        ll.addLayout(vc); ll.addWidget(self._video_preview, 1)
-        self._main_splitter.addWidget(left)
+        ll.addLayout(vc); ll.addSpacing(2)
 
-        # 右侧
-        rs = QSplitter(Qt.Vertical)
-        # 上部：区域管理器 + 配置面板（可拖拽拆分）
-        self._right_top_splitter = QSplitter(Qt.Horizontal)
-        self._right_top_splitter.setChildrenCollapsible(False)
+        self._video_preview = VideoPreviewWidget()
+        self._video_preview.video_loaded.connect(self._on_video_loaded)
+        self._video_preview.frame_captured.connect(self._on_frame_captured)
+        self._video_preview.regions_changed.connect(self._on_preview_regions_changed)
+        self._video_preview.files_dropped.connect(self._on_batch_files_dropped)
+        ll.addWidget(self._video_preview, 1)
+        self._top_splitter.addWidget(left)
 
+        # 右：区域管理器（紧凑）+ 快速模板选择
+        right = QWidget()
+        rl = QVBoxLayout(right); rl.setContentsMargins(0, 0, 0, 0); rl.setSpacing(4)
         self._region_manager = RegionManagerWidget()
         self._region_manager.region_selected.connect(self._on_region_selected)
         self._region_manager.region_updated.connect(self._on_region_updated)
         self._region_manager.region_add_requested.connect(self._on_add_region_requested)
         self._region_manager.region_removed.connect(self._on_remove_region)
         self._region_manager.regions_cleared.connect(self._on_clear_regions)
+        rl.addWidget(self._region_manager, 1)
 
+        # 快速模板/提示词行
+        tpl_bar = QFrame()
+        tpl_bar.setObjectName("tplBar")
+        tpl_bl = QHBoxLayout(tpl_bar)
+        tpl_bl.setContentsMargins(4, 4, 4, 4); tpl_bl.setSpacing(4)
+        tpl_bl.addWidget(QLabel("模板:"))
+        self._template_combo = QComboBox()
+        self._template_combo.currentTextChanged.connect(self._on_template_quick_selected)
+        tpl_bl.addWidget(self._template_combo, 1)
+        rl.addWidget(tpl_bar)
+
+        self._top_splitter.addWidget(right)
+        self._top_splitter.setSizes([600, 280])
+
+        self._main_splitter.addWidget(self._top_splitter)
+
+        # ═══ 下半区：结果表格 + 底部操作栏 ═══
+        bottom = QWidget()
+        bl = QVBoxLayout(bottom); bl.setContentsMargins(0, 0, 0, 0); bl.setSpacing(4)
+
+        self._result_table = ResultTableWidget()
+        self._result_table.filter_requested.connect(self._on_result_filter)
+        self._result_table.delete_filtered_requested.connect(self._on_delete_filtered_results)
+        self._result_table.export_requested.connect(self._on_export)
+        self._result_table.cell_edit_activated.connect(self._on_result_cell_edit)
+        bl.addWidget(self._result_table, 1)
+
+        # 底部操作栏
+        bar = QFrame()
+        bar.setObjectName("bottomBar")
+        bbl = QHBoxLayout(bar); bbl.setContentsMargins(6, 4, 6, 4); bbl.setSpacing(6)
+
+        self._btn_start = QPushButton("▶ 开始处理")
+        self._btn_start.setObjectName("btnStart")
+        self._btn_start.clicked.connect(self._on_start_processing)
+        bbl.addWidget(self._btn_start)
+        self._btn_pause = QPushButton("⏸ 暂停")
+        self._btn_pause.setObjectName("btnPause")
+        self._btn_pause.setEnabled(False)
+        self._btn_pause.clicked.connect(self._on_pause_processing)
+        bbl.addWidget(self._btn_pause)
+        self._btn_stop = QPushButton("⏹ 停止")
+        self._btn_stop.setObjectName("btnStop")
+        self._btn_stop.setEnabled(False)
+        self._btn_stop.clicked.connect(self._on_stop_processing)
+        bbl.addWidget(self._btn_stop)
+
+        sep = QFrame(); sep.setFrameShape(QFrame.VLine); sep.setFixedHeight(24)
+        bbl.addWidget(sep)
+
+        self._btn_correction = QPushButton("✏ 纠错选中")
+        self._btn_correction.setObjectName("btnCorrection")
+        self._btn_correction.clicked.connect(self._on_correction_selected)
+        bbl.addWidget(self._btn_correction)
+        self._btn_correction_all = QPushButton("✏ 纠正全部")
+        self._btn_correction_all.setObjectName("btnCorrectionAll")
+        self._btn_correction_all.clicked.connect(self._on_correction_all)
+        bbl.addWidget(self._btn_correction_all)
+
+        bbl.addStretch()
+        bl.addWidget(bar)
+
+        self._main_splitter.addWidget(bottom)
+        self._main_splitter.setSizes([450, 450])
+
+        root.addWidget(self._main_splitter, 1)
+
+        # ── ConfigPanel（隐藏，仅用于参数管理和 SettingsDialog）──
         self._config_panel = ConfigPanel()
+        self._config_panel.setVisible(False)
         self._config_panel.prompt_changed.connect(self._on_prompt_changed)
         self._config_panel.mode_changed.connect(self._on_mode_changed)
         self._config_panel.template_created.connect(self._on_config_template_selected)
@@ -590,83 +622,95 @@ class MainWindow(QMainWindow):
         self._config_panel.filter_remove_requested.connect(self._on_filter_remove)
         self._config_panel.extract_env_clicked.connect(self._on_extract_env)
         self._config_panel.collapse_requested.connect(self._on_config_panel_collapsed)
-
-        self._right_top_splitter.addWidget(self._region_manager)
-        self._right_top_splitter.addWidget(self._config_panel)
-        self._right_top_splitter.setSizes([300, 200])
-
-        rs.addWidget(self._right_top_splitter)
-
-        self._result_table = ResultTableWidget()
-        self._result_table.filter_requested.connect(self._on_result_filter)
-        self._result_table.delete_filtered_requested.connect(self._on_delete_filtered_results)
-        self._result_table.export_requested.connect(self._on_export)
-        self._result_table.cell_edit_activated.connect(self._on_result_cell_edit)
-        rs.addWidget(self._result_table)
-        rs.setSizes([300, 400])
-        self._main_splitter.addWidget(rs)
-
-        saved = self._config_mgr.get_splitter_sizes()
-        if saved: self._main_splitter.setSizes(saved)
-
-        root.addWidget(self._main_splitter, 1)
-
-        # 批量文件队列栏（仅显示队列数量）
-        batch_bar = QFrame()
-        batch_bar.setObjectName("batchBar")
-        batch_bar.setFrameShape(QFrame.StyledPanel)
-        batch_bl = QHBoxLayout(batch_bar)
-        batch_bl.setContentsMargins(4, 2, 4, 2); batch_bl.setSpacing(4)
-        batch_bl.addWidget(QLabel("📋 批量队列:"))
-        self._batch_count_label = QLabel("(空)")
-        batch_bl.addWidget(self._batch_count_label, 1)
-        root.addWidget(batch_bar)
-
-        # 底部栏
-        bar = QFrame()
-        bar.setObjectName("bottomBar")
-        bl = QHBoxLayout(bar); bl.setContentsMargins(4, 2, 4, 0); bl.setSpacing(4)
-        self._btn_start = QPushButton("▶ 开始处理")
-        self._btn_start.setObjectName("btnStart")
-        self._btn_start.clicked.connect(self._on_start_processing)
-        bl.addWidget(self._btn_start)
-        self._btn_correction = QPushButton("✏ 纠错选中")
-        self._btn_correction.setObjectName("btnCorrection")
-        self._btn_correction.setToolTip("对选中的结果行进行 AI 纠错")
-        self._btn_correction.clicked.connect(self._on_correction_selected)
-        bl.addWidget(self._btn_correction)
-        self._btn_correction_all = QPushButton("✏ 纠正全部")
-        self._btn_correction_all.setObjectName("btnCorrectionAll")
-        self._btn_correction_all.setToolTip("对全部结果行进行 AI 纠错（忽略选中状态）")
-        self._btn_correction_all.clicked.connect(self._on_correction_all)
-        bl.addWidget(self._btn_correction_all)
-        self._btn_pause = QPushButton("⏸ 暂停")
-        self._btn_pause.setObjectName("btnPause")
-        self._btn_pause.setEnabled(False)
-        self._btn_pause.clicked.connect(self._on_pause_processing)
-        bl.addWidget(self._btn_pause)
-        self._btn_stop = QPushButton("⏹ 停止")
-        self._btn_stop.setObjectName("btnStop")
-        self._btn_stop.setEnabled(False)
-        self._btn_stop.clicked.connect(self._on_stop_processing)
-        bl.addWidget(self._btn_stop); bl.addStretch()
-        self._btn_theme = QPushButton("🌙 暗色" if self._theme == "dark" else "☀ 亮色")
-        self._btn_theme.setObjectName("btnTheme")
-        self._btn_theme.clicked.connect(self._toggle_theme)
-        bl.addWidget(self._btn_theme)
-        root.addWidget(bar)
+        root.addWidget(self._config_panel)
 
     # ── 主题 ──
     def _apply_theme(self, theme=None):
         self._theme = theme or self._theme
         self._config_mgr.set("theme", self._theme); self._config_mgr.save_settings()
         qss = scale_stylesheet(load_qss_theme(self._theme), self._config_mgr.get_scale())
+        # 应用用户配置的字体大小
+        font_size = self._config_mgr.get_font_size()
+        if font_size != 12:
+            import re
+            qss = re.sub(r'font-size:\s*\d+px', f'font-size: {font_size}px', qss)
         app = QApplication.instance()
         if app: app.setStyleSheet(qss)
-        self._btn_theme.setText("☀ 亮色" if self._theme == "light" else "🌙 暗色")
 
     def _toggle_theme(self):
         self._apply_theme("light" if self._theme == "dark" else "dark")
+
+    # ── 参数设置对话框 ──
+    def _open_settings(self, tab_index: int = -1):
+        """打开参数设置对话框，合并处理参数 + 纠错 API 配置。"""
+        corr_cfg = load_correction_config()
+        corr_cfg.setdefault("enabled", self._corrector.enabled)
+        corr_cfg.setdefault("api_key", "")
+        corr_cfg.setdefault("base_url", "http://127.0.0.1:8080")
+        corr_cfg.setdefault("model", "")
+        corr_cfg.setdefault("timeout", 30)
+        corr_cfg.setdefault("retry_on_failure", 2)
+
+        dlg = SettingsDialog(self._config_panel, correction_config=corr_cfg, parent=self)
+        if 0 <= tab_index < dlg._tabs.count():
+            dlg._tabs.setCurrentIndex(tab_index)
+        elif tab_index == -1:
+            dlg._tabs.setCurrentIndex(0)  # 默认打开第一页
+
+        if dlg.exec_() == QDialog.Accepted:
+            # 保存处理参数
+            self._on_mode_changed(self._config_panel.get_mode_params())
+            # 保存纠错 API 配置
+            api_cfg = dlg.get_corr_api_config()
+            preset_name = self._config_panel._corr_preset_combo.currentText() if hasattr(self._config_panel, '_corr_preset_combo') else ""
+            self._corrector = AICorrector(api_cfg, engine_manager=self._engine_mgr, preset_name=preset_name)
+            corr_file_cfg = load_correction_config()
+            corr_file_cfg.update(api_cfg)
+            config_path = BASE_DIR / "config" / "ai_correction.json"
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(corr_file_cfg, f, ensure_ascii=False, indent=2)
+            self._status_label.setText("✅ 参数设置已更新")
+
+    def _open_display_settings(self):
+        """打开显示设置对话框。"""
+        dlg = DisplayDialog(
+            theme=self._theme,
+            font_size=self._config_mgr.get_font_size(),
+            ui_scale=self._config_mgr.get_scale(),
+            parent=self,
+        )
+        if dlg.exec_() == QDialog.Accepted:
+            cfg = dlg.get_config()
+            self._apply_theme_from_dialog(cfg["theme"], cfg["font_size"], cfg["ui_scale"])
+            self._status_label.setText("✅ 显示设置已更新")
+
+    def _apply_theme_from_dialog(self, theme: str, font_size: int, scale: float):
+        """从显示设置对话框应用主题/字体/缩放。"""
+        self._theme = theme
+        self._config_mgr.set("theme", theme)
+        self._config_mgr.set("font_size", font_size)
+        self._config_mgr.set("ui_scale", scale)
+        self._config_mgr.save_settings()
+        qss = scale_stylesheet(load_qss_theme(theme), scale)
+        if font_size != 12:
+            import re
+            qss = re.sub(r'font-size:\s*\d+px', f'font-size: {font_size}px', qss)
+        app = QApplication.instance()
+        if app: app.setStyleSheet(qss)
+
+    def _on_template_quick_selected(self, name: str):
+        """快速模板下拉框选中。"""
+        if not name:
+            return
+        self._current_template = name
+        t = self._prompt_mgr.get_template_by_name(name)
+        if t:
+            self._config_panel.set_template_prompt(t.get("prompt", ""))
+        self._config_panel.select_template(name)
+        self._sync_region_defaults()
+        # 同步菜单栏
+        for a in self._template_action_group.actions():
+            a.setChecked(a.text() == name)
 
     # ── 窗口状态 ──
     def _restore_window_geometry(self):
@@ -674,11 +718,21 @@ class MainWindow(QMainWindow):
         if g: self.setGeometry(g.get("x", 100), g.get("y", 100),
                                 g.get("width", 1280), g.get("height", 800))
         else: self.resize(1280, 800)
+        # 恢复拆分器尺寸
+        main_sizes = self._config_mgr.get_splitter_sizes()
+        if main_sizes and len(main_sizes) == 2:
+            self._main_splitter.setSizes(main_sizes)
+        top_sizes = self._config_mgr.get("top_splitter_sizes")
+        if top_sizes and len(top_sizes) == 2:
+            self._top_splitter.setSizes(top_sizes)
 
     def _save_window_geometry(self):
         g = self.geometry()
         self._config_mgr.set("window_geometry",
             {"x": g.x(), "y": g.y(), "width": g.width(), "height": g.height()})
+        # 保存所有拆分器尺寸
+        self._config_mgr.set("splitter_sizes", self._main_splitter.sizes())
+        self._config_mgr.set("top_splitter_sizes", self._top_splitter.sizes())
 
     def _restore_mode_params(self):
         """从 settings.json 恢复 UI 配置参数。"""
@@ -695,7 +749,6 @@ class MainWindow(QMainWindow):
     def _save_mode_params(self):
         """保存当前 UI 配置参数到 settings.json。"""
         self._config_mgr.set("mode_params", dict(self._mode_params))
-        self._config_mgr.set("splitter_sizes", self._main_splitter.sizes())
         self._config_mgr.save_settings()
 
     def closeEvent(self, ev):
@@ -789,6 +842,17 @@ class MainWindow(QMainWindow):
         names = self._prompt_mgr.get_template_names()
         self._region_manager.set_template_names(names)
         self._config_panel.set_template_names(names)
+
+        # 更新快速模板下拉框
+        self._template_combo.blockSignals(True)
+        cur = self._template_combo.currentText()
+        self._template_combo.clear()
+        self._template_combo.addItems(names)
+        if cur in names:
+            self._template_combo.setCurrentText(cur)
+        elif names:
+            self._template_combo.setCurrentIndex(0)
+        self._template_combo.blockSignals(False)
 
         # 重建模板菜单单选动作
         menu = self._template_menu
@@ -885,30 +949,6 @@ class MainWindow(QMainWindow):
         self._engine_label.setText(f"  |  引擎: {name} {'✅' if avail2 else '⚠'}")
 
     # ── 菜单事件：纠错 ──
-    def _on_menu_correction_config(self):
-        cfg = load_correction_config()
-        cfg.setdefault("enabled", self._corrector.enabled)
-        cfg.setdefault("api_key", "")
-        cfg.setdefault("base_url", "http://127.0.0.1:8080")
-        cfg.setdefault("model", "")
-        cfg.setdefault("timeout", 30)
-        cfg.setdefault("retry_on_failure", 2)
-        cfg.setdefault("correction_prompt", "")
-
-        dlg = CorrectionConfigDialog(cfg, self)
-        if dlg.exec_() == QDialog.Accepted:
-            new_cfg = dlg.get_config()
-            preset_name = self._config_panel._corr_preset_combo.currentText() if hasattr(self._config_panel, '_corr_preset_combo') else ""
-            self._corrector = AICorrector(new_cfg, engine_manager=self._engine_mgr, preset_name=preset_name)
-
-            # 保存到文件
-            corr_cfg = load_correction_config()
-            corr_cfg.update(new_cfg)
-            config_path = BASE_DIR / "config" / "ai_correction.json"
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(corr_cfg, f, ensure_ascii=False, indent=2)
-            self._status_label.setText("✅ AI 纠错配置已更新")
-
     def _on_menu_preset_manage(self):
         """打开 API 预设管理对话框。"""
         dlg = PresetManageDialog(self)
@@ -1029,10 +1069,7 @@ class MainWindow(QMainWindow):
 
     def _update_batch_label(self):
         n = len(self._batch_files)
-        if n == 0:
-            self._batch_count_label.setText("(空)")
-        else:
-            self._batch_count_label.setText(f"{n} 个文件")
+        self._result_table.set_batch_count(n)
 
     def _on_batch_progress_file(self, fname: str, idx: int, total: int):
         self._progress_bar.setValue(int(idx * 100 / total))
@@ -1108,16 +1145,8 @@ class MainWindow(QMainWindow):
         self._region_manager.regions = []
 
     def _on_config_panel_collapsed(self):
-        """配置面板折叠/展开时，自动调整上半部分 splitter 让区域管理器填满。"""
-        collapsed = self._config_panel._collapsed
-        if collapsed:
-            # 将配置面板所占空间全部分配给区域管理器
-            sizes = self._right_top_splitter.sizes()
-            total = sum(sizes)
-            self._right_top_splitter.setSizes([total, 0])
-        else:
-            # 恢复默认比例
-            self._right_top_splitter.setSizes([300, 200])
+        """配置面板折叠信号 —— 现在已由设置对话框替代，此处仅为兼容性保留。"""
+        pass
 
     def _on_delete_filtered_results(self):
         """删除所有匹配过滤器关键词的结果行。"""

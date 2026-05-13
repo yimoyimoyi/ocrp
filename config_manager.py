@@ -13,10 +13,11 @@ CONFIG_DIR = BASE_DIR / "config"
 DEFAULT_SETTINGS = {
     "theme": "dark",
     "ui_scale": 1.0,
+    "font_size": 12,
     "last_engine": "paddleocr",
     "last_directory": "",
     "window_geometry": {"x": 100, "y": 100, "width": 1280, "height": 800},
-    "splitter_sizes": [300, 400],
+    "splitter_sizes": [400, 500],
     "recent_videos": [],
     "ai_correction_enabled": False,
     "hw_accel": False,
@@ -164,6 +165,9 @@ class ConfigManager:
 
     def get_scale(self) -> float:
         return self.settings.get("ui_scale", 1.0)
+
+    def get_font_size(self) -> int:
+        return self.settings.get("font_size", 12)
 
     def get_last_engine(self) -> str:
         return self.settings.get("last_engine", "paddleocr")

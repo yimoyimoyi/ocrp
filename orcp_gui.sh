@@ -1,95 +1,111 @@
 #!/bin/bash
-# =============================================================================
-# ORCP - OCR 处理工具 (GUI) - Linux 启动脚本
-# =============================================================================
-# 用法:
-#   bash orcp_gui.sh              # 启动 ORCP GUI
-#   bash orcp_gui.sh --setup      # 先运行完整安装再启动
-#
+# ================================================================
+#  ORCP GUI Launcher (Linux)
+#  Usage:  bash orcp_gui.sh [--setup] [--cpu|--gpu]
+# ================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+info() { echo -e "${GREEN}[INFO]${NC}  $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+err()  { echo -e "${RED}[ERROR]${NC} $*"; }
 
-# ── 参数解析 ────────────────────────────────────────────────────────────────
-DO_SETUP=false
-SETUP_ARGS=()
+DO_SETUP=false; SETUP_ARGS=()
 for arg in "$@"; do
     case "$arg" in
-        --setup)  DO_SETUP=true ;;
-        --cpu)    DO_SETUP=true; SETUP_ARGS+=("--cpu") ;;
-        --gpu)    DO_SETUP=true; SETUP_ARGS+=("--gpu") ;;
+        --setup) DO_SETUP=true ;;
+        --cpu)   DO_SETUP=true; SETUP_ARGS+=("--cpu") ;;
+        --gpu)   DO_SETUP=true; SETUP_ARGS+=("--gpu") ;;
+        -h|--help)
+            echo "Usage: bash orcp_gui.sh [OPTIONS]"
+            echo "  (none)       Launch ORCP GUI"
+            echo "  --setup      Run full install then launch"
+            echo "  --cpu        CPU mode"
+            echo "  --gpu        GPU mode"
+            echo "  -h, --help   Show this help"
+            exit 0 ;;
     esac
 done
 
-# ── 首次运行检查 ────────────────────────────────────────────────────────────
-check_prerequisites() {
-    local missing=()
+echo ""
+echo "==========================================="
+echo "  ORCP - OCR / ASR Processing Tool"
+echo "==========================================="
+echo ""
 
-    if ! command -v uv &>/dev/null; then
-        missing+=("uv (pip install uv)")
-    fi
-    if ! command -v python3 &>/dev/null && ! command -v python &>/dev/null; then
-        missing+=("python3")
-    fi
-    if ! command -v ffmpeg &>/dev/null && ! command -v ffprobe &>/dev/null; then
-        missing+=("ffmpeg")
-    fi
-
-    if [ ${#missing[@]} -gt 0 ]; then
-        echo -e "${RED}⚠ 缺少以下依赖:${NC}"
-        for m in "${missing[@]}"; do echo "  - $m"; done
-        echo ""
-        echo -e "${CYAN}运行 bash setup.sh 一键安装所有依赖？ [Y/n]${NC}"
-        read -rp "> " answer
-        if [ "${answer:-Y}" != "n" ] && [ "${answer:-Y}" != "N" ]; then
-            DO_SETUP=true
-        else
-            echo "请手动安装缺失依赖后重新运行。"
-            exit 1
-        fi
-    fi
-}
-
-# ── 运行安装 ────────────────────────────────────────────────────────────────
-if $DO_SETUP; then
-    if [ -f setup.sh ]; then
-        echo -e "${GREEN}[*] 运行安装脚本...${NC}"
-        bash setup.sh "${SETUP_ARGS[@]}"
-    else
-        echo -e "${RED}❌ 未找到 setup.sh，请手动安装依赖。${NC}"
-        exit 1
-    fi
-else
-    check_prerequisites
+# locate Python -------------------------------------------------------
+PYTHON_CMD=""
+if command -v python3 &>/dev/null; then
+    PYTHON_CMD="python3"
+elif command -v python &>/dev/null; then
+    PYTHON_CMD="python"
 fi
 
-# ── 同步依赖 ────────────────────────────────────────────────────────────────
-echo -e "${GREEN}[*] 同步依赖 (uv sync) ...${NC}"
-uv sync
+if [ -z "$PYTHON_CMD" ]; then
+    err "Python not found. Run: bash setup.sh"
+    exit 1
+fi
+info "Python: $($PYTHON_CMD --version 2>&1)"
 
-# ── 环境变量 ────────────────────────────────────────────────────────────────
-# 清除代理（避免干扰本地 API 调用）
-unset http_proxy  HTTPS_PROXY
-unset https_proxy HTTP_PROXY
-unset all_proxy   ALL_PROXY
+# check venv -----------------------------------------------------------
+if [ -f ".venv/bin/python" ]; then
+    info "Using venv: .venv"
+    PYTHON_EXE=".venv/bin/python"
+else
+    PYTHON_EXE="$PYTHON_CMD"
+    # no venv: run setup if requested
+    if $DO_SETUP || [ ! -f "setup.sh" ]; then
+        :  # handled below
+    fi
+fi
 
-# CUDA 延迟加载（避免不必要的 CUDA 初始化）
+# run setup if needed --------------------------------------------------
+if $DO_SETUP; then
+    if [ ! -f setup.sh ]; then
+        err "setup.sh not found. Cannot install."
+        exit 1
+    fi
+    info "Running setup..."
+    bash setup.sh "${SETUP_ARGS[@]}" || { err "Setup failed."; exit 1; }
+fi
+
+# quick dep check ------------------------------------------------------
+if ! "$PYTHON_EXE" -c "import numpy, cv2, requests" 2>/dev/null; then
+    warn "Python packages incomplete. Running setup..."
+    bash setup.sh || { err "Setup failed."; exit 1; }
+fi
+
+# check FFmpeg ---------------------------------------------------------
+if ! command -v ffmpeg &>/dev/null; then
+    warn "FFmpeg not found. Video features limited."
+fi
+
+# env ------------------------------------------------------------------
+unset http_proxy HTTPS_PROXY https_proxy HTTP_PROXY all_proxy ALL_PROXY 2>/dev/null || true
 export CUDA_MODULE_LOADING=LAZY
 export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
 
-# ── 启动 ────────────────────────────────────────────────────────────────────
+# launch ---------------------------------------------------------------
 echo ""
-echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║      ORCP - OCR 处理工具 (GUI)          ║${NC}"
-echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
+info "Starting ORCP GUI..."
 echo ""
-echo -e "${GREEN}[*] 启动 ORCP GUI ...${NC}"
-echo "-------------------------------------------------------"
 
-uv run python ocr_gui.py
-
-echo "-------------------------------------------------------"
-echo -e "${GREEN}✅ ORCP 已退出。${NC}"
+"$PYTHON_EXE" ocr_gui.py && {
+    echo ""
+    info "ORCP exited normally."
+    exit 0
+} || {
+    echo ""
+    err "GUI startup failed."
+    echo ""
+    warn "Common causes:"
+    echo "  1. Missing packages   -> bash setup.sh"
+    echo "  2. Qt5 not available  -> sudo apt install python3-pyqt5"
+    echo "  3. No display server  -> check DISPLAY variable"
+    echo "  4. cuDNN 8 missing    -> https://developer.nvidia.com/cudnn"
+    echo ""
+    exit 1
+}

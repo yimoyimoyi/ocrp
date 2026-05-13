@@ -5,7 +5,8 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton,
     QComboBox, QTextEdit, QCheckBox, QFormLayout,
     QTabWidget, QSpinBox, QDoubleSpinBox, QLineEdit, QMessageBox,
-    QListWidget, QListWidgetItem, QScrollArea, QGroupBox, QSizePolicy
+    QListWidget, QListWidgetItem, QScrollArea, QGroupBox, QSizePolicy,
+    QFrame,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from typing import List
@@ -256,37 +257,35 @@ class ConfigPanel(QWidget):
 
     # ── UI ──
     def _init_ui(self):
-        root = QHBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
-
-        # 左侧折叠按钮（始终可见）
-        self._collapse_btn = QToolButton()
-        self._collapse_btn.setText("◀")
-        self._collapse_btn.setToolTip("折叠配置面板")
-        self._collapse_btn.setAutoRaise(True)
-        self._collapse_btn.setMinimumWidth(16)
-        self._collapse_btn.setMaximumWidth(16)
-        self._collapse_btn.clicked.connect(self._on_collapse_clicked)
-        root.addWidget(self._collapse_btn)
-
-        # 标签页内容区（可折叠隐藏）
-        self._tabs_widget = QWidget()
-        tabs_layout = QVBoxLayout(self._tabs_widget)
-        tabs_layout.setContentsMargins(0, 0, 0, 0)
-        tabs_layout.setSpacing(4)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
         self._tabs = QTabWidget()
-        tabs_layout.addWidget(self._tabs, 1)
+        self._tabs.setDocumentMode(True)
 
         self._init_basic_tab()        # Tab 1: 处理参数
-        self._init_sentinel_tab()     # Tab 2: 哨兵参数
-        self._init_postprocess_tab()  # Tab 3: 后处理（含过滤器）
+        self._init_sentinel_tab()     # Tab 2: 字幕设置
+        self._init_postprocess_tab()  # Tab 3: 后处理
         self._init_sort_tab()         # Tab 4: 结果排序
         self._init_template_tab()     # Tab 5: 提示词模板
         self._init_asr_tab()          # Tab 6: 语音识别
         self._init_correction_tab()   # Tab 7: AI 纠错
 
-        root.addWidget(self._tabs_widget, 1)
+        root.addWidget(self._tabs, 1)
+
+    def _wrap_scroll(self, widget):
+        """将 tab 内容包裹在 QScrollArea 中，防止内容溢出。"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(widget)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        return scroll
+
+    def _add_tab_with_scroll(self, tab, name):
+        """添加 tab 并包裹滚动区域。"""
+        self._tabs.addTab(self._wrap_scroll(tab), name)
 
     # ── Tab 1: 处理参数 ──
     def _init_basic_tab(self):
@@ -347,7 +346,7 @@ class ConfigPanel(QWidget):
 
         # ── 失败重试参数 ──
         sep_retry = QLabel("── 流程失败重试 ──")
-        sep_retry.setStyleSheet("color: #888; font-size: 11px;")
+        sep_retry.setStyleSheet("color: #888;")
         layout.addRow("", sep_retry)
 
         self._ocr_retry_spin = QSpinBox()
@@ -372,7 +371,7 @@ class ConfigPanel(QWidget):
         btn = QPushButton("应用处理参数")
         btn.clicked.connect(self._on_apply_mode)
         layout.addRow("", btn)
-        self._tabs.addTab(tab, "处理参数")
+        self._add_tab_with_scroll(tab, "处理参数")
 
     # ── Tab 2: 字幕设置（流式 + 常规，独立配置） ──
     def _init_sentinel_tab(self):
@@ -394,7 +393,7 @@ class ConfigPanel(QWidget):
         s_layout = QFormLayout(self._s_group); s_layout.setSpacing(4)
         s_layout.setContentsMargins(0, 0, 0, 0)
         s_sep = QLabel("── 流式参数（哨兵去重） ──")
-        s_sep.setStyleSheet("color: #888; font-size: 11px;")
+        s_sep.setStyleSheet("color: #888;")
         s_layout.addRow("", s_sep)
 
         self._s_sentinel_check = QCheckBox("启用哨兵去重（骤降/缓冲区/相似度）")
@@ -432,7 +431,7 @@ class ConfigPanel(QWidget):
         r_layout = QFormLayout(self._r_group); r_layout.setSpacing(4)
         r_layout.setContentsMargins(0, 0, 0, 0)
         r_sep = QLabel("── 常规参数（基本去重） ──")
-        r_sep.setStyleSheet("color: #888; font-size: 11px;")
+        r_sep.setStyleSheet("color: #888;")
         r_layout.addRow("", r_sep)
 
         self._r_dedup_check = QCheckBox("启用基本去重（相似文本合并）")
@@ -470,7 +469,7 @@ class ConfigPanel(QWidget):
         btn.clicked.connect(self._on_apply_mode)
         layout.addWidget(btn)
         layout.addStretch()
-        self._tabs.addTab(tab, "字幕设置")
+        self._add_tab_with_scroll(tab, "字幕设置")
 
         # 初始显示流式组
         self._on_subtitle_mode_changed(self._subtitle_mode_combo.currentText())
@@ -499,7 +498,7 @@ class ConfigPanel(QWidget):
         btn = QPushButton("应用排序规则")
         btn.clicked.connect(self._on_apply_mode)
         layout.addWidget(btn)
-        self._tabs.addTab(tab, "结果排序")
+        self._add_tab_with_scroll(tab, "结果排序")
 
     def _add_sort_row(self, name: str, prefix: str = "", suffix: str = ""):
         """添加一个排序行到 QListWidget。"""
@@ -594,7 +593,7 @@ class ConfigPanel(QWidget):
 
         # ── 过滤器（后处理子集） ──
         sep_filter = QLabel("── 关键词过滤 ──")
-        sep_filter.setStyleSheet("color: #888; font-size: 11px;")
+        sep_filter.setStyleSheet("color: #888;")
         layout.addRow("", sep_filter)
 
         add_row = QHBoxLayout(); add_row.setSpacing(4)
@@ -602,7 +601,9 @@ class ConfigPanel(QWidget):
         self._filter_input.setPlaceholderText("输入要过滤的关键词，回车添加...")
         self._filter_input.returnPressed.connect(self._on_add_filter)
         add_row.addWidget(self._filter_input, 1)
-        btn_add = QPushButton("➕ 添加"); btn_add.clicked.connect(self._on_add_filter); add_row.addWidget(btn_add)
+        self._btn_filter_add = QPushButton("➕ 添加")
+        self._btn_filter_add.clicked.connect(self._on_add_filter)
+        add_row.addWidget(self._btn_filter_add)
         layout.addRow("", add_row)
 
         self._filter_list = QListWidget()
@@ -612,15 +613,19 @@ class ConfigPanel(QWidget):
         layout.addRow("", self._filter_list)
 
         filter_btn_row = QHBoxLayout(); filter_btn_row.setSpacing(4)
-        btn_del = QPushButton("🗑 删除选中"); btn_del.clicked.connect(self._on_remove_filter); filter_btn_row.addWidget(btn_del)
-        btn_clear = QPushButton("清空全部"); btn_clear.clicked.connect(self._on_clear_filters); filter_btn_row.addWidget(btn_clear)
+        self._btn_filter_del = QPushButton("🗑 删除选中")
+        self._btn_filter_del.clicked.connect(self._on_remove_filter)
+        filter_btn_row.addWidget(self._btn_filter_del)
+        self._btn_filter_clear = QPushButton("清空全部")
+        self._btn_filter_clear.clicked.connect(self._on_clear_filters)
+        filter_btn_row.addWidget(self._btn_filter_clear)
         filter_btn_row.addStretch()
         layout.addRow("", filter_btn_row)
 
         btn = QPushButton("应用后处理设置")
         btn.clicked.connect(self._on_apply_mode)
         layout.addRow("", btn)
-        self._tabs.addTab(tab, "后处理")
+        self._add_tab_with_scroll(tab, "后处理")
 
     # ── Tab 5: 提示词模板 ──
     def _init_template_tab(self):
@@ -649,7 +654,7 @@ class ConfigPanel(QWidget):
             b = QPushButton(text); b.clicked.connect(slot); btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
-        self._tabs.addTab(tab, "提示词模板")
+        self._add_tab_with_scroll(tab, "提示词模板")
 
     # ── Tab 6: 语音识别 ──
     def _init_asr_tab(self):
@@ -756,7 +761,7 @@ class ConfigPanel(QWidget):
         btn = QPushButton("应用语音识别设置")
         btn.clicked.connect(self._on_apply_mode)
         layout.addRow("", btn)
-        self._tabs.addTab(tab, "语音识别")
+        self._add_tab_with_scroll(tab, "语音识别")
 
     # ── Tab 8: AI 纠错 ──
     def _init_correction_tab(self):
@@ -860,22 +865,10 @@ class ConfigPanel(QWidget):
         btn = QPushButton("应用纠错设置")
         btn.clicked.connect(self._on_apply_mode)
         layout.addRow("", btn)
-        self._tabs.addTab(tab, "AI 纠错")
+        self._add_tab_with_scroll(tab, "AI 纠错")
 
-    # ── 折叠/展开 ──
+    # ── 折叠/展开（保留兼容，由外部调用） ──
     def _on_collapse_clicked(self):
-        """折叠或展开配置面板。"""
-        self._collapsed = not self._collapsed
-        if self._collapsed:
-            self._tabs_widget.hide()
-            self._collapse_btn.setText("▶")
-            self._collapse_btn.setToolTip("展开配置面板")
-            # 移除最小宽度约束，让 splitter 能缩小到 0
-            self.setMinimumWidth(0)
-        else:
-            self._tabs_widget.show()
-            self._collapse_btn.setText("◀")
-            self._collapse_btn.setToolTip("折叠配置面板")
         self.collapse_requested.emit()
 
     # ── ASR 模型刷新 ──
