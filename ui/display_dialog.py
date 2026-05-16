@@ -6,11 +6,13 @@ from PyQt5.QtWidgets import (
     QFormLayout, QComboBox, QSpinBox, QDoubleSpinBox,
     QDialogButtonBox, QWidget,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 
 
 class DisplayDialog(QDialog):
     """显示设置对话框。"""
+
+    theme_applied = pyqtSignal(str, int, float)
 
     def __init__(self, theme: str, font_size: int, ui_scale: float, parent=None):
         super().__init__(parent)
@@ -64,12 +66,11 @@ class DisplayDialog(QDialog):
 
     def _on_apply(self):
         """立即应用但不关闭。"""
-        if self.parent() and hasattr(self.parent(), '_apply_theme_from_dialog'):
-            self.parent()._apply_theme_from_dialog(
-                self._theme_combo.currentText(),
-                self._font_spin.value(),
-                self._scale_spin.value()
-            )
+        self.theme_applied.emit(
+            self._theme_combo.currentText(),
+            self._font_spin.value(),
+            self._scale_spin.value(),
+        )
 
     def _on_accept(self):
         self._on_apply()

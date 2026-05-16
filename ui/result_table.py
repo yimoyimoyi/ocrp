@@ -678,7 +678,7 @@ class ResultTableWidget(QWidget):
         if count == 0:
             self._batch_count_label.setText("(空)")
         elif total_size > 0:
-            self._batch_count_label.setText(f"{count} 个文件")
+            self._batch_count_label.setText(f"{count}/{total_size} 个文件")
         else:
             self._batch_count_label.setText(f"{count} 个文件")
 

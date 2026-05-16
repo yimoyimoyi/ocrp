@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QFrame, QMessageBox, QStatusBar, QProgressBar, QSplitter,
     QTextEdit, QAction, QActionGroup, QDialog, QDialogButtonBox,
     QFormLayout, QListWidget, QListWidgetItem,
-    QAbstractSpinBox,
+    QAbstractSpinBox, QToolBar, QWidgetAction,
 )
 from PyQt5.QtCore import Qt, QTimer, QEvent
 
@@ -381,6 +381,8 @@ class MainWindow(QMainWindow):
 
         self.build_ui()
         self._build_menu_bar()
+        self._quick_toolbar = self._build_quick_toolbar()
+        self.addToolBar(self._quick_toolbar)
         self._restore_window_geometry()
         self._apply_theme()
         # 加载硬件加速（必须在 _refresh_engine_list 之前）
@@ -397,6 +399,9 @@ class MainWindow(QMainWindow):
         self._restore_mode_params()
         # ── 配置 WorkflowManager ──
         self._configure_workflow()
+
+        # ── 同步快速开关状态 ──
+        self.sync_quick_toggles()
 
         # ── 禁用所有数值控件的滚轮操作 ──
         self._install_wheel_blocker()
@@ -422,6 +427,128 @@ class MainWindow(QMainWindow):
         blocker = WheelBlocker(self)
         app.installEventFilter(blocker)
         self._wheel_blocker = blocker
+
+    # ── 顶端快速开关工具栏 ──
+    def _build_quick_toolbar(self):
+        """构建顶端 QToolBar，包含常用功能快速开关。"""
+        tb = QToolBar("快速开关")
+        tb.setObjectName("quickToolbar")
+        tb.setMovable(False)
+        tb.setFloatable(False)
+
+        # ── 开关组 ──
+        self._qt_corr = QAction("🔤 AI纠错", self)
+        self._qt_corr.setCheckable(True)
+        self._qt_corr.setToolTip("启用/关闭 AI 纠错")
+        self._qt_corr.toggled.connect(self._on_qt_corr_toggled)
+        tb.addAction(self._qt_corr)
+
+        self._qt_hw = QAction("⚡ GPU", self)
+        self._qt_hw.setCheckable(True)
+        self._qt_hw.setToolTip("启用/关闭 GPU 硬件加速")
+        self._qt_hw.toggled.connect(self._on_qt_hw_toggled)
+        tb.addAction(self._qt_hw)
+
+        self._qt_dedup = QAction("🔍 去重", self)
+        self._qt_dedup.setCheckable(True)
+        self._qt_dedup.setToolTip("启用/关闭后处理相似度去重")
+        self._qt_dedup.toggled.connect(self._on_qt_dedup_toggled)
+        tb.addAction(self._qt_dedup)
+
+        self._qt_translate = QAction("🌐 翻译", self)
+        self._qt_translate.setCheckable(True)
+        self._qt_translate.setToolTip("翻译模式：将 OCR 结果翻译为中文")
+        self._qt_translate.toggled.connect(self._on_qt_translate_toggled)
+        tb.addAction(self._qt_translate)
+
+        tb.addSeparator()
+
+        # ── 字幕模式下拉 ──
+        tb.addWidget(QLabel("字幕 "))
+        self._qt_subtitle_mode = QComboBox()
+        self._qt_subtitle_mode.addItems(["流式", "常规"])
+        self._qt_subtitle_mode.setToolTip("流式：哨兵去重实时输出 | 常规：固定间隔采样")
+        self._qt_subtitle_mode.currentTextChanged.connect(self._on_qt_subtitle_mode_changed)
+        tb.addWidget(self._qt_subtitle_mode)
+
+        tb.addSeparator()
+
+        # ── 处理模式下拉 ──
+        tb.addWidget(QLabel("模式 "))
+        self._qt_process_mode = QComboBox()
+        self._qt_process_mode.addItems(["OCR+ASR", "仅OCR", "仅ASR"])
+        self._qt_process_mode.setToolTip("OCR+ASR：完整流程 | 仅OCR：纯图像识别 | 仅ASR：纯语音识别")
+        self._qt_process_mode.currentTextChanged.connect(self._on_qt_process_mode_changed)
+        tb.addWidget(self._qt_process_mode)
+
+        return tb
+
+    def sync_quick_toggles(self):
+        """从 ConfigPanel 同步所有快速开关状态。"""
+        cp = self._config_panel
+        self._qt_corr.blockSignals(True)
+        self._qt_corr.setChecked(cp._corr_enabled_check.isChecked())
+        self._qt_corr.blockSignals(False)
+
+        self._qt_hw.blockSignals(True)
+        self._qt_hw.setChecked(cp._hw_accel_check.isChecked())
+        self._qt_hw.blockSignals(False)
+
+        self._qt_dedup.blockSignals(True)
+        self._qt_dedup.setChecked(cp._post_sim_dedup.isChecked())
+        self._qt_dedup.blockSignals(False)
+
+        self._qt_translate.blockSignals(True)
+        self._qt_translate.setChecked(cp._corr_translate_check.isChecked())
+        self._qt_translate.blockSignals(False)
+
+        self._qt_subtitle_mode.blockSignals(True)
+        is_streaming = "流式" in cp._subtitle_mode_combo.currentText()
+        self._qt_subtitle_mode.setCurrentText("流式" if is_streaming else "常规")
+        self._qt_subtitle_mode.blockSignals(False)
+
+        self._qt_process_mode.blockSignals(True)
+        pm = cp._process_mode_combo.currentText()
+        if "仅 OCR" in pm:
+            self._qt_process_mode.setCurrentText("仅OCR")
+        elif "仅语音" in pm:
+            self._qt_process_mode.setCurrentText("仅ASR")
+        else:
+            self._qt_process_mode.setCurrentText("OCR+ASR")
+        self._qt_process_mode.blockSignals(False)
+
+    # ── 快速开关事件 ──
+    def _on_qt_corr_toggled(self, checked: bool):
+        self._config_panel._corr_enabled_check.setChecked(checked)
+        self._config_panel._on_apply_mode()
+
+    def _on_qt_hw_toggled(self, checked: bool):
+        self._config_panel._hw_accel_check.setChecked(checked)
+        self._config_panel._on_apply_mode()
+
+    def _on_qt_dedup_toggled(self, checked: bool):
+        self._config_panel._post_sim_dedup.setChecked(checked)
+        self._config_panel._on_apply_mode()
+
+    def _on_qt_translate_toggled(self, checked: bool):
+        self._config_panel._corr_translate_check.setChecked(checked)
+        self._config_panel._on_apply_mode()
+
+    def _on_qt_subtitle_mode_changed(self, text: str):
+        full = "流式字幕（去重）" if text == "流式" else "常规字幕（固定间隔）"
+        self._config_panel._subtitle_mode_combo.setCurrentText(full)
+        self._config_panel._on_subtitle_mode_changed(full)
+        self._config_panel._on_apply_mode()
+
+    def _on_qt_process_mode_changed(self, text: str):
+        mapping = {
+            "OCR+ASR": "OCR + ASR（完整流程）",
+            "仅OCR": "仅 OCR",
+            "仅ASR": "仅语音识别 (ASR)",
+        }
+        full = mapping.get(text, text)
+        self._config_panel._process_mode_combo.setCurrentText(full)
+        self._config_panel._on_apply_mode()
 
     # ── 菜单栏 ──
     def _build_menu_bar(self):
@@ -670,6 +797,7 @@ class MainWindow(QMainWindow):
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(corr_file_cfg, f, ensure_ascii=False, indent=2)
             self._status_label.setText("✅ 参数设置已更新")
+            self.sync_quick_toggles()
 
     def _open_display_settings(self):
         """打开显示设置对话框。"""
@@ -679,9 +807,9 @@ class MainWindow(QMainWindow):
             ui_scale=self._config_mgr.get_scale(),
             parent=self,
         )
+        dlg.theme_applied.connect(self._apply_theme_from_dialog)
         if dlg.exec_() == QDialog.Accepted:
             cfg = dlg.get_config()
-            self._apply_theme_from_dialog(cfg["theme"], cfg["font_size"], cfg["ui_scale"])
             self._status_label.setText("✅ 显示设置已更新")
 
     def _apply_theme_from_dialog(self, theme: str, font_size: int, scale: float):
@@ -755,6 +883,11 @@ class MainWindow(QMainWindow):
         """关闭窗口 —— 优先隐藏 UI，后台静默清理。"""
         # ── 第一步：立即隐藏窗口，用户感知到 UI 已关闭 ──
         self.hide()
+
+        # ── 移除全局滚轮拦截过滤器 ──
+        app = QApplication.instance()
+        if app and hasattr(self, '_wheel_blocker'):
+            app.removeEventFilter(self._wheel_blocker)
 
         # ── 第二步：保存状态 ──
         self._save_window_geometry()

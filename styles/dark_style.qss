@@ -75,6 +75,34 @@ QPushButton#btnTheme { min-height: 28px; }
 QPushButton#btnRemoveRegion { color: #e74c3c; min-height: 26px; }
 QPushButton#btnBatchClear { min-height: 26px; }
 
+/* === Quick Toggle Toolbar === */
+QToolBar#quickToolbar {
+    background-color: #14142a;
+    border-bottom: 1px solid #0f3460;
+    padding: 2px 6px; spacing: 2px;
+}
+QToolBar#quickToolbar QToolButton {
+    background-color: #1a1a3e; color: #8888aa;
+    border: 1px solid #2a2a5a;
+    padding: 4px 10px; border-radius: 3px;
+    font-size: 11px;
+}
+QToolBar#quickToolbar QToolButton:hover { background-color: #25255a; color: #ccccdd; }
+QToolBar#quickToolbar QToolButton:checked {
+    background-color: #0f3460; color: #ffffff;
+    border-color: #1a6fc4; font-weight: bold;
+}
+QToolBar#quickToolbar QComboBox {
+    background-color: #1a1a3e; color: #ccccdd;
+    border: 1px solid #2a2a5a; padding: 2px 6px;
+    border-radius: 3px; min-height: 22px; font-size: 11px;
+}
+QToolBar#quickToolbar QComboBox:hover { border-color: #3a3a7a; }
+QToolBar#quickToolbar QComboBox::drop-down { border: none; width: 16px; }
+QToolBar#quickToolbar QLabel {
+    color: #8888aa; font-size: 11px;
+}
+
 /* === Tool Buttons (export, clear) === */
 QToolButton {
     background-color: transparent; color: #b0b0b0;

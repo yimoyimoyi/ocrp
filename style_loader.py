@@ -80,6 +80,19 @@ QProgressBar {
     text-align: center; color: #d4d4d4;
 }
 QProgressBar::chunk { background-color: #007acc; border-radius: 2px; }
+QToolBar#quickToolbar QToolButton {
+    background-color: #1a1a3e; color: #8888aa;
+    border: 1px solid #2a2a5a; padding: 4px 10px; border-radius: 3px; font-size: 11px;
+}
+QToolBar#quickToolbar QToolButton:hover { background-color: #25255a; color: #ccccdd; }
+QToolBar#quickToolbar QToolButton:checked {
+    background-color: #0f3460; color: #ffffff; border-color: #1a6fc4; font-weight: bold;
+}
+QToolBar#quickToolbar QComboBox {
+    background-color: #1a1a3e; color: #ccccdd;
+    border: 1px solid #2a2a5a; padding: 2px 6px; border-radius: 3px;
+    min-height: 22px; font-size: 11px;
+}
 """
 
 DEFAULT_LIGHT_QSS = """
@@ -122,6 +135,19 @@ QTabBar::tab:selected { background-color: #f5f5f5; color: #333333; }
 QSplitter::handle { background-color: #cccccc; }
 QStatusBar { background-color: #007acc; color: #ffffff; }
 QGroupBox { color: #333333; border: 1px solid #cccccc; border-radius: 4px; }
+QToolBar#quickToolbar QToolButton {
+    background-color: #f0f2f5; color: #8b95a5;
+    border: 1px solid #dce1e6; padding: 4px 10px; border-radius: 3px; font-size: 11px;
+}
+QToolBar#quickToolbar QToolButton:hover { background-color: #e8f4fd; color: #2c3e50; }
+QToolBar#quickToolbar QToolButton:checked {
+    background-color: #2980b9; color: #ffffff; border-color: #2471a3; font-weight: bold;
+}
+QToolBar#quickToolbar QComboBox {
+    background-color: #ffffff; color: #2c3e50;
+    border: 1px solid #dce1e6; padding: 2px 6px; border-radius: 3px;
+    min-height: 22px; font-size: 11px;
+}
 QCheckBox { color: #333333; }
 QSpinBox, QDoubleSpinBox {
     background-color: #ffffff; color: #333333; border: 1px solid #cccccc;
