@@ -7,7 +7,23 @@
 
 import os
 import sys
+import warnings
 from pathlib import Path
+
+# ── 过滤无害的依赖版本警告 ──
+warnings.filterwarnings("ignore", message="urllib3.*doesn't match a supported version",
+                        category=UserWarning, module="requests")
+
+# ── Windows 控制台 UTF-8 编码 ──
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 # 确保项目根目录在 sys.path 中
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -48,6 +64,12 @@ if sys.platform == "win32":
 
 # 屏蔽 PaddleOCR 的联网检查
 os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+
+# ── 预加载 torch —— 必须在 PyQt5 之前，否则 Qt DLL 会破坏 torch 的 DLL 搜索环境 ──
+try:
+    import torch
+except Exception:
+    pass
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt

@@ -5,9 +5,6 @@ title ORCP
 set "DIR=%~dp0"
 cd /d "%DIR%"
 
-set http_proxy=+
-set https_proxy=
-set all_proxy=
 set CUDA_MODULE_LOADING=LAZY
 set PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
 

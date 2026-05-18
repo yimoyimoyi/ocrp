@@ -20,7 +20,7 @@ GARBAGE_PATTERN = re.compile(r"^(\d+|剩余回合|剩餘回合|回合|[\.\-0-9]+
 
 if not os.path.exists(OUTPUT_DIR): os.makedirs(OUTPUT_DIR)
 
-pp_ocr = PaddleOCR(use_angle_cls=True, lang="ch", use_gpu=True, show_log=False)
+pp_ocr = PaddleOCR(use_angle_cls=True, lang="ch", device="gpu", use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False)
 task_queue = queue.Queue(maxsize=100)
 video_raw_results = collections.defaultdict(list) # 存储结构改为 (timestamp, content)
 print_lock = threading.Lock()
@@ -144,8 +144,12 @@ def process_video(video_path):
             #cv2.imwrite("debug_combined.jpg", combined)
 
 
-            results = pp_ocr.ocr(combined, cls=True)
-            curr_text = "".join([line[1][0] for line in results[0]]).replace(" ", "") if (results and results[0]) else ""
+            result = pp_ocr.predict(combined)
+            if result and len(result) > 0:
+                texts = result[0].json.get("rec_texts", [])
+                curr_text = "".join(texts).replace(" ", "")
+            else:
+                curr_text = ""
 
             # 💡 核心：检测字数骤降
             # 如果上一帧文字很长，这一帧突然缩短很多（比如掉过一半或变空），说明上一句结束了

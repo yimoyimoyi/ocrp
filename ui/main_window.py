@@ -86,7 +86,7 @@ class EngineConfigDialog(QDialog):
         form.addRow("超时:", self._timeout_spin)
 
         self._gpu_check = QCheckBox("启用 GPU 加速")
-        self._gpu_check.setChecked(config.get("use_gpu", False))
+        self._gpu_check.setChecked(config.get("device") == "gpu" or config.get("use_gpu", False))
         self._gpu_check.setVisible(is_local)
         form.addRow("", self._gpu_check)
 
@@ -177,7 +177,7 @@ class EngineConfigDialog(QDialog):
             "base_url": self._base_url_edit.text(),
             "model": self._model_edit.currentText(),
             "timeout": self._timeout_spin.value(),
-            "use_gpu": self._gpu_check.isChecked(),
+            "device": "gpu" if self._gpu_check.isChecked() else "cpu",
         }
         self.accept()
 
@@ -461,6 +461,12 @@ class MainWindow(QMainWindow):
         self._qt_translate.toggled.connect(self._on_qt_translate_toggled)
         tb.addAction(self._qt_translate)
 
+        self._qt_sentinel = QAction("🛡 哨兵", self)
+        self._qt_sentinel.setCheckable(True)
+        self._qt_sentinel.setToolTip("启用/关闭哨兵去重（字数骤降检测触发输出）")
+        self._qt_sentinel.toggled.connect(self._on_qt_sentinel_toggled)
+        tb.addAction(self._qt_sentinel)
+
         tb.addSeparator()
 
         # ── 字幕模式下拉 ──
@@ -502,6 +508,10 @@ class MainWindow(QMainWindow):
         self._qt_translate.setChecked(cp._corr_translate_check.isChecked())
         self._qt_translate.blockSignals(False)
 
+        self._qt_sentinel.blockSignals(True)
+        self._qt_sentinel.setChecked(cp._s_sentinel_check.isChecked())
+        self._qt_sentinel.blockSignals(False)
+
         self._qt_subtitle_mode.blockSignals(True)
         is_streaming = "流式" in cp._subtitle_mode_combo.currentText()
         self._qt_subtitle_mode.setCurrentText("流式" if is_streaming else "常规")
@@ -532,6 +542,10 @@ class MainWindow(QMainWindow):
 
     def _on_qt_translate_toggled(self, checked: bool):
         self._config_panel._corr_translate_check.setChecked(checked)
+        self._config_panel._on_apply_mode()
+
+    def _on_qt_sentinel_toggled(self, checked: bool):
+        self._config_panel._s_sentinel_check.setChecked(checked)
         self._config_panel._on_apply_mode()
 
     def _on_qt_subtitle_mode_changed(self, text: str):
@@ -874,9 +888,27 @@ class MainWindow(QMainWindow):
         # 同步区域默认值（引擎/模板/提示词），确保新创建的区域使用当前提示词
         self._sync_region_defaults()
 
+    def _schedule_mode_save(self):
+        """延迟合并保存，避免频繁切换预设时连续写盘卡 UI。"""
+        if hasattr(self, '_mode_save_timer'):
+            self._mode_save_timer.start(300)
+        else:
+            from PyQt5.QtCore import QTimer
+            self._mode_save_timer = QTimer(self)
+            self._mode_save_timer.setSingleShot(True)
+            self._mode_save_timer.timeout.connect(self._save_mode_params)
+            self._mode_save_timer.start(300)
+
     def _save_mode_params(self):
         """保存当前 UI 配置参数到 settings.json。"""
-        self._config_mgr.set("mode_params", dict(self._mode_params))
+        params = dict(self._mode_params)
+        self._config_mgr.set("mode_params", params)
+        # 同步 ASR 配置
+        if any(k.startswith("asr_") for k in params):
+            self._sync_asr_config(params)
+        # 同步纠错配置
+        if any(k.startswith("corr_") for k in params):
+            self._sync_correction_config(params)
         self._config_mgr.save_settings()
 
     def closeEvent(self, ev):
@@ -918,9 +950,8 @@ class MainWindow(QMainWindow):
                             engine._proc.kill()
                     except Exception:
                         pass
-                print(f"[MainWindow] ✅ 后台清理完成")
-            except Exception as e:
-                print(f"[MainWindow] ⚠ 后台清理异常: {e}")
+            except Exception:
+                pass
 
         import threading
         threading.Thread(target=_silent_cleanup, daemon=True).start()
@@ -1337,17 +1368,12 @@ class MainWindow(QMainWindow):
     def _on_mode_changed(self, p):
         old_params = getattr(self, '_last_mode_params', {})
         self._mode_params = p
-        # 同步 ASR 配置到 asr_engines.json
-        if any(k.startswith("asr_") for k in p):
-            self._sync_asr_config(p)
-        # 同步 AI 纠错配置到 ai_correction.json
-        if any(k.startswith("corr_") for k in p):
-            self._sync_correction_config(p)
-        # 仅当预设名确实变化时才切换（避免每次 UI 操作都打印）
+        # 仅当预设名确实变化时才切换
         if "corr_preset" in p and p["corr_preset"] != old_params.get("corr_preset", ""):
             self._corrector.apply_preset(p["corr_preset"])
         self._last_mode_params = dict(p)
-        self._save_mode_params()  # 🔥 每次参数变化自动持久化
+        # 延迟写盘合并多次连续变更，减少 UI 卡顿
+        self._schedule_mode_save()
 
     def _sync_asr_config(self, params: dict):
         """将 UI 中的 ASR 参数同步写入 asr_engines.json。"""
@@ -1770,7 +1796,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "提示", "无有效结果可导出。")
                 return
             # 映射 UI 文本到内部模式
-            srt_mode_map = {"仅纠正结果": "corrected", "仅原文": "original", "双语对照（原文+纠正）": "dual"}
+            srt_mode_map = {"仅纠正结果": "corrected", "仅原文": "original", "双语对照（原文+纠正）": "dual", "原文 换行 纠正": "dual"}
             srt_mode = srt_mode_map.get(self._mode_params.get("srt_export_mode", "仅纠正结果"), "corrected")
             export_results(polished, path, fmt, bool(cmap), cmap,
                            keep_original=self._mode_params.get("export_keep_original", False),

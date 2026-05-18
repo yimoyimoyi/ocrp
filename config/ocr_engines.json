@@ -6,10 +6,11 @@
       "config": {
         "lang": "ch",
         "use_angle_cls": true,
-        "use_gpu": false,
-        "show_log": false,
-        "fast_mode": true,
-        "rec_batch_num": 6
+        "device": "cpu",
+        "ocr_version": null,
+        "use_doc_orientation_classify": false,
+        "use_doc_unwarping": false,
+        "use_textline_orientation": false
       }
     },
     "openai_vision": {
@@ -48,5 +49,5 @@
       }
     }
   },
-  "default_engine": "llamacpp"
+  "default_engine": "paddleocr"
 }

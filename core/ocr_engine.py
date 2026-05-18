@@ -3,12 +3,11 @@
 硬件加速由全局设置 hw_accel 统一控制。
 
 DLL 隔离策略：
-  - PaddleOCR CPU 模式：不加载 CUDA DLL，torch/WhisperX 正常运行
-  - PaddleOCR GPU 模式：从 site-packages/nvidia/*/bin/ 加载 CUDA/cuDNN（pip 安装的 nvidia-* 包）
-  - albumentations → torch 导入由 _BlockTorchImport 阻断，PaddleOCR 初始化完即恢复
+  - PaddleOCR CPU 模式：仅注册 torch/lib，不加载 CUDA DLL，避免与 CPU torch 冲突
+  - PaddleOCR GPU 模式：在 _ensure_ocr 中按需调用 _register_gpu_dll_dirs() 加载 CUDA/cuDNN
 """
 
-import os, sys, ctypes, re, json, base64, threading, requests, time, numpy as np
+import os, sys, ctypes, base64, threading, requests, time, numpy as np
 
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -34,6 +33,7 @@ def load_engines_config() -> dict:
 # ── DLL 预加载 ──
 _dll_loaded = False
 _dll_load_lock = threading.Lock()
+_gpu_dll_loaded = False
 
 
 def _find_nvidia_site_packages_dirs() -> List[str]:
@@ -53,13 +53,8 @@ def _find_nvidia_site_packages_dirs() -> List[str]:
     return bin_dirs
 
 
-def _preload_core_dlls():
-    """GPU 模式时从 site-packages/nvidia/*/bin/ 加载 CUDA/cuDNN DLL。
-
-    这些 DLL 由 pip 包（nvidia-cuda-runtime-cu12, nvidia-cublas-cu12,
-    nvidia-cudnn-cu12 等）安装，不再需要捆绑到仓库中。
-    使用 os.add_dll_directory() 注册搜索路径，让 Windows 在需要时自动解析。
-    """
+def _register_dll_dirs():
+    """模块级别执行：注册 torch/lib DLL 搜索路径（CPU/GPU 均需要）。"""
     global _dll_loaded
     if _dll_loaded:
         return
@@ -70,18 +65,58 @@ def _preload_core_dlls():
         if sys.platform != "win32":
             return
 
-        # 优先从 site-packages/nvidia/*/bin/ 加载
-        nvidia_dirs = _find_nvidia_site_packages_dirs()
-        if nvidia_dirs:
-            for d in nvidia_dirs:
-                try:
-                    os.add_dll_directory(d)
-                except OSError:
-                    pass
-            print(f"[PaddleOCR] ✅ 已注册 {len(nvidia_dirs)} 个 nvidia DLL 搜索路径")
+        # torch/lib/ —— 从 sys.path 定位（避免 importlib.util 触发导入）
+        for sp in sys.path:
+            if not sp:
+                continue
+            _torch_init = os.path.join(sp, "torch", "__init__.py")
+            if os.path.isfile(_torch_init):
+                _tl = os.path.join(sp, "torch", "lib")
+                if os.path.isdir(_tl):
+                    os.add_dll_directory(_tl)
+                break
+
+        # paddle/libs/ — PaddlePaddle 自带 DLL（common.dll, phi.dll 等）
+        for _sp in sys.path:
+            if not _sp:
+                continue
+            _paddle_init = os.path.join(_sp, "paddle", "__init__.py")
+            if os.path.isfile(_paddle_init):
+                _pl = os.path.join(_sp, "paddle", "libs")
+                if os.path.isdir(_pl):
+                    os.add_dll_directory(_pl)
+                break
+
+        print("[PaddleOCR] DLL dirs: torch/lib")
+
+
+def _register_gpu_dll_dirs():
+    """GPU 模式专用：确保 CUDA/cuDNN DLL 搜索路径可用。
+
+    torch (cu124) 自带了所有 CUDA DLL，只需确保 torch/lib 和
+    系统 CUDA Toolkit 路径已注册。不加载 nvidia pip 包中的 DLL
+    （它们与 torch 自带版本冲突）。
+    """
+    global _gpu_dll_loaded
+    if _gpu_dll_loaded:
+        return
+    with _dll_load_lock:
+        if _gpu_dll_loaded:
+            return
+        _gpu_dll_loaded = True
+        if sys.platform != "win32":
             return
 
-        # 备选：从旧 core/cuda12/ core/cudnn8/ 目录加载（向后兼容迁移期）
+        # 系统 CUDA Toolkit 路径（PaddlePaddle GPU 可能需要）
+        for _cuda_env in ("CUDA_PATH_V12_6", "CUDA_PATH_V12_4", "CUDA_PATH"):
+            _cuda_root = os.environ.get(_cuda_env, "")
+            if _cuda_root:
+                _cuda_bin = os.path.join(_cuda_root, "bin")
+                if os.path.isdir(_cuda_bin):
+                    os.add_dll_directory(_cuda_bin)
+                    break
+
+        # 旧 core/cuda12/ core/cudnn8/ 目录（兼容）
         for legacy in ("cuda12", "cudnn8"):
             _legacy_dir = os.path.join(_CORE_DLL_DIR, legacy)
             if os.path.isdir(_legacy_dir):
@@ -90,18 +125,7 @@ def _preload_core_dlls():
                 except OSError:
                     pass
 
-        if not nvidia_dirs:
-            print("[PaddleOCR] ⚠ 未找到 nvidia-* pip 包的 DLL，"
-                  "GPU 加速可能不可用，请运行: uv sync")
-
-
-# ── 临时阻断 torch 导入 ──
-class _BlockTorchImport:
-    """sys.meta_path 导入钩子 —— 阻截 torch 及其子模块的导入。"""
-    def find_spec(self, fullname, path, target=None):
-        if fullname == "torch" or fullname.startswith("torch."):
-            raise ImportError("torch blocked during PaddleOCR init: " + fullname)
-        return None
+        print("[PaddleOCR] GPU DLL dirs registered")
 
 
 # ═══════════════ 抽象基类 ═══════════════
@@ -142,84 +166,84 @@ class PaddleOCREngine(BaseOCREngine):
         self._init_lock = threading.Lock()
         self._lang = cfg.get("lang", "ch")
         self._use_angle_cls = cfg.get("use_angle_cls", True)
-        self._use_gpu = cfg.get("use_gpu", False)
-        self._show_log = cfg.get("show_log", False)
-        self._fast_mode = cfg.get("fast_mode", True)
-        self._rec_batch = cfg.get("rec_batch_num", 6)
+        # 兼容旧配置的 use_gpu → 转为 device 参数
+        self._device = cfg.get("device") or ("gpu" if cfg.get("use_gpu") else "cpu")
+        self._ocr_version = cfg.get("ocr_version") or None
+        self._use_doc_orientation_classify = cfg.get("use_doc_orientation_classify", False)
+        self._use_doc_unwarping = cfg.get("use_doc_unwarping", False)
+        self._use_textline_orientation = cfg.get("use_textline_orientation", False)
+        # ── 3.x 不再支持的参数：show_log / det_db_score_mode / rec_batch_num ──
 
     def set_hw_accel(self, enabled: bool):
-        if self._use_gpu != enabled:
-            self._use_gpu = enabled
-            self._ocr = None
+        new_device = "gpu" if enabled else "cpu"
+        if self._device != new_device:
+            with self._init_lock:
+                self._device = new_device
+                self._ocr = None
 
     def _ensure_ocr(self):
         if self._ocr is None:
             with self._init_lock:
                 if self._ocr is None:
-                    _blocker = _BlockTorchImport()
-                    sys.meta_path.insert(0, _blocker)
-                    try:
-                        if self._use_gpu:
-                            _preload_core_dlls()
-                        from paddleocr import PaddleOCR
-                    finally:
-                        if _blocker in sys.meta_path:
-                            sys.meta_path.remove(_blocker)
+                    device = self._device
+                    if device.startswith("gpu"):
+                        _register_gpu_dll_dirs()
+                        # 如果 torch 无 CUDA，PaddleOCR GPU 内部回退 CPU 时
+                        # 会丢失 enable_mkldnn=False，导致 oneDNN bug。直接走 CPU。
+                        try:
+                            import torch
+                            if not torch.cuda.is_available():
+                                device = "cpu"
+                        except Exception:
+                            device = "cpu"
+                    from paddleocr import PaddleOCR
 
                     try:
-                        self._ocr = PaddleOCR(
-                            use_angle_cls=self._use_angle_cls,
-                            lang=self._lang,
-                            use_gpu=self._use_gpu,
-                            show_log=self._show_log,
-                            det_db_score_mode="fast" if self._fast_mode else "slow",
-                            rec_batch_num=self._rec_batch,
-                        )
+                        kwargs = {
+                            "lang": self._lang,
+                            "device": device,
+                            "use_doc_orientation_classify": self._use_doc_orientation_classify,
+                            "use_doc_unwarping": self._use_doc_unwarping,
+                            "use_textline_orientation": self._use_angle_cls,
+                            "enable_mkldnn": False,  # Paddle 3.3.1 oneDNN PIR DoubleAttribute bug
+                        }
+                        if self._ocr_version:
+                            kwargs["ocr_version"] = self._ocr_version
+                        print(f"[PaddleOCR] 初始化引擎: device={device}")
+                        self._ocr = PaddleOCR(**kwargs)
                     except Exception as e:
-                        if self._use_gpu:
+                        if device.startswith("gpu"):
                             print(f"[PaddleOCR] GPU 初始化失败: {e}")
                             print("[PaddleOCR] 自动退回 CPU 模式...")
-                            self._use_gpu = False
-                            self._ocr = PaddleOCR(
-                                use_angle_cls=self._use_angle_cls,
-                                lang=self._lang,
-                                use_gpu=False,
-                                show_log=self._show_log,
-                                det_db_score_mode="fast" if self._fast_mode else "slow",
-                                rec_batch_num=self._rec_batch,
-                            )
+                            self._device = "cpu"
+                            kwargs["device"] = "cpu"
+                            self._ocr = PaddleOCR(**kwargs)
                         else:
                             raise
-
-    def _upscale_if_small(self, image: np.ndarray, min_side: int = 300) -> np.ndarray:
-        """PaddleOCR 的文字检测模型（DB）对极小图片检测不到文本框。
-        若图片最短边小于 min_side，等比放大到短边为 min_side。"""
-        h, w = image.shape[:2]
-        if h >= min_side and w >= min_side:
-            return image
-        scale = min_side / min(h, w)
-        import cv2
-        return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
     def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
         try:
             self._ensure_ocr()
-            upscaled = self._upscale_if_small(image)
-            results = self._ocr.ocr(upscaled, cls=self._use_angle_cls)
-            if results and results[0]:
-                confs = [line[1][1] for line in results[0]]
-                text = "".join([line[1][0] for line in results[0]]).replace(" ", "")
-                self._last_confidence = sum(confs) / len(confs) if confs else 0.0
-                return text
+            result = self._ocr.predict(image)
+            if result and len(result) > 0:
+                json_result = result[0].json
+                # PaddleOCR 3.x: rec_texts 在 res 子对象内
+                res_data = json_result.get("res", json_result)
+                texts = res_data.get("rec_texts", [])
+                scores = res_data.get("rec_scores", [])
+                if texts:
+                    text = "".join(texts).replace(" ", "")
+                    self._last_confidence = sum(scores) / len(scores) if scores else 0.0
+                    return text
             self._last_confidence = 0.0
             return ""
         except Exception as e:
             err_msg = str(e)
-            if self._use_gpu and any(kw in err_msg.lower() for kw in
+            if self._device.startswith("gpu") and any(kw in err_msg.lower() for kw in
                 ("cudnn", "preconditionnotmet", "dynamic library")):
                 print(f"[PaddleOCR] GPU 运行时失败: {e}")
                 print("[PaddleOCR] 自动退回 CPU 模式，重建引擎...")
-                self._use_gpu = False
+                self._device = "cpu"
                 self._ocr = None
                 try:
                     self._ensure_ocr()
@@ -227,11 +251,15 @@ class PaddleOCREngine(BaseOCREngine):
                     self._last_confidence = 0.0
                     return ""
                 try:
-                    results = self._ocr.ocr(image, cls=self._use_angle_cls)
-                    if results and results[0]:
-                        confs = [line[1][1] for line in results[0]]
-                        self._last_confidence = sum(confs) / len(confs) if confs else 0.0
-                        return "".join([line[1][0] for line in results[0]]).replace(" ", "")
+                    result = self._ocr.predict(image)
+                    if result and len(result) > 0:
+                        json_result = result[0].json
+                        res_data = json_result.get("res", json_result)
+                        texts = res_data.get("rec_texts", [])
+                        scores = res_data.get("rec_scores", [])
+                        if texts:
+                            self._last_confidence = sum(scores) / len(scores) if scores else 0.0
+                            return "".join(texts).replace(" ", "")
                 except Exception as e2:
                     print(f"[PaddleOCR] CPU 重试失败: {e2}")
                 return ""
@@ -473,6 +501,14 @@ class LlamaCppEngine(BaseOCREngine):
 
 
 # ═══════════════ 引擎注册表 ═══════════════
+# 模块导入时立即注册 DLL 路径并预加载 torch
+# 必须在 PyQt5 等可能干扰 DLL 搜索路径的模块之前执行
+_register_dll_dirs()
+try:
+    import torch
+except Exception:
+    pass
+
 ENGINE_CLASS_MAP = {
     "paddleocr": PaddleOCREngine,
     "openai_vision": OpenAIVisionEngine,
@@ -487,6 +523,7 @@ class OCREngineManager:
         self._config = load_engines_config()
         self._default_name = self._config.get("default_engine", "paddleocr")
         self._current_name = self._default_name
+        self._hw_accel_enabled: bool = False
 
     def reload_config(self):
         self._config = load_engines_config()
@@ -500,6 +537,7 @@ class OCREngineManager:
         return self._config.get("engines", {}).get(name, {})
 
     def set_hw_accel(self, enabled: bool):
+        self._hw_accel_enabled = enabled
         for name, eng in self._engines.items():
             if hasattr(eng, 'set_hw_accel'):
                 eng.set_hw_accel(enabled)
@@ -530,6 +568,8 @@ class OCREngineManager:
 
         engine = engine_cls(cfg)
         self._engines[engine_name] = engine
+        if self._hw_accel_enabled and hasattr(engine, 'set_hw_accel'):
+            engine.set_hw_accel(True)
         if hasattr(engine, 'warm_up'):
             engine.warm_up()
         return engine

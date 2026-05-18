@@ -86,4 +86,12 @@ config/settings.json
 *.tmp
 *.temp
 orcp_asr_*.wav         # ASR 临时音频
-ASR_ISSUES_ANALYSIS.md # 一次性分析报告
+
+# 测试截图 / 临时图片
+屏幕截图*.png
+屏幕截图*.jpg
+*_test_ocr*.png
+_test_*.png
+
+# 根目录脚本副本（实际在 scripts/ 下）
+/run_ocr.py

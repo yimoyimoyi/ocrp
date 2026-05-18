@@ -74,8 +74,16 @@ class AICorrectionWorker(QThread):
         self._context_texts = context_texts or []
         self._image = image
         self._region_correction_prompt = region_correction_prompt
+        self._stop_flag = False
+
+    def stop(self):
+        self._stop_flag = True
+        if hasattr(self._corrector, 'stop') and callable(self._corrector.stop):
+            self._corrector.stop()
 
     def run(self):
+        if self._stop_flag:
+            return
         try:
             # 区域级纠错提示词临时覆盖
             saved = ""
@@ -240,12 +248,17 @@ class ImageProcessWorker(QThread):
         self._frame = frame
         self._regions = regions
         self._timestamp = timestamp
+        self._stop_flag = False
 
     def run(self):
+        if self._stop_flag:
+            return
         try:
             from core.frame_processor import extract_roi
             results = []
             for region in self._regions:
+                if self._stop_flag:
+                    break
                 engine_name = region.get("engine", "")
                 engine = self._engine_mgr.get_engine(engine_name) if engine_name else self._engine_mgr.get_engine()
                 if engine is None:
@@ -289,7 +302,9 @@ class ImageProcessWorker(QThread):
 
     def stop(self):
         """停止图片处理。"""
+        self._stop_flag = True
         self.quit()
+        self.wait(3000)
 
 
 class AudioProcessWorker(QThread):

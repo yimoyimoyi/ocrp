@@ -98,7 +98,7 @@ from core.ffmpeg_reader import FFmpegReader
 
 ocr = OCRMgr()
 e = ocr.get_engine("paddleocr")
-e._use_gpu = False
+e._device = "cpu"
 ff = FFmpegReader(VIDEO, hw_accel=False)
 ff.open()
 for i in range(3):

@@ -336,12 +336,13 @@ class ConfigPanel(QWidget):
 
         # ── SRT 导出模式 ──
         self._srt_export_combo = QComboBox()
-        self._srt_export_combo.addItems(["仅纠正结果", "仅原文", "双语对照（原文+纠正）"])
+        self._srt_export_combo.addItems(["仅纠正结果", "仅原文", "双语对照（原文+纠正）", "原文 换行 纠正"])
         self._srt_export_combo.setToolTip(
             "SRT 导出时的字幕内容模式：\n"
             "仅纠正结果 = AI 纠错后的文本\n"
             "仅原文 = 原始 OCR/ASR 文本\n"
-            "双语对照 = 原文在上，纠正在下")
+            "双语对照 = 原文在上，纠正在下\n"
+            "原文 换行 纠正 = 原文在上，换行后显示纠正文本")
         layout.addRow("SRT 导出:", self._srt_export_combo)
 
         # ── 失败重试参数 ──

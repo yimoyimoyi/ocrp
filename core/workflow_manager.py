@@ -310,17 +310,17 @@ class WorkflowManager(QObject):
 
         # 执行流程
         if do_asr and do_ocr:
-            print(f"[Workflow]   🔀 流程: ASR + OCR 串行")
+            print(f"[Workflow]    流程: ASR + OCR 串行")
             self._clear_results_by_type(asr_region_name, "whisperx")
             for r in regions:
                 self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
             self._start_asr_worker(vp)
         elif do_asr and not do_ocr:
-            print(f"[Workflow]   🔀 流程: 仅 ASR")
+            print(f"[Workflow]    流程: 仅 ASR")
             self._clear_results_by_type(asr_region_name, "whisperx")
             self._start_asr_worker(vp)
         elif not do_asr and do_ocr:
-            print(f"[Workflow]   🔀 流程: 仅 OCR")
+            print(f"[Workflow]    流程: 仅 OCR")
             for r in regions:
                 self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
             self._do_ocr_pass(vp)
@@ -495,69 +495,135 @@ class WorkflowManager(QObject):
     # ═══════════════════════════════════════════════════════════════
 
     def stop_processing(self):
-        """停止当前处理线程。"""
-        print(f"[Workflow] ⏹ 停止处理")
-        if self._video_worker and self._video_worker.isRunning():
-            self._video_worker.stop()
-            self.status_msg.emit("正在停止...")
-        if self._image_worker and self._image_worker.isRunning():
-            self._image_worker.quit()
-            self._image_worker.wait(2000)
-            self.status_msg.emit("正在停止...")
-        if self._batch_worker and self._batch_worker.isRunning():
-            self._batch_worker.stop()
-            self.status_msg.emit("正在停止批量处理...")
-        print(f"[Workflow] ✅ 已停止")
+        """停止所有正在进行的处理（OCR / ASR / 纠错 / 批量）。"""
+        print(f"[Workflow] 停止处理")
+
+        # 视频帧处理器（sentinel / OCR 循环）
+        if self._frame_processor:
+            self._frame_processor.stop()
+
+        # 各独立 worker
+        workers = [
+            ("视频", self._video_worker),
+            ("图片", self._image_worker),
+            ("音频", self._audio_worker),
+            ("批量", self._batch_worker),
+            ("批量纠错", self._batch_correction_worker),
+        ]
+        for name, w in workers:
+            if w and w.isRunning():
+                if hasattr(w, 'stop'):
+                    w.stop()
+                else:
+                    w.quit()
+                    w.wait(3000)
+                print(f"[Workflow]   已停止 {name}")
+
+        # 单个 AI 纠错线程
+        with self._correction_workers_lock:
+            for w in self._correction_workers:
+                if w.isRunning():
+                    if hasattr(w, 'stop'):
+                        w.stop()
+                    else:
+                        w.quit()
+                        w.wait(1000)
+
+        self.status_msg.emit("已停止")
+        self._set_buttons(start=True, stop=False, correction=True, correction_all=True)
+        self.progress_val.emit(0)
 
     def pause_processing(self):
-        """暂停当前处理。"""
-        print(f"[Workflow] ⏸ 暂停")
+        """暂停当前处理（视频 OCR / 音频 ASR / 批量）。"""
+        print(f"[Workflow] 暂停")
+        paused = False
         if self._frame_processor and hasattr(self._frame_processor, '_pause_flag'):
             self._frame_processor.pause()
-            self.status_msg.emit("⏸ 已暂停")
+            paused = True
+        if self._video_worker and self._video_worker.isRunning():
+            if hasattr(self._video_worker, 'pause'):
+                self._video_worker.pause()
+                paused = True
+        if self._audio_worker and self._audio_worker.isRunning():
+            if hasattr(self._audio_worker, 'pause'):
+                self._audio_worker.pause()
+                paused = True
+        if self._batch_worker and self._batch_worker.isRunning():
+            if hasattr(self._batch_worker, 'pause'):
+                self._batch_worker.pause()
+                paused = True
+        if paused:
+            self.status_msg.emit("已暂停")
+        else:
+            self.status_msg.emit("当前无正在运行的任务")
 
     def resume_processing(self):
         """继续当前处理。"""
-        print(f"[Workflow] ▶ 继续")
+        print(f"[Workflow] 继续")
+        resumed = False
         if self._frame_processor and hasattr(self._frame_processor, '_pause_flag'):
             self._frame_processor.resume()
-            self.status_msg.emit("▶ 继续处理")
+            resumed = True
+        if self._video_worker and self._video_worker.isRunning():
+            if hasattr(self._video_worker, 'resume'):
+                self._video_worker.resume()
+                resumed = True
+        if self._audio_worker and self._audio_worker.isRunning():
+            if hasattr(self._audio_worker, 'resume'):
+                self._audio_worker.resume()
+                resumed = True
+        if self._batch_worker and self._batch_worker.isRunning():
+            if hasattr(self._batch_worker, 'resume'):
+                self._batch_worker.resume()
+                resumed = True
+        if resumed:
+            self.status_msg.emit("继续处理")
+        else:
+            self.status_msg.emit("当前无暂停的任务")
 
     # ═══════════════════════════════════════════════════════════════
     # AI 纠错 —— 选中行
     # ═══════════════════════════════════════════════════════════════
 
     def correct_selected(self, selected_rows: set):
-        """对选中的表格行进行 AI 纠错。"""
+        """对选中的表格行进行批量 AI 纠错（一次性发送所有选中条目）。"""
         if not selected_rows:
             self._show_error("提示", "请先在表格中选中需要纠错的行（可多选）。")
             return
-        print(f"[Workflow] ✏ 纠错选中: {len(selected_rows)} 行")
+        print(f"[Workflow] 批量纠错选中: {len(selected_rows)} 行")
 
-        mp = self._get_mode_params()
-        if self._corrector:
-            self._corrector.translate_mode = mp.get("corr_translate", False)
-            self._corrector.stream_mode = mp.get("corr_stream", False)
-            self._corrector.json_mode = mp.get("corr_json", False)
-        batch_size = mp.get("corr_batch_size", 5)
+        # 构建选中行的 texts 列表（格式与 _build_correction_texts 一致）
         results = self._get_results()
-        sorted_rows = sorted(selected_rows)
-
-        submitted = 0
-        for row in sorted_rows:
+        texts = []
+        for row in sorted(selected_rows):
             if row < len(results):
                 r = results[row]
                 raw = r.get("raw", "")
-                self._submit_correction(row, raw, "")
-                self._correction_pending.add(row)
-                submitted += 1
-                if submitted >= batch_size:
-                    break
+                if raw.strip():
+                    ts = r.get("time_sec", 0.0) or 0.0
+                    te = r.get("end_sec", 0.0) or 0.0
+                    texts.append((row, raw, ts, te))
 
-        if submitted:
-            self.status_msg.emit(f"✏ 已提交 {submitted} 条纠错")
-        else:
-            self.status_msg.emit("⚠ 无有效结果可纠错")
+        if not texts:
+            self.status_msg.emit("⚠ 选中的行无有效文本可纠错")
+            return
+
+        mp = self._get_mode_params()
+        self._sync_corrector_modes(mp)
+        self._maybe_extract_env(results, mp)
+
+        context_window = mp.get("corr_context_window", 3)
+        max_retries = mp.get("corr_retry", 3)
+        batch_size = mp.get("corr_batch_size", 5)
+
+        total_batches = (len(texts) + batch_size - 1) // batch_size
+        self._set_buttons(correction_all=False, correction=False)
+        self._total_correction_batches = total_batches
+        self._is_auto_correction = False
+
+        self._submit_correction_batch(texts, batch_size, 0, context_window, max_retries,
+                                       total_batches)
+        self.status_msg.emit(f"已提交 {len(texts)} 条批量纠错 [{total_batches} 批]")
 
     # ═══════════════════════════════════════════════════════════════
     # AI 纠错 —— 全部
@@ -895,7 +961,10 @@ class WorkflowManager(QObject):
 
     def cleanup(self):
         """快速清理所有线程 —— 立即 terminate，不阻塞 UI 关闭。"""
-        print(f"[Workflow] 🧹 开始快速清理...")
+        try:
+            print(f"[Workflow] 开始快速清理...")
+        except UnicodeEncodeError:
+            pass
 
         # 收集所有活跃的 worker（不等待，直接收集）
         workers = []
