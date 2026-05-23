@@ -347,7 +347,7 @@ class ConfigPanel(QWidget):
 
         # ── 失败重试参数 ──
         sep_retry = QLabel("── 流程失败重试 ──")
-        sep_retry.setStyleSheet("color: #888;")
+        sep_retry.setObjectName("sectionSep")
         layout.addRow("", sep_retry)
 
         self._ocr_retry_spin = QSpinBox()
@@ -394,7 +394,7 @@ class ConfigPanel(QWidget):
         s_layout = QFormLayout(self._s_group); s_layout.setSpacing(4)
         s_layout.setContentsMargins(0, 0, 0, 0)
         s_sep = QLabel("── 流式参数（哨兵去重） ──")
-        s_sep.setStyleSheet("color: #888;")
+        s_sep.setObjectName("sectionSep")
         s_layout.addRow("", s_sep)
 
         self._s_sentinel_check = QCheckBox("启用哨兵去重（骤降/缓冲区/相似度）")
@@ -432,7 +432,7 @@ class ConfigPanel(QWidget):
         r_layout = QFormLayout(self._r_group); r_layout.setSpacing(4)
         r_layout.setContentsMargins(0, 0, 0, 0)
         r_sep = QLabel("── 常规参数（基本去重） ──")
-        r_sep.setStyleSheet("color: #888;")
+        r_sep.setObjectName("sectionSep")
         r_layout.addRow("", r_sep)
 
         self._r_dedup_check = QCheckBox("启用基本去重（相似文本合并）")
@@ -515,7 +515,7 @@ class ConfigPanel(QWidget):
         row_layout.addWidget(prefix_edit)
 
         chip = QLabel(name)
-        chip.setStyleSheet("background:#3a6a3a;color:white;padding:2px 6px;border-radius:4px;font-weight:bold;")
+        chip.setObjectName("regionChip")
         chip.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         row_layout.addWidget(chip)
 
@@ -594,7 +594,7 @@ class ConfigPanel(QWidget):
 
         # ── 过滤器（后处理子集） ──
         sep_filter = QLabel("── 关键词过滤 ──")
-        sep_filter.setStyleSheet("color: #888;")
+        sep_filter.setObjectName("sectionSep")
         layout.addRow("", sep_filter)
 
         add_row = QHBoxLayout(); add_row.setSpacing(4)
@@ -805,7 +805,7 @@ class ConfigPanel(QWidget):
         self._corr_summary_prompt_text = QTextEdit()
         self._corr_summary_prompt_text.setPlaceholderText(
             "自定义全文总结/概括提示词，用于提取环境上下文（可选）")
-        self._corr_summary_prompt_text.setMaximumHeight(80)
+        self._corr_summary_prompt_text.setMaximumHeight(100)
         self._corr_summary_prompt_text.setToolTip(
             "此提示词用于对全文进行总结概括，结果将作为纠错的 system prompt 注入。\n"
             "留空则使用默认提示词。")
@@ -815,7 +815,7 @@ class ConfigPanel(QWidget):
         self._corr_system_prompt_text = QTextEdit()
         self._corr_system_prompt_text.setPlaceholderText(
             "自定义纠错系统提示词（system prompt），控制纠错行为（可选）")
-        self._corr_system_prompt_text.setMaximumHeight(80)
+        self._corr_system_prompt_text.setMaximumHeight(100)
         self._corr_system_prompt_text.setToolTip(
             "此 system prompt 会注入到每次纠错请求中。\n"
             "留空则使用默认值。")
@@ -860,7 +860,7 @@ class ConfigPanel(QWidget):
 
         self._corr_prompt_text = QTextEdit()
         self._corr_prompt_text.setPlaceholderText("自定义纠错提示词（可选，覆盖 correction_prompt）")
-        self._corr_prompt_text.setMaximumHeight(80)
+        self._corr_prompt_text.setMaximumHeight(100)
         layout.addRow("纠错用户提示词:", self._corr_prompt_text)
 
         btn = QPushButton("应用纠错设置")

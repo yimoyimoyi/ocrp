@@ -364,16 +364,31 @@ class MainWindow(QMainWindow):
 
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
+        self._status_bar.setContentsMargins(6, 2, 6, 2)
+
         self._status_label = QLabel("就绪")
+        self._status_label.setMinimumWidth(120)
         self._engine_label = QLabel("  |  引擎: paddleocr")
         self._time_label = QLabel("")
+        self._time_label.setMinimumWidth(80)
+
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 100)
+        self._progress_bar.setObjectName("progressAnimated")
         self._progress_bar.setVisible(True)
-        self._progress_bar.setMaximumWidth(180)
-        self._progress_bar.setMaximumHeight(16)
+        self._progress_bar.setMaximumWidth(200)
+        self._progress_bar.setMinimumWidth(120)
+        self._progress_bar.setMaximumHeight(18)
         self._progress_bar.setValue(0)
         self._progress_bar.setFormat("")
+        self._progress_bar.setTextVisible(False)
+
+        # 进度条动画（扫描光效）
+        from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
+        self._progress_anim = QPropertyAnimation(self._progress_bar, b"value")
+        self._progress_anim.setDuration(300)
+        self._progress_anim.setEasingCurve(QEasingCurve.OutCubic)
+
         self._status_bar.addWidget(self._status_label, 1)
         self._status_bar.addPermanentWidget(self._time_label)
         self._status_bar.addPermanentWidget(self._progress_bar)
@@ -632,7 +647,8 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(4, 4, 4, 4); root.setSpacing(4)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(6)
 
         # ── 主拆分器：上（视频+控制） / 下（结果+操作） ──
         self._main_splitter = QSplitter(Qt.Vertical)
@@ -713,7 +729,9 @@ class MainWindow(QMainWindow):
         # 底部操作栏
         bar = QFrame()
         bar.setObjectName("bottomBar")
-        bbl = QHBoxLayout(bar); bbl.setContentsMargins(6, 4, 6, 4); bbl.setSpacing(6)
+        bbl = QHBoxLayout(bar)
+        bbl.setContentsMargins(8, 6, 8, 6)
+        bbl.setSpacing(8)
 
         self._btn_start = QPushButton("▶ 开始处理")
         self._btn_start.setObjectName("btnStart")
@@ -781,6 +799,16 @@ class MainWindow(QMainWindow):
     def _toggle_theme(self):
         self._apply_theme("light" if self._theme == "dark" else "dark")
 
+    def _set_progress_animated(self, value: int):
+        """平滑动画更新进度条。"""
+        if hasattr(self, '_progress_anim'):
+            self._progress_anim.stop()
+            self._progress_anim.setStartValue(self._progress_bar.value())
+            self._progress_anim.setEndValue(value)
+            self._progress_anim.start()
+        else:
+            self._progress_bar.setValue(value)
+
     # ── 参数设置对话框 ──
     def _open_settings(self, tab_index: int = -1):
         """打开参数设置对话框，合并处理参数 + 纠错 API 配置。"""
@@ -847,7 +875,12 @@ class MainWindow(QMainWindow):
         self._current_template = name
         t = self._prompt_mgr.get_template_by_name(name)
         if t:
-            self._config_panel.set_template_prompt(t.get("prompt", ""))
+            prompt = t.get("prompt", "")
+            self._config_panel.set_template_prompt(prompt)
+            # 在状态栏显示模板描述（如果有）
+            desc = t.get("description", "")
+            if desc:
+                self.statusBar().showMessage(f"模板: {name} — {desc}", 3000)
         self._config_panel.select_template(name)
         self._sync_region_defaults()
         # 同步菜单栏
@@ -931,11 +964,9 @@ class MainWindow(QMainWindow):
                 self._workflow.cleanup()
                 vp = self._video_preview
                 if vp:
-                    if getattr(vp, '_is_playing', False):
-                        vp._pause_video()
-                    if vp._player_proc:
+                    if getattr(vp, '_player', None):
                         try:
-                            vp._player_proc.kill()
+                            vp._player.stop()
                         except Exception:
                             pass
                     if vp._ffmpeg:
@@ -1032,6 +1063,10 @@ class MainWindow(QMainWindow):
         for name in names:
             action = QAction(name, self)
             action.setCheckable(True)
+            # 模板描述作为 tooltip
+            t = self._prompt_mgr.get_template_by_name(name)
+            if t and t.get("description"):
+                action.setToolTip(t["description"])
             action.triggered.connect(lambda checked, n=name: self._on_menu_template_selected(n))
             self._template_action_group.addAction(action)
             menu.insertAction(menu.actions()[0], action)
@@ -1227,7 +1262,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             self._video_preview._ffmpeg = None
-        self._video_preview._label._placeholder_text = "拖放视频文件到此处\n或点击「打开视频/图片」加载文件"
+        self._video_preview._label._placeholder_text = "拖放视频文件到此处\n或点击「打开视频/图片」加载文件\n\nSpace 播放/暂停 · ← → 快进/退 5s · S 切换速度"
         self._video_preview._label.update()
         self._status_label.setText("已清空队列和预览")
 
@@ -1236,7 +1271,7 @@ class MainWindow(QMainWindow):
         self._result_table.set_batch_count(n)
 
     def _on_batch_progress_file(self, fname: str, idx: int, total: int):
-        self._progress_bar.setValue(int(idx * 100 / total))
+        self._set_progress_animated(int(idx * 100 / total))
         self._status_label.setText(f"批量处理 [{idx}/{total}]: {fname}")
 
     def _on_batch_finished_one(self, file_path: str, results: list):
@@ -1244,7 +1279,7 @@ class MainWindow(QMainWindow):
 
     def _on_batch_finished_all(self, _=None):
         self._btn_correction.setEnabled(True)
-        self._progress_bar.setValue(0)
+        self._set_progress_animated(0)
         n = len(self._batch_files)
         self._status_label.setText(f"✅ 批量处理完成: {n} 个文件 → output/")
         self._batch_files.clear()
@@ -1621,7 +1656,7 @@ class MainWindow(QMainWindow):
 
         # ── 信号连接 ──
         wf.status_msg.connect(lambda m: self._status_label.setText(m))
-        wf.progress_val.connect(lambda v: self._progress_bar.setValue(v))
+        wf.progress_val.connect(self._set_progress_animated)
         wf.time_display.connect(lambda t: self._time_label.setText(t))
         wf.buttons_enabled.connect(self._on_workflow_buttons)
         wf.error_dialog.connect(lambda t, m: QMessageBox.critical(self, t, m))

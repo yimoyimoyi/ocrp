@@ -1,96 +1,95 @@
 [project]
 name = "orcp"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "跨平台视频/图片 OCR 字幕提取工具，支持多引擎 OCR、语音识别、AI 纠错"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
+authors = [
+    { name = "yimoyimoyi" },
+]
+keywords = ["ocr", "subtitle", "video", "paddleocr", "whisper", "asr", "ai-correction"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+
+# ── 核心依赖（仅直接依赖，传递依赖由包管理器解析） ──
 dependencies = [
-    "anyio==4.12.1",
-    "astor==0.8.1",
-    "attrdict==2.0.1",
-    "babel==2.18.0",
-    "bce-python-sdk==0.9.60",
-    "beautifulsoup4==4.14.3",
-    "blinker==1.9.0",
-    "cachetools==7.0.1",
-    "certifi==2026.1.4",
-    "charset-normalizer==3.4.4",
-    "click==8.3.1",
-    "colorama==0.4.6",
-    "contourpy==1.3.2",
-    "cssselect==1.4.0",
-    "cssutils==2.11.1",
-    "cycler==0.12.1",
-    "Cython==3.2.4",
-    "decorator==5.2.1",
-    "et_xmlfile==2.0.0",
-    "exceptiongroup==1.3.1",
-    "fire==0.7.1",
-    "Flask==3.1.3",
-    "flask-babel==4.0.0",
-    "fonttools==4.61.1",
-    "future==1.0.0",
-    "h11==0.16.0",
-    "httpcore==1.0.9",
-    "httpx==0.28.1",
-    "idna==3.11",
-    "ImageIO==2.37.2",
-    "imgaug==0.4.0",
-    "itsdangerous==2.2.0",
-    "Jinja2==3.1.6",
-    "kiwisolver==1.4.9",
-    "lazy_loader==0.4",
-    "lmdb==1.7.5",
-    "lxml==6.0.2",
-    "MarkupSafe==3.0.3",
-    "matplotlib==3.10.8",
-    "more-itertools==10.8.0",
-    "networkx==3.4.2",
-    "numpy>=1.26.4,<3",
-    "opencv-contrib-python==4.10.0.84",
-    "opencv-python-headless>=4.9.0",
-    "openpyxl==3.1.5",
-    "opt-einsum==3.3.0",
-    "packaging==26.0",
+    # GUI 框架
+    "PyQt5>=5.15",
+    # OCR 引擎
     "paddleocr>=3.0",
     "paddlepaddle>=3.0",
-    "pandas==2.3.3",
-    "pdf2docx==0.5.8",
-    "pillow==12.1.1",
-    "premailer==3.10.0",
-    "protobuf==3.20.2",
-    "psutil==7.2.2",
-    "pyclipper==1.4.0",
-    "pycryptodome==3.23.0",
-    "PyMuPDF>=1.23.0",
-    "pyparsing==3.3.2",
-    "python-dateutil==2.9.0.post0",
-    "python-docx==1.2.0",
-    "pytz==2025.2",
-    "RapidFuzz==3.14.3",
-    "rarfile==4.2",
-    "requests>=2.32.5",
-    "scikit-image==0.25.2",
-    "scipy==1.15.3",
-    "setuptools<70",
-    "shapely==2.1.2",
-    "six==1.17.0",
-    "soupsieve==2.8.3",
-    "termcolor==3.3.0",
-    "tifffile==2025.5.10",
-    "tqdm==4.67.3",
-    "typing_extensions==4.15.0",
-    "tzdata==2025.3",
-    "urllib3==2.6.3",
-    "visualdl==2.5.3",
-    "Werkzeug==3.1.6",
-    "PyQt5>=5.15",
+    # 图像处理
+    "opencv-python-headless>=4.9.0",
+    "numpy>=1.26.4,<3",
+    "pillow>=10.0",
+    # HTTP / API 调用
+    "requests>=2.32",
+    "httpx>=0.27",
+    # 数据处理
+    "pandas>=2.0",
+    "RapidFuzz>=3.0",
+    # 音频 / ASR
     "whisperx>=3.3.1",
-    "uncompyle6>=3.9.3",
     "torchaudio<2.11",
     "torch<2.11",
-    # -- CUDA DLL 由 torch (cu124) 自带，无需 nvidia pip 包 --
+    # 系统工具
+    "psutil>=5.9",
+    "tqdm>=4.60",
+    "setuptools<70",
+    "typing_extensions>=4.8",
 ]
+
+[project.optional-dependencies]
+# ── GPU 支持（CUDA 12.4） ──
+gpu = [
+    # paddlepaddle-gpu 通过 paddle 官方源安装，不在此声明
+]
+# ── 开发 / 质量工具 ──
+dev = [
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "pre-commit>=3.7",
+]
+# ── 文档 ──
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/yimoyimoyi/orcp"
+Repository = "https://github.com/yimoyimoyi/orcp"
+Issues = "https://github.com/yimoyimoyi/orcp/issues"
+Changelog = "https://github.com/yimoyimoyi/orcp/blob/main/CHANGELOG.md"
+
+[project.scripts]
+orcp = "ocr_gui:main"
+
+# ═══════════════════════════════════════════════════════════════════
+# 构建系统
+# ═══════════════════════════════════════════════════════════════════
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["core*", "ui*", "config*"]
+
+# ═══════════════════════════════════════════════════════════════════
+# uv 包管理器
+# ═══════════════════════════════════════════════════════════════════
 
 [tool.uv]
 required-environments = [
@@ -102,9 +101,69 @@ environments = [
     "sys_platform == 'linux'",
 ]
 
-[tool.setuptools.packages.find]
-include = ["core*", "ui*", "config*"]
+# ═══════════════════════════════════════════════════════════════════
+# Ruff 代码质量
+# ═══════════════════════════════════════════════════════════════════
 
-[build-system]
-requires = ["setuptools>=64"]
-build-backend = "setuptools.build_meta"
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+fix = true
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "E501",   # 行长度（由 formatter 处理）
+    "E741",   # 变量名 l/O（UI 代码常见）
+    "SIM108", # 三元表达式（可读性优先）
+    "N802",   # 函数名大小写（Qt 约定 mixedCase）
+    "N803",   # 参数名大小写
+    "N806",   # 局部变量大小写
+    "UP007",  # X | Y 联合类型（保持 Optional 兼容）
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "ui", "config_manager", "style_loader"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# ═══════════════════════════════════════════════════════════════════
+# Mypy 类型检查
+# ═══════════════════════════════════════════════════════════════════
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true      # PyQt5/PaddleOCR 等无类型存根
+check_untyped_defs = false         # 渐进式：先不检查无注释函数
+disable_error_code = ["assignment", "arg-type", "return-value"]
+
+# ═══════════════════════════════════════════════════════════════════
+# Pytest
+# ═══════════════════════════════════════════════════════════════════
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "gpu: marks tests requiring GPU",
+]

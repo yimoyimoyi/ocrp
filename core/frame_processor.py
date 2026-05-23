@@ -16,8 +16,14 @@ def get_similarity(a: str, b: str) -> float:
 
 
 def format_time(seconds: float) -> str:
-    m, s = divmod(int(seconds), 60)
-    return f"{m:02d}:{s:02d}"
+    """格式化秒数为 HH:MM:SS,mmm（SRT 标准格式）。"""
+    if seconds < 0:
+        seconds = 0.0
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds - int(seconds)) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def extract_roi(frame: np.ndarray, region: dict) -> Optional[np.ndarray]:
@@ -161,10 +167,16 @@ class FrameProcessor:
             filter_kw = self._r_filter_keywords
         else:
             filter_kw = self._s_filter_keywords
-        filter_keywords_list = [kw.strip() for kw in filter_kw.split(",") if kw.strip()] if filter_kw else []
+        # 解析过滤关键词（支持逗号、分号、中文顿号分隔）
+        filter_keywords_list = []
+        if filter_kw:
+            import re as _re
+            filter_keywords_list = [kw.strip() for kw in _re.split(r'[,;，；、]', filter_kw) if kw.strip()]
 
         def _matches_filter(text: str) -> bool:
-            return any(kw in text for kw in filter_keywords_list) if filter_keywords_list else False
+            if not filter_keywords_list or not text:
+                return False
+            return any(kw in text for kw in filter_keywords_list)
 
         all_results = []
         frame_idx = 0

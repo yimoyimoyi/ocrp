@@ -4,7 +4,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFormLayout, QComboBox, QSpinBox, QDoubleSpinBox,
-    QDialogButtonBox, QWidget,
+    QDialogButtonBox, QWidget, QGroupBox,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -17,27 +17,31 @@ class DisplayDialog(QDialog):
     def __init__(self, theme: str, font_size: int, ui_scale: float, parent=None):
         super().__init__(parent)
         self.setWindowTitle("🖥 显示设置")
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(400)
         self._theme = theme
         self._font_size = font_size
         self._ui_scale = ui_scale
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
+        layout.setContentsMargins(14, 14, 14, 14)
 
-        form = QFormLayout()
-        form.setSpacing(6)
+        # ── 主题选择 ──
+        theme_group = QGroupBox("外观")
+        theme_form = QFormLayout(theme_group)
+        theme_form.setSpacing(8)
 
         self._theme_combo = QComboBox()
         self._theme_combo.addItems(["dark", "light"])
         self._theme_combo.setCurrentText(theme)
-        form.addRow("主题:", self._theme_combo)
+        self._theme_combo.setToolTip("切换深色/浅色主题")
+        theme_form.addRow("主题:", self._theme_combo)
 
         self._font_spin = QSpinBox()
         self._font_spin.setRange(10, 48)
         self._font_spin.setValue(font_size)
         self._font_spin.setSuffix(" px")
-        form.addRow("字体大小:", self._font_spin)
+        theme_form.addRow("字体大小:", self._font_spin)
 
         self._scale_spin = QDoubleSpinBox()
         self._scale_spin.setRange(0.5, 3.0)
@@ -45,24 +49,28 @@ class DisplayDialog(QDialog):
         self._scale_spin.setDecimals(1)
         self._scale_spin.setValue(ui_scale)
         self._scale_spin.setSuffix("×")
-        form.addRow("UI 缩放:", self._scale_spin)
+        theme_form.addRow("UI 缩放:", self._scale_spin)
 
-        layout.addLayout(form)
+        layout.addWidget(theme_group)
 
-        hint = QLabel("修改后立即生效，关闭窗口自动保存。")
-        hint.setStyleSheet("color: #888;")
+        hint = QLabel("💡 修改后点击「应用」立即预览，确定后点击「OK」保存。")
+        hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        # ── 实时预览 ──
-        apply_btn = QPushButton("应用")
+        # ── 按钮行 ──
+        btn_row = QHBoxLayout()
+        apply_btn = QPushButton("🎨 应用预览")
+        apply_btn.setToolTip("立即应用当前设置（不关闭窗口）")
         apply_btn.clicked.connect(self._on_apply)
-        layout.addWidget(apply_btn)
+        btn_row.addWidget(apply_btn)
+        btn_row.addStretch()
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self._on_accept)
         btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        btn_row.addWidget(btns)
+        layout.addLayout(btn_row)
 
     def _on_apply(self):
         """立即应用但不关闭。"""

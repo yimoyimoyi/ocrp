@@ -11,6 +11,8 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 from typing import List
 
+from ui.collapsible_group import CollapsibleGroup
+
 
 class RegionManagerWidget(QWidget):
     """区域管理面板（紧凑版）。
@@ -101,9 +103,15 @@ class RegionManagerWidget(QWidget):
         self._set_editor_enabled(False)
 
     def _build_prop_editor(self, vl):
-        """构建滑动窗口内的属性编辑区域。"""
-        # 第1行：名称 + 启用
-        row1 = QHBoxLayout(); row1.setSpacing(4)
+        """构建滑动窗口内的属性编辑区域（可收纳卡片式分组）。"""
+
+        # ── 基本属性卡片（默认展开）──
+        basic_card = CollapsibleGroup("基本属性", collapsed=False)
+        bc = basic_card.content_layout()
+        bc.setSpacing(6)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(4)
         row1.addWidget(QLabel("名称:"))
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("区域名称")
@@ -113,10 +121,10 @@ class RegionManagerWidget(QWidget):
         self._enabled_check.setChecked(True)
         self._enabled_check.toggled.connect(self._on_prop_changed)
         row1.addWidget(self._enabled_check)
-        vl.addLayout(row1)
+        bc.addLayout(row1)
 
-        # 第2行：引擎 + 模板
-        row2 = QHBoxLayout(); row2.setSpacing(4)
+        row2 = QHBoxLayout()
+        row2.setSpacing(4)
         row2.addWidget(QLabel("引擎:"))
         self._engine_combo = QComboBox()
         self._engine_combo.addItems(self._engine_names)
@@ -127,84 +135,102 @@ class RegionManagerWidget(QWidget):
         self._template_combo.addItems(self._template_names)
         self._template_combo.currentTextChanged.connect(self._on_prop_changed)
         row2.addWidget(self._template_combo, 1)
-        vl.addLayout(row2)
+        bc.addLayout(row2)
+        vl.addWidget(basic_card)
 
-        # 第3-4行：X/Y/W/H 网格
-        grid = QGridLayout()
-        grid.setSpacing(4)
-        grid.addWidget(QLabel("X:"), 0, 0)
+        # ── 坐标卡片（默认折叠）──
+        coord_card = CollapsibleGroup("坐标与尺寸", collapsed=True)
+        cc = QGridLayout()
+        cc.setSpacing(4)
+        cc.addWidget(QLabel("X:"), 0, 0)
         self._x_spin = QSpinBox(); self._x_spin.setRange(0, 9999)
         self._x_spin.valueChanged.connect(self._on_prop_changed)
-        grid.addWidget(self._x_spin, 0, 1)
-        grid.addWidget(QLabel("Y:"), 0, 2)
+        cc.addWidget(self._x_spin, 0, 1)
+        cc.addWidget(QLabel("Y:"), 0, 2)
         self._y_spin = QSpinBox(); self._y_spin.setRange(0, 9999)
         self._y_spin.valueChanged.connect(self._on_prop_changed)
-        grid.addWidget(self._y_spin, 0, 3)
-        grid.addWidget(QLabel("W:"), 1, 0)
+        cc.addWidget(self._y_spin, 0, 3)
+        cc.addWidget(QLabel("W:"), 1, 0)
         self._w_spin = QSpinBox(); self._w_spin.setRange(0, 9999)
         self._w_spin.valueChanged.connect(self._on_prop_changed)
-        grid.addWidget(self._w_spin, 1, 1)
-        grid.addWidget(QLabel("H:"), 1, 2)
+        cc.addWidget(self._w_spin, 1, 1)
+        cc.addWidget(QLabel("H:"), 1, 2)
         self._h_spin = QSpinBox(); self._h_spin.setRange(0, 9999)
         self._h_spin.valueChanged.connect(self._on_prop_changed)
-        grid.addWidget(self._h_spin, 1, 3)
-        vl.addLayout(grid)
+        cc.addWidget(self._h_spin, 1, 3)
+        coord_card.addLayout(cc)
+        vl.addWidget(coord_card)
 
-        # 第5行：膨胀比例
-        row5 = QHBoxLayout(); row5.setSpacing(4)
-        row5.addWidget(QLabel("膨胀:"))
+        # ── 高级卡片（默认折叠）──
+        adv_card = CollapsibleGroup("高级处理", collapsed=True)
+        ac = adv_card.content_layout()
+        ac.setSpacing(6)
+
+        # 膨胀 + 裁剪放同一行
+        adv_row = QHBoxLayout()
+        adv_row.setSpacing(4)
+        adv_row.addWidget(QLabel("膨胀:"))
         self._expand_ratio_spin = QSpinBox()
-        self._expand_ratio_spin.setRange(0, 200); self._expand_ratio_spin.setSuffix("%")
+        self._expand_ratio_spin.setRange(0, 200)
+        self._expand_ratio_spin.setSuffix("%")
         self._expand_ratio_spin.setToolTip("ROI 区域向外膨胀的比例")
         self._expand_ratio_spin.valueChanged.connect(self._on_prop_changed)
-        row5.addWidget(self._expand_ratio_spin)
-        row5.addStretch()
-        vl.addLayout(row5)
-
-        # 第6行：裁剪四边
-        row6 = QHBoxLayout(); row6.setSpacing(4)
-        row6.addWidget(QLabel("裁剪 L:"))
-        self._crop_left_spin = QSpinBox(); self._crop_left_spin.setRange(0, 9999)
+        adv_row.addWidget(self._expand_ratio_spin)
+        adv_row.addSpacing(10)
+        adv_row.addWidget(QLabel("裁剪:"))
+        adv_row.addWidget(QLabel("L"))
+        self._crop_left_spin = QSpinBox()
+        self._crop_left_spin.setRange(0, 9999)
+        self._crop_left_spin.setMaximumWidth(55)
         self._crop_left_spin.valueChanged.connect(self._on_prop_changed)
-        row6.addWidget(self._crop_left_spin)
-        row6.addWidget(QLabel("R:"))
-        self._crop_right_spin = QSpinBox(); self._crop_right_spin.setRange(0, 9999)
+        adv_row.addWidget(self._crop_left_spin)
+        adv_row.addWidget(QLabel("R"))
+        self._crop_right_spin = QSpinBox()
+        self._crop_right_spin.setRange(0, 9999)
+        self._crop_right_spin.setMaximumWidth(55)
         self._crop_right_spin.valueChanged.connect(self._on_prop_changed)
-        row6.addWidget(self._crop_right_spin)
-        row6.addWidget(QLabel("T:"))
-        self._crop_top_spin = QSpinBox(); self._crop_top_spin.setRange(0, 9999)
+        adv_row.addWidget(self._crop_right_spin)
+        adv_row.addWidget(QLabel("T"))
+        self._crop_top_spin = QSpinBox()
+        self._crop_top_spin.setRange(0, 9999)
+        self._crop_top_spin.setMaximumWidth(55)
         self._crop_top_spin.valueChanged.connect(self._on_prop_changed)
-        row6.addWidget(self._crop_top_spin)
-        row6.addWidget(QLabel("B:"))
-        self._crop_bottom_spin = QSpinBox(); self._crop_bottom_spin.setRange(0, 9999)
+        adv_row.addWidget(self._crop_top_spin)
+        adv_row.addWidget(QLabel("B"))
+        self._crop_bottom_spin = QSpinBox()
+        self._crop_bottom_spin.setRange(0, 9999)
+        self._crop_bottom_spin.setMaximumWidth(55)
         self._crop_bottom_spin.valueChanged.connect(self._on_prop_changed)
-        row6.addWidget(self._crop_bottom_spin)
-        vl.addLayout(row6)
+        adv_row.addWidget(self._crop_bottom_spin)
+        adv_row.addStretch()
+        ac.addLayout(adv_row)
 
-        # 第7行：OCR 提示词
-        vl.addWidget(QLabel("OCR 提示词:"))
+        # OCR 提示词
+        ac.addWidget(QLabel("OCR 提示词:"))
         self._prompt_edit = QTextEdit()
         self._prompt_edit.setPlaceholderText("自定义 OCR 提示词（覆盖模板）")
-        self._prompt_edit.setMaximumHeight(60)
+        self._prompt_edit.setMaximumHeight(100)
+        self._prompt_edit.setMinimumHeight(60)
         self._prompt_edit.textChanged.connect(self._on_prop_changed)
-        vl.addWidget(self._prompt_edit)
+        ac.addWidget(self._prompt_edit)
 
-        # 第8行：纠错提示词
-        vl.addWidget(QLabel("纠错提示词:"))
+        # 纠错提示词
+        ac.addWidget(QLabel("纠错提示词:"))
         self._corr_prompt_edit = QTextEdit()
         self._corr_prompt_edit.setPlaceholderText("此区域专用的纠错提示词（留空用全局）")
-        self._corr_prompt_edit.setMaximumHeight(60)
+        self._corr_prompt_edit.setMaximumHeight(100)
+        self._corr_prompt_edit.setMinimumHeight(60)
         self._corr_prompt_edit.textChanged.connect(self._on_prop_changed)
-        vl.addWidget(self._corr_prompt_edit)
+        ac.addWidget(self._corr_prompt_edit)
+        vl.addWidget(adv_card)
 
         # 删除按钮
         self._btn_remove = QPushButton("- 删除此区域")
         self._btn_remove.setObjectName("btnRemoveRegion")
-        self._btn_remove.setFixedHeight(24)
+        self._btn_remove.setFixedHeight(28)
         self._btn_remove.clicked.connect(self._on_remove_current)
         vl.addWidget(self._btn_remove)
 
-        # 底部弹性空间
         vl.addStretch()
 
     def _refresh_list(self):

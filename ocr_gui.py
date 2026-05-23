@@ -3,6 +3,7 @@
 
 用法:
     python ocr_gui.py
+    orcp              # 通过 pyproject.toml 注册的入口点
 """
 
 import os
@@ -10,9 +11,13 @@ import sys
 import warnings
 from pathlib import Path
 
-# ── 过滤无害的依赖版本警告 ──
-warnings.filterwarnings("ignore", message="urllib3.*doesn't match a supported version",
-                        category=UserWarning, module="requests")
+# ── 过滤无害的依赖版本警告（必须在其他导入之前） ──
+warnings.filterwarnings(
+    "ignore",
+    message="urllib3.*doesn't match a supported version",
+    category=UserWarning,
+    module="requests",
+)
 
 # ── Windows 控制台 UTF-8 编码 ──
 if sys.platform == "win32":
@@ -74,18 +79,26 @@ except Exception:
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
 
+from core.logger import get_logger
 from ui.main_window import MainWindow
+
+logger = get_logger(__name__)
 
 
 def main():
     """应用入口。"""
+    logger.info("ORCP 启动中...")
+    logger.info("Python %s | 平台 %s", sys.version.split()[0], sys.platform)
+
     app = QApplication(sys.argv)
     app.setApplicationName("ORCP")
     app.setOrganizationName("ORCP")
+    app.setApplicationVersion("0.2.0")
 
     window = MainWindow()
     window.show()
 
+    logger.info("主窗口已显示，进入事件循环")
     sys.exit(app.exec_())
 
 

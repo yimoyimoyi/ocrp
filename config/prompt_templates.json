@@ -1,50 +1,67 @@
 {
   "templates": [
     {
+      "name": "通用OCR",
+      "description": "识别所有可见文字，保持原有排版",
+      "prompt": "请识别图片中的所有文字，保持原有排版和格式",
+      "applicable_regions": ["any"],
+      "category": "ocr"
+    },
+    {
       "name": "游戏对话提取",
-      "description": "适用于游戏视频字幕提取",
-      "prompt": "你是剧本提取专家。请精准识别文字。对话格式：『人名：内容』。选项格式：『选项：内容』。无内容回SKIP",
-      "applicable_regions": [
-        "center",
-        "bottom"
-      ]
+      "description": "适用于游戏视频字幕提取，识别对话和选项",
+      "prompt": "你是剧本提取专家。请精准识别图片中的文字内容。\n规则：\n- 对话格式：『角色名：对话内容』\n- 选项格式：『选项X：选项内容』\n- 系统提示直接输出原文\n- 若无可见文字内容，回复 SKIP",
+      "applicable_regions": ["center", "bottom"],
+      "category": "ocr"
     },
     {
       "name": "UI/菜单识别",
-      "description": "适用于菜单、按钮文字识别",
-      "prompt": "请识别界面中的菜单项和按钮文字，按行输出",
-      "applicable_regions": [
-        "top",
-        "full"
-      ]
+      "description": "适用于菜单、按钮、标题栏等界面元素文字识别",
+      "prompt": "请识别图片中的界面元素文字，包括菜单项、按钮标签、标题等。按视觉位置从上到下逐行输出",
+      "applicable_regions": ["top", "full"],
+      "category": "ocr"
     },
     {
-      "name": "通用OCR",
-      "description": "识别所有可见文字",
-      "prompt": "请识别图片中的所有文字，保持原有排版",
-      "applicable_regions": [
-        "any"
-      ]
+      "name": "字幕区域识别",
+      "description": "专注于视频底部字幕区域的文字识别",
+      "prompt": "请识别图片底部区域的字幕文字。若有多个字幕行，按顺序逐行输出。忽略非字幕内容",
+      "applicable_regions": ["bottom"],
+      "category": "ocr"
     },
     {
-      "name": "环境提取-默认",
-      "description": "全文总结/环境提取默认提示词",
-      "prompt": "请根据以下OCR识别文本，总结出这段内容的：\n1. 领域/类型（如：小说、新闻、游戏对话、学术论文等）\n2. 整体氛围/语气（如：严肃、欢快、悲伤、紧张等）\n3. 主要内容/主题（一句话概括）\n\n请用简洁的中文回答，格式：\n领域：xxx\n氛围：xxx\n内容：xxx"
+      "name": "文档扫描",
+      "description": "适用于文档、书籍、截图等排版密集的文字识别",
+      "prompt": "请识别图片中的文档内容，保持段落结构和换行。对表格内容使用 Markdown 格式输出",
+      "applicable_regions": ["any"],
+      "category": "ocr"
     },
     {
       "name": "纠错-字幕校对",
       "description": "AI 纠错 system prompt：字幕校对模式",
-      "prompt": "你是一个专业的字幕校对助手。你接收带有时间轴的OCR识别文本列表，输出时保留原始行号前缀，根据语义合并或拆分条目。只返回修正后的结果。"
+      "prompt": "你是一个专业的字幕校对助手。你的任务是：\n1. 纠正 OCR 识别中的错别字和乱码\n2. 保留原始行号前缀 [ID:行号]\n3. 根据语义合理合并或拆分条目\n4. 为每条设定合理的起止时间\n5. 只返回修正后的结果，不要添加解释",
+      "applicable_regions": ["any"],
+      "category": "correction"
     },
     {
       "name": "纠错-翻译模式",
       "description": "AI 纠错：翻译为中文",
-      "prompt": "你是一个专业的字幕翻译助手。将以下 OCR 文本翻译为中文。保持原始行号前缀 [ID:行号]，可根据语义合并或拆分条目。只返回翻译后的结果。"
+      "prompt": "你是一个专业的字幕翻译助手。将以下 OCR 文本翻译为中文。\n规则：\n- 保持原始行号前缀 [ID:行号]\n- 根据语义合并或拆分条目\n- 保持自然流畅的中文表达\n- 只返回翻译后的结果",
+      "applicable_regions": ["any"],
+      "category": "translation"
     },
     {
       "name": "纠错-用户指令",
       "description": "AI 纠错用户指令模板",
-      "prompt": "请校对文本错误。输出格式：每行保持 [ID:行号] 前缀，行号从0开始连续。"
+      "prompt": "请校对文本错误。输出格式：每行保持 [ID:行号] 前缀，行号从0开始连续。",
+      "applicable_regions": ["any"],
+      "category": "correction"
+    },
+    {
+      "name": "环境提取-默认",
+      "description": "全文总结/环境提取默认提示词",
+      "prompt": "请根据以下OCR识别文本，总结出这段内容的：\n1. 领域/类型（如：小说、新闻、游戏对话、学术论文等）\n2. 整体氛围/语气（如：严肃、欢快、悲伤、紧张等）\n3. 主要内容/主题（一句话概括）\n\n请用简洁的中文回答，格式：\n领域：xxx\n氛围：xxx\n内容：xxx",
+      "applicable_regions": [],
+      "category": "summary"
     }
   ]
 }

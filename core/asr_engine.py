@@ -76,6 +76,9 @@ def scan_local_asr_models(model_dir: str = "") -> List[str]:
 # 子进程 server 有自己隔离的 DLL 环境
 
 from config_manager import _load_json_with_comments
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 _DEFAULT_CONFIG = {
@@ -204,28 +207,28 @@ class WhisperXEngine(BaseASREngine):
             while time.time() < deadline:
                 if self._proc.poll() is not None:
                     err = self._proc.stderr.read()
-                    print(f"[ASR] server exited early: {err}")
+                    logger.error("ASR 子进程提前退出: %s", err[:300])
                     self._proc = None
                     return False
                 line = self._proc.stderr.readline()
                 if not line:
                     time.sleep(0.1)
                     continue
-                print(f"[ASR_SERVER] {line.rstrip()}")
+                logger.debug("ASR_SERVER: %s", line.rstrip())
                 if "ready" in line:
                     self._ready = True
                     return True
                 if "error" in line.lower() and "Model load failed" in line:
                     err = self._proc.stderr.read()
-                    print(f"[ASR] server failed: {err}")
+                    logger.error("ASR 子进程启动失败: %s", err[:300])
                     self._stop_server()
                     return False
 
-            print("[ASR] server startup timeout")
+            logger.error("ASR 子进程启动超时 (120s)")
             self._stop_server()
             return False
         except Exception as e:
-            print(f"[ASR] server start failed: {e}")
+            logger.error("ASR 子进程启动异常: %s", e)
             self._stop_server()
             return False
 
@@ -306,8 +309,8 @@ class WhisperXEngine(BaseASREngine):
                     for line in _stderr:
                         stripped = line.rstrip()
                         _stderr_lines.append(stripped)
-                        # 实时打印到主进程日志
-                        print(f"[ASR_SERVER] {stripped}")
+                        # 实时记录到日志
+                        logger.debug("ASR_SERVER: %s", stripped)
                 except Exception:
                     pass
 
@@ -317,7 +320,7 @@ class WhisperXEngine(BaseASREngine):
 
             # ⚠️ 2️⃣ 再发送请求
             _send_json(self._proc.stdin, req)
-            print(f"[ASR] 请求已发送: cmd={req.get('cmd')}, audio={Path(req.get('audio_path','')).name}")
+            logger.info("ASR 请求已发送: cmd=%s, audio=%s", req.get('cmd'), Path(req.get('audio_path','')).name)
 
             # ⚠️ 3️⃣ 启动 stdout 读取线程
             reader = Thread(target=_read_response, daemon=True)
@@ -337,7 +340,7 @@ class WhisperXEngine(BaseASREngine):
                 if stderr_reader.is_alive():
                     stderr_reader.join(timeout=2)
                 stderr_text = "\n".join(_stderr_lines[-30:]) if _stderr_lines else "(no stderr)"
-                print(f"[ASR] ❌ 服务器进程退出 (code={exit_code}):\n{stderr_text[:600]}")
+                logger.error("ASR 服务器进程退出 (code=%d): %s", exit_code, stderr_text[:600])
                 self._proc = None
                 self._ready = False
                 return {"status": "error",
@@ -345,13 +348,13 @@ class WhisperXEngine(BaseASREngine):
 
             # ── 超时 ──
             if reader.is_alive():
-                print(f"[ASR] ⏱ 请求超时 ({timeout}s)，强制终止")
+                logger.warning("ASR 请求超时 (%ds)，强制终止", timeout)
 
                 # 收集已有 stderr 用于诊断
                 if stderr_reader.is_alive():
                     stderr_reader.join(timeout=1)
                 stderr_text = "\n".join(_stderr_lines[-20:]) if _stderr_lines else "(no stderr)"
-                print(f"[ASR] 超时时 stderr:\n{stderr_text[:500]}")
+                logger.debug("超时时 stderr: %s", stderr_text[:500])
 
                 try:
                     self._proc.kill()
@@ -374,22 +377,22 @@ class WhisperXEngine(BaseASREngine):
                 self._proc = None
                 self._ready = False
                 stderr_text = "\n".join(_stderr_lines[-20:]) if _stderr_lines else "(no stderr)"
-                print(f"[ASR] ❌ stdout EOF，stderr:\n{stderr_text[:500]}")
+                logger.error("ASR stdout EOF, stderr: %s", stderr_text[:500])
                 return {"status": "error",
                         "message": f"ASR server crashed: {stderr_text[:300]}"}
 
             if resp.get("status") == "ok":
                 lang = resp.get("detected_lang", "?")
                 prob = resp.get("lang_prob", 0)
-                print(f"[ASR] ✅ 响应 OK: lang={lang} prob={prob:.2%}, results={len(resp.get('results',[]))}条")
+                logger.info("ASR 响应: lang=%s prob=%.2f%%, %d 条结果", lang, prob * 100, len(resp.get('results',[])))
             else:
                 err_msg = resp.get("message", "unknown")
-                print(f"[ASR] ❌ 响应错误: {err_msg}")
+                logger.error("ASR 响应错误: %s", err_msg)
             return resp
 
         except Exception as e:
             import traceback
-            print(f"[ASR] _send_request 异常: {e}")
+            logger.error("ASR 请求异常: %s", e)
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
 
@@ -454,7 +457,7 @@ class WhisperXEngine(BaseASREngine):
                     for line in _stderr:
                         stripped = line.rstrip()
                         _stderr_lines.append(stripped)
-                        print(f"[ASR_SERVER] {stripped}")
+                        logger.debug("ASR_SERVER: %s", stripped)
                 except Exception:
                     pass
 
@@ -462,7 +465,7 @@ class WhisperXEngine(BaseASREngine):
             stderr_reader.start()
 
             _send_json(self._proc.stdin, req)
-            print(f"[ASR] 流式请求已发送: audio={Path(audio_path).name}")
+            logger.info("ASR 流式请求已发送: audio=%s", Path(audio_path).name)
 
             # 逐行读取 segment / done / error
             deadline = time.time() + 300  # 5 分钟总超时
@@ -473,7 +476,7 @@ class WhisperXEngine(BaseASREngine):
                     if stderr_reader.is_alive():
                         stderr_reader.join(timeout=1)
                     stderr_text = "\n".join(_stderr_lines[-20:]) if _stderr_lines else "(no stderr)"
-                    print(f"[ASR] ❌ 服务器退出 (code={exit_code}):\n{stderr_text[:500]}")
+                    logger.error("ASR 服务器退出 (code=%d): %s", exit_code, stderr_text[:500])
                     self._proc = None
                     self._ready = False
                     if error_holder is not None:
@@ -488,7 +491,7 @@ class WhisperXEngine(BaseASREngine):
                         continue
                     # 进程还活着但 stdout 关闭了？异常情况
                     stderr_text = "\n".join(_stderr_lines[-10:]) if _stderr_lines else "(no stderr)"
-                    print(f"[ASR] ❌ stdout EOF while server alive: {stderr_text[:300]}")
+                    logger.error("ASR stdout EOF (服务器仍存活): %s", stderr_text[:300])
                     if error_holder is not None:
                         error_holder[0] = f"Server stopped responding: {stderr_text[:200]}"
                     return
@@ -511,17 +514,17 @@ class WhisperXEngine(BaseASREngine):
                     lang = resp.get("detected_lang", "?")
                     prob = resp.get("lang_prob", 0)
                     n = resp.get("valid_segments", 0)
-                    print(f"[ASR] ✅ 流式完成: lang={lang} prob={prob:.2%}, segments={n}")
+                    logger.info("ASR 流式完成: lang=%s prob=%.2f%%, segments=%d", lang, prob * 100, n)
                     return
                 elif status == "error":
                     err_msg = resp.get("message", "unknown")
-                    print(f"[ASR] ❌ 流式错误: {err_msg}")
+                    logger.error("ASR 流式错误: %s", err_msg)
                     if error_holder is not None:
                         error_holder[0] = err_msg
                     return
 
             # 超时
-            print(f"[ASR] ⏱ 流式超时 (300s)")
+            logger.warning("ASR 流式超时 (300s)")
             try:
                 self._proc.kill()
                 self._proc.wait(2)

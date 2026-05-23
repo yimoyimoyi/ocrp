@@ -10,6 +10,10 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEvent
 from PyQt5.QtGui import QColor, QBrush
 from typing import List, Tuple, Optional
 
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class ResultTableWidget(QWidget):
     """识别结果表格。
@@ -259,6 +263,11 @@ class ResultTableWidget(QWidget):
 
         self._table.blockSignals(False)
         self._update_count()
+        # 自动滚动到新行
+        self._table.scrollToItem(
+            self._table.item(row, 0),
+            QAbstractItemView.PositionAtBottom
+        )
         return row
 
     def _on_filter_row(self, row: int):
@@ -276,11 +285,18 @@ class ResultTableWidget(QWidget):
             self._table.blockSignals(False)
 
     def update_confidence(self, row: int, confidence: float):
-        """更新指定行的置信度（阻止信号避免触发 seek_to）。"""
+        """更新指定行的置信度（带颜色编码）。"""
         if 0 <= row < len(self._results):
             self._results[row]["confidence"] = confidence
             self._table.blockSignals(True)
             item = QTableWidgetItem(f"{confidence:.0%}")
+            # 置信度颜色编码：>=90% 绿色, >=70% 默认, <70% 黄色, <50% 红色
+            if confidence >= 0.9:
+                item.setForeground(QBrush(QColor("#3fb950")))
+            elif confidence < 0.5:
+                item.setForeground(QBrush(QColor("#f85149")))
+            elif confidence < 0.7:
+                item.setForeground(QBrush(QColor("#d29922")))
             self._table.setItem(row, 5, item)
             self._table.blockSignals(False)
 
@@ -314,7 +330,7 @@ class ResultTableWidget(QWidget):
                 del self._results[i]
                 removed += 1
         if removed:
-            print(f"[ResultTable] clear_by_type(region={region_name!r}, engine={engine_name!r}): removed {removed} rows, {len(self._results)} remaining")
+            logger.debug("clear_by_type(region=%r, engine=%r): 移除 %d 行, 剩余 %d", region_name, engine_name, removed, len(self._results))
         self._update_count()
 
     def sort_by_time(self):

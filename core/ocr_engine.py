@@ -18,6 +18,9 @@ CONFIG_DIR = BASE_DIR / "config"
 _CORE_DLL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from config_manager import _load_json_with_comments
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def load_engines_config() -> dict:
@@ -87,7 +90,7 @@ def _register_dll_dirs():
                     os.add_dll_directory(_pl)
                 break
 
-        print("[PaddleOCR] DLL dirs: torch/lib")
+        logger.debug("DLL 搜索路径已注册: torch/lib, paddle/libs")
 
 
 def _register_gpu_dll_dirs():
@@ -125,7 +128,7 @@ def _register_gpu_dll_dirs():
                 except OSError:
                     pass
 
-        print("[PaddleOCR] GPU DLL dirs registered")
+        logger.debug("GPU DLL 搜索路径已注册")
 
 
 # ═══════════════ 抽象基类 ═══════════════
@@ -209,12 +212,11 @@ class PaddleOCREngine(BaseOCREngine):
                         }
                         if self._ocr_version:
                             kwargs["ocr_version"] = self._ocr_version
-                        print(f"[PaddleOCR] 初始化引擎: device={device}")
+                        logger.info("PaddleOCR 引擎初始化: device=%s", device)
                         self._ocr = PaddleOCR(**kwargs)
                     except Exception as e:
                         if device.startswith("gpu"):
-                            print(f"[PaddleOCR] GPU 初始化失败: {e}")
-                            print("[PaddleOCR] 自动退回 CPU 模式...")
+                            logger.warning("GPU 初始化失败: %s，回退至 CPU 模式", e)
                             self._device = "cpu"
                             kwargs["device"] = "cpu"
                             self._ocr = PaddleOCR(**kwargs)
@@ -241,8 +243,7 @@ class PaddleOCREngine(BaseOCREngine):
             err_msg = str(e)
             if self._device.startswith("gpu") and any(kw in err_msg.lower() for kw in
                 ("cudnn", "preconditionnotmet", "dynamic library")):
-                print(f"[PaddleOCR] GPU 运行时失败: {e}")
-                print("[PaddleOCR] 自动退回 CPU 模式，重建引擎...")
+                logger.warning("GPU 运行时失败: %s，回退至 CPU 模式", e)
                 self._device = "cpu"
                 self._ocr = None
                 try:
@@ -261,10 +262,10 @@ class PaddleOCREngine(BaseOCREngine):
                             self._last_confidence = sum(scores) / len(scores) if scores else 0.0
                             return "".join(texts).replace(" ", "")
                 except Exception as e2:
-                    print(f"[PaddleOCR] CPU 重试失败: {e2}")
+                    logger.error("CPU 回退重试失败: %s", e2)
                 return ""
             self._last_confidence = 0.0
-            print(f"[PaddleOCR] 识别失败: {e}")
+            logger.error("PaddleOCR 识别失败: %s", e)
             return ""
 
     def warm_up(self):
@@ -308,11 +309,9 @@ class OpenAIVisionEngine(BaseOCREngine):
         max_retries = getattr(self, '_retry', 2)
         t_start = time.time()
         prompt_text = prompt or self._prompt_template
-        print(f"[OpenAI Vision] ═══════════ API 请求 ═══════════")
-        print(f"[OpenAI Vision]   🔗 URL: {self._base_url}/chat/completions")
-        print(f"[OpenAI Vision]   🤖 Model: {self._model}")
-        print(f"[OpenAI Vision]   📝 Prompt: {prompt_text[:80]}{'...' if len(prompt_text) > 80 else ''}")
-        print(f"[OpenAI Vision]   🖼 Image: {image.shape[1]}x{image.shape[0]}")
+        logger.info("OpenAI Vision 请求 | model=%s | image=%dx%d",
+                     self._model, image.shape[1], image.shape[0])
+        logger.debug("Prompt: %s", prompt_text[:120])
         for attempt in range(max_retries + 1):
             try:
                 import cv2
@@ -329,26 +328,23 @@ class OpenAIVisionEngine(BaseOCREngine):
                 elapsed = time.time() - t_start
                 if resp.status_code == 200:
                     content = resp.json()["choices"][0]["message"]["content"].strip()
-                    preview = content[:80].replace("\n", " ")
-                    print(f"[OpenAI Vision]   ⏱ {elapsed:.1f}s | ✅ 响应({len(content)} chars): {preview}{'...' if len(content) > 80 else ''}")
+                    logger.info("OpenAI Vision 响应: %.1fs, %d chars", elapsed, len(content))
                     return content
-                print(f"[OpenAI Vision]   ❌ HTTP {resp.status_code} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.warning("OpenAI Vision HTTP %d (第%d次) | %.1fs", resp.status_code, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[OpenAI Vision]   ↻ 第{attempt+2}次重试...")
+                    logger.info("重试第 %d 次...", attempt + 2)
             except requests.exceptions.Timeout:
                 elapsed = time.time() - t_start
-                print(f"[OpenAI Vision]   ❌ 请求超时 ({self._timeout}s) (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.warning("OpenAI Vision 超时 (%ds, 第%d次) | %.1fs", self._timeout, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[OpenAI Vision]   ↻ 第{attempt+2}次重试...")
                     continue
             except Exception as e:
                 elapsed = time.time() - t_start
-                print(f"[OpenAI Vision]   ❌ 请求异常: {e} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.error("OpenAI Vision 请求异常: %s (第%d次) | %.1fs", e, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[OpenAI Vision]   ↻ 第{attempt+2}次重试...")
                     continue
                 return ""
-        print(f"[OpenAI Vision]   ❌ 最终失败 (已重试 {max_retries} 次)")
+        logger.error("OpenAI Vision 最终失败 (已重试 %d 次)", max_retries)
         return ""
 
 
@@ -386,11 +382,9 @@ class OllamaVisionEngine(BaseOCREngine):
         max_retries = getattr(self, '_retry', 2)
         t_start = time.time()
         prompt_text = prompt or self._prompt_template
-        print(f"[Ollama Vision] ═══════════ API 请求 ═══════════")
-        print(f"[Ollama Vision]   🔗 URL: {self._base_url}/api/generate")
-        print(f"[Ollama Vision]   🤖 Model: {self._model}")
-        print(f"[Ollama Vision]   📝 Prompt: {prompt_text[:80]}{'...' if len(prompt_text) > 80 else ''}")
-        print(f"[Ollama Vision]   🖼 Image: {image.shape[1]}x{image.shape[0]}")
+        logger.info("Ollama Vision 请求 | model=%s | image=%dx%d",
+                     self._model, image.shape[1], image.shape[0])
+        logger.debug("Prompt: %s", prompt_text[:120])
         for attempt in range(max_retries + 1):
             try:
                 import cv2
@@ -402,26 +396,23 @@ class OllamaVisionEngine(BaseOCREngine):
                 elapsed = time.time() - t_start
                 if resp.status_code == 200:
                     content = resp.json().get("response", "").strip()
-                    preview = content[:80].replace("\n", " ")
-                    print(f"[Ollama Vision]   ⏱ {elapsed:.1f}s | ✅ 响应({len(content)} chars): {preview}{'...' if len(content) > 80 else ''}")
+                    logger.info("Ollama Vision 响应: %.1fs, %d chars", elapsed, len(content))
                     return content
-                print(f"[Ollama Vision]   ❌ HTTP {resp.status_code} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.warning("Ollama Vision HTTP %d (第%d次) | %.1fs", resp.status_code, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[Ollama Vision]   ↻ 第{attempt+2}次重试...")
+                    logger.info("重试第 %d 次...", attempt + 2)
             except requests.exceptions.Timeout:
                 elapsed = time.time() - t_start
-                print(f"[Ollama Vision]   ❌ 请求超时 ({self._timeout}s) (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.warning("Ollama Vision 超时 (%ds, 第%d次) | %.1fs", self._timeout, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[Ollama Vision]   ↻ 第{attempt+2}次重试...")
                     continue
             except Exception as e:
                 elapsed = time.time() - t_start
-                print(f"[Ollama Vision]   ❌ 请求异常: {e} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.error("Ollama Vision 请求异常: %s (第%d次) | %.1fs", e, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[Ollama Vision]   ↻ 第{attempt+2}次重试...")
                     continue
                 return ""
-        print(f"[Ollama Vision]   ❌ 最终失败 (已重试 {max_retries} 次)")
+        logger.error("Ollama Vision 最终失败 (已重试 %d 次)", max_retries)
         return ""
 
 

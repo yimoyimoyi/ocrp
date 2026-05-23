@@ -9,6 +9,10 @@ import numpy as np
 from pathlib import Path
 from typing import Optional, Tuple
 
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
 _BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -202,13 +206,13 @@ class FFmpegReader:
                                  timeout=30).stdout
             expected = self._width * self._height * 3
             if not raw or len(raw) < expected:
-                print(f"[FFmpegReader] seek({frame_idx}): got {len(raw) if raw else 0} bytes, expected {expected}")
+                logger.warning("FFmpeg seek(%d): 数据不足 (got %d, expected %d)", frame_idx, len(raw) if raw else 0, expected)
                 return None
             frame = np.frombuffer(raw[:expected], dtype=np.uint8).reshape(
                 (self._height, self._width, 3))
             self._frame_idx = frame_idx + 1
             if not self.open():
-                print(f"[FFmpegReader] seek({frame_idx}): reopen failed after seek")
+                logger.warning("FFmpeg seek(%d): 重新打开失败", frame_idx)
             return frame
         except Exception:
             return None

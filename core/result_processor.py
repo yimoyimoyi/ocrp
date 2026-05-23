@@ -178,16 +178,17 @@ def _export_srt(results: list, output_path: str, include_corrected: bool,
             if not raw:
                 continue
             start = item.get("time_sec", 0.0) or 0.0
-            end = item.get("end_sec", start + 3.0) or (start + 3.0)
+            end = item.get("end_sec", 0.0) or 0.0
+            if end <= start:
+                end = start + 3.0  # 默认 3 秒时长
 
             if include_corrected and i in corrected_map:
                 corrected = _clean_id_markers(corrected_map[i])
-                has_correction = (corrected and corrected != raw)
+                has_correction = bool(corrected and corrected != raw)
             else:
                 corrected = ""
                 has_correction = False
 
-            line_count = 0
             f.write(f"{idx}\n")
             f.write(f"{_fmt_srt_time(start)} --> {_fmt_srt_time(end)}\n")
             idx += 1
@@ -237,9 +238,8 @@ def export_results(
 
 
 def _clean_id_markers(text: str) -> str:
-    """去除 AI 可能残留的 [ID:n] 标记。"""
-    import re
-    return re.sub(r'\[ID:\d+\]\s*', '', text).strip()
+    """去除 AI 可能残留的 [ID:n] 标记（兼容全角冒号、大小写、多余空格）。"""
+    return re.sub(r'\[\s*ID\s*[:：]?\s*\d+\s*\]\s*', '', text, flags=re.IGNORECASE).strip()
 
 
 def _export_txt(results: list, output_path: str, include_corrected: bool,

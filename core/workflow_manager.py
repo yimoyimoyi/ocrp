@@ -11,12 +11,15 @@ from typing import Optional, List, Dict, Callable, Any
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from core.logger import get_logger
 from core.frame_processor import FrameProcessor
 from core.result_processor import export_results
 from ui.workers import (
     VideoProcessWorker, AICorrectionWorker, BatchCorrectionWorker,
     ImageProcessWorker, BatchProcessWorker, AudioProcessWorker,
 )
+
+logger = get_logger(__name__)
 
 
 class WorkflowManager(QObject):
@@ -141,10 +144,11 @@ class WorkflowManager(QObject):
         if not vp:
             self._show_error("提示", "请加载视频或图片文件。")
             return
-        print(f"[Workflow] ▶ 开始处理: {Path(vp).name}")
+        logger.info("开始处理: %s", Path(vp).name)
 
         mode_params = self._get_mode_params()
         mode = mode_params.get("process_mode", "OCR + ASR（完整流程）")
+        logger.info("处理模式: %s", mode)
         is_audio = self._get_is_audio_file()
 
         # 音频文件只能 ASR
@@ -310,17 +314,17 @@ class WorkflowManager(QObject):
 
         # 执行流程
         if do_asr and do_ocr:
-            print(f"[Workflow]    流程: ASR + OCR 串行")
+            logger.info("流程: ASR + OCR 串行")
             self._clear_results_by_type(asr_region_name, "whisperx")
             for r in regions:
                 self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
             self._start_asr_worker(vp)
         elif do_asr and not do_ocr:
-            print(f"[Workflow]    流程: 仅 ASR")
+            logger.info("流程: 仅 ASR")
             self._clear_results_by_type(asr_region_name, "whisperx")
             self._start_asr_worker(vp)
         elif not do_asr and do_ocr:
-            print(f"[Workflow]    流程: 仅 OCR")
+            logger.info("流程: 仅 OCR")
             for r in regions:
                 self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
             self._do_ocr_pass(vp)
@@ -496,7 +500,7 @@ class WorkflowManager(QObject):
 
     def stop_processing(self):
         """停止所有正在进行的处理（OCR / ASR / 纠错 / 批量）。"""
-        print(f"[Workflow] 停止处理")
+        logger.info("停止处理")
 
         # 视频帧处理器（sentinel / OCR 循环）
         if self._frame_processor:
@@ -517,7 +521,7 @@ class WorkflowManager(QObject):
                 else:
                     w.quit()
                     w.wait(3000)
-                print(f"[Workflow]   已停止 {name}")
+                logger.info("已停止: %s", name)
 
         # 单个 AI 纠错线程
         with self._correction_workers_lock:
@@ -535,7 +539,7 @@ class WorkflowManager(QObject):
 
     def pause_processing(self):
         """暂停当前处理（视频 OCR / 音频 ASR / 批量）。"""
-        print(f"[Workflow] 暂停")
+        logger.info("暂停处理")
         paused = False
         if self._frame_processor and hasattr(self._frame_processor, '_pause_flag'):
             self._frame_processor.pause()
@@ -559,7 +563,7 @@ class WorkflowManager(QObject):
 
     def resume_processing(self):
         """继续当前处理。"""
-        print(f"[Workflow] 继续")
+        logger.info("继续处理")
         resumed = False
         if self._frame_processor and hasattr(self._frame_processor, '_pause_flag'):
             self._frame_processor.resume()
@@ -590,7 +594,7 @@ class WorkflowManager(QObject):
         if not selected_rows:
             self._show_error("提示", "请先在表格中选中需要纠错的行（可多选）。")
             return
-        print(f"[Workflow] 批量纠错选中: {len(selected_rows)} 行")
+        logger.info("批量纠错选中: %d 行", len(selected_rows))
 
         # 构建选中行的 texts 列表（格式与 _build_correction_texts 一致）
         results = self._get_results()
@@ -824,7 +828,7 @@ class WorkflowManager(QObject):
         if not batch_files:
             self._show_error("提示", "批量队列为空，请先添加文件。")
             return
-        print(f"[Workflow] ▶ 批量处理: {len(batch_files)} 个文件")
+        logger.info("批量处理: %d 个文件", len(batch_files))
 
         regions = [r for r in self._get_regions() if r.get("enabled", True)]
         if not regions:
@@ -962,7 +966,7 @@ class WorkflowManager(QObject):
     def cleanup(self):
         """快速清理所有线程 —— 立即 terminate，不阻塞 UI 关闭。"""
         try:
-            print(f"[Workflow] 开始快速清理...")
+            logger.info("开始快速清理...")
         except UnicodeEncodeError:
             pass
 
@@ -1010,7 +1014,7 @@ class WorkflowManager(QObject):
                 if engine and hasattr(engine, '_stop_server'):
                     engine._stop_server()
             except Exception as e:
-                print(f"[Workflow]   ⚠ ASR 引擎关闭异常: {e}")
+                logger.warning("ASR 引擎关闭异常: %s", e)
 
         # ── 后台线程静默等待 terminate 完成 ──
         def _wait_workers():
@@ -1019,9 +1023,9 @@ class WorkflowManager(QObject):
                     w.wait(5000)  # 最长等 5 秒（后台，不影响 UI）
                 except Exception:
                     pass
-            print(f"[Workflow] ✅ 后台清理完成")
+            logger.info("后台清理完成")
 
         if workers:
             threading.Thread(target=_wait_workers, daemon=True).start()
 
-        print(f"[Workflow] ✅ 清理信号已发出")
+        logger.info("清理信号已发出")

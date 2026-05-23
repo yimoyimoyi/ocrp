@@ -5,29 +5,29 @@
   "last_engine": "paddleocr",
   "last_directory": "F:\\Downloads",
   "window_geometry": {
-    "x": 415,
-    "y": 121,
+    "x": 665,
+    "y": 137,
     "width": 1770,
     "height": 1102
   },
   "splitter_sizes": [
-    565,
-    381
+    557,
+    375
   ],
   "recent_videos": [
+    "F:/Downloads/羽毛笔挠痒地狱.mp4",
+    "F:/Downloads/芝士雪豹原版.mp4",
+    "F:/Downloads/@YY749649883736 😋😋😋😭😭😭.mp4",
+    "F:/Downloads/评剧电影《杨三姐告状》.wma",
+    "F:/Downloads/穿越之我是奥特老六.mp4",
+    "F:/Downloads/WHEN WILL YOU LEARN TO NOT CHALLENGE ME!!!!.mp4",
+    "F:/Downloads/116764878_p0_master1200.jpg",
     "F:/Downloads/I Fixed Every Bug in Minecraft.mp4",
     "F:/Downloads/latex_20260512_164452.png",
-    "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-08-17 204549.png",
-    "F:/Downloads/芝士雪豹原版.mp4",
-    "F:/Downloads/116764878_p0_master1200.jpg",
-    "F:/Downloads/WHEN WILL YOU LEARN TO NOT CHALLENGE ME!!!!.mp4",
-    "F:/Downloads/37749722223-1-192.mp4",
-    "F:/Downloads/你干嘛～哎哟～.m4a",
-    "F:/Downloads/关于“小嘴巴”和“接线员”的二三事 狐狸出洞了！ 选择跳跳猪挑战23分钟登顶记录中…… 依旧毒奶 于是此狐开始闭麦玩游戏 #胡夏 #直播 #游戏 #攀爬动物 #什么电话这么难打 - 抖音.mp3",
-    "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-09-15 195634.png"
+    "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-08-17 204549.png"
   ],
   "ai_correction_enabled": true,
-  "hw_accel": true,
+  "hw_accel": false,
   "mode_params": {
     "frame_interval": 1.0,
     "process_mode": "仅语音识别 (ASR)",
@@ -64,7 +64,7 @@
     "corr_summary_prompt": "",
     "corr_system_prompt": "",
     "corr_output_format": "",
-    "corr_translate": true,
+    "corr_translate": false,
     "corr_stream": true,
     "corr_json": true,
     "corr_preset": "默认 (llama.cpp)",
@@ -86,7 +86,7 @@
     "asr_vad_threshold": 0.5
   },
   "top_splitter_sizes": [
-    956,
-    802
+    954,
+    800
   ]
 }
