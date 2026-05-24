@@ -96,18 +96,19 @@ class TestTorchImport:
         )
         return r.returncode, r.stdout, r.stderr
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="torch DLL 隔离仅 Windows 需要")
     def test_torch_can_import_in_isolation(self):
         """torch 应能在独立进程中正常导入（无 PyQt5 干扰）。"""
         code = f"""
 import os, sys
 sys.path.insert(0, r'{BASE_DIR!s}')
-# Setup DLL paths like ocr_gui.py
-import importlib.util
-ts = importlib.util.find_spec("torch")
-if ts and ts.origin:
-    d = os.path.join(os.path.dirname(ts.origin), "lib")
-    if os.path.isdir(d):
-        os.add_dll_directory(d)
+if sys.platform == "win32":
+    import importlib.util
+    ts = importlib.util.find_spec("torch")
+    if ts and ts.origin:
+        d = os.path.join(os.path.dirname(ts.origin), "lib")
+        if os.path.isdir(d):
+            os.add_dll_directory(d)
 import torch
 print("torch", torch.__version__)
 print("CUDA", torch.cuda.is_available())
@@ -116,17 +117,19 @@ print("CUDA", torch.cuda.is_available())
         assert rc == 0, f"torch 导入失败 (exit {rc}):\n{err}"
         assert "torch" in out, f"torch 导入未输出版本:\n{out}"
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="CUDA DLL 检测仅 Windows 需要")
     def test_cuda_availability_consistent(self):
         """如果 torch/lib 包含 CUDA DLL，子进程中 cuda.is_available() 应为 True。"""
         code = f"""
 import os, sys
 sys.path.insert(0, r'{BASE_DIR!s}')
-import importlib.util
-ts = importlib.util.find_spec("torch")
-if ts and ts.origin:
-    d = os.path.join(os.path.dirname(ts.origin), "lib")
-    if os.path.isdir(d):
-        os.add_dll_directory(d)
+if sys.platform == "win32":
+    import importlib.util
+    ts = importlib.util.find_spec("torch")
+    if ts and ts.origin:
+        d = os.path.join(os.path.dirname(ts.origin), "lib")
+        if os.path.isdir(d):
+            os.add_dll_directory(d)
 import torch
 lib = os.path.join(os.path.dirname(torch.__file__), "lib")
 has_cuda = any(f.startswith("cudart") for f in os.listdir(lib)) if os.path.isdir(lib) else False
