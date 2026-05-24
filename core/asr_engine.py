@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 
 from core.logger import get_logger
@@ -444,7 +445,7 @@ class WhisperXEngine(BaseASREngine):
         return results, error[0]
 
     def transcribe_stream(self, audio_path: str,
-                          on_segment: callable | None = None,
+                          on_segment: Callable | None = None,
                           error_holder: list | None = None) -> None:
         """流式语音识别。每识别出一段就调用 on_segment({"start","end","text"})。
 

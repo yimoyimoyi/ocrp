@@ -30,7 +30,7 @@
   "hw_accel": true,
   "mode_params": {
     "frame_interval": 1.0,
-    "process_mode": "仅 OCR",
+    "process_mode": "仅语音识别 (ASR)",
     "sentinel_enabled": false,
     "subtitle_mode": "常规字幕（固定间隔）",
     "s_drop_ratio": 0.5,
