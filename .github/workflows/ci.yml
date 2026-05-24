@@ -38,7 +38,7 @@ jobs:
           sudo apt-get install -y -qq libegl1 libgl1 libxkbcommon0 xvfb
 
       - name: Install deps
-        run: uv sync --no-default-groups --group ci --group dev
+        run: uv sync --no-default-groups --extra ci --extra dev
 
       - name: Test (Linux)
         if: runner.os == 'Linux'
