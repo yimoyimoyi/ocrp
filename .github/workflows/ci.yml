@@ -14,26 +14,38 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - name: Install dev deps
-        run: uv tool install ruff --python 3.12
-      - name: Ruff check
-        run: ruff check --output-format=github .
-      - name: Ruff format check
-        run: ruff format --check --diff .
+      - name: Install deps
+        run: uv sync --only-group dev --no-default-groups
+      - name: Check
+        run: uv run ruff check --output-format=github .
+      - name: Format check
+        run: uv run ruff format --check --diff .
 
   test:
     needs: lint
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.12"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: uv sync --python 3.12
-      - name: Run tests
+          python-version: "3.12"
+
+      - name: Install system libs (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libgl1 libxkbcommon0 xvfb
+
+      - name: Install deps
+        run: uv sync --no-default-groups --group ci --group dev
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
+        run: uv run xvfb-run pytest tests/ -v --tb=short
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
         run: uv run pytest tests/ -v --tb=short

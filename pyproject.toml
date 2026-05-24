@@ -61,6 +61,16 @@ dev = [
     "pytest-qt>=4.4",
     "pre-commit>=3.7",
 ]
+# ── CI 最小环境（lint + test，不含 ML 库）──
+ci = [
+    "PyQt5>=5.15",
+    "opencv-python-headless>=4.9.0",
+    "numpy>=1.26.4,<3",
+    "pillow>=10.0",
+    "requests>=2.32",
+    "RapidFuzz>=3.0",
+    "typing_extensions>=4.8",
+]
 # ── 文档 ──
 docs = [
     "mkdocs>=1.6",
@@ -139,6 +149,9 @@ ignore = [
     "N803",   # 参数名大小写
     "N806",   # 局部变量大小写
     "UP007",  # X | Y 联合类型（保持 Optional 兼容）
+    "RUF001", # 全角字符在字符串中（中文项目需保留）
+    "RUF002", # 全角字符在文档字符串中
+    "RUF003", # 全角字符在注释中
 ]
 
 [tool.ruff.lint.isort]

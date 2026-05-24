@@ -8,21 +8,21 @@
 则直接调用引擎的 recognize() 对原图 ROI 重新识别。
 """
 
-import os
 import json
+import os
 import re
 import time
-import requests
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict, Callable
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
-
-BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CONFIG_DIR = BASE_DIR / "config"
+import requests
 
 from core.config_manager import _load_json_with_comments
 from core.logger import get_logger
+
+BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+CONFIG_DIR = BASE_DIR / "config"
 
 logger = get_logger(__name__)
 
