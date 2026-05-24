@@ -116,10 +116,17 @@ class ConfigManager:
         if self.settings_path.exists():
             try:
                 cfg = _load_json_with_comments(self.settings_path)
+                if not isinstance(cfg, dict):
+                    raise ValueError("settings.json 不是有效的对象")
                 self._migrate_mode_params(cfg)
-                return self._merge_defaults(cfg)
+                merged = self._merge_defaults(cfg)
+                # 如果加载的配置与默认值有显著差异（缺键或结构异常），重写文件
+                if set(cfg.keys()) - set(merged.keys()):
+                    self._save_settings(merged)
+                return merged
             except Exception as e:
-                print(f"加载设置失败: {e}", file=sys.stderr)
+                print(f"设置文件损坏，已恢复默认: {e}", file=sys.stderr)
+                self._save_settings(DEFAULT_SETTINGS)
                 return dict(DEFAULT_SETTINGS)
         else:
             self._save_settings(DEFAULT_SETTINGS)
