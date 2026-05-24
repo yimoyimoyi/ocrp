@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install dev deps
-        run: uv pip install --system ruff
+        run: uv tool install ruff --python 3.12
       - name: Ruff check
         run: ruff check --output-format=github .
       - name: Ruff format check
@@ -34,8 +34,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: |
-          uv pip install --system -e .
-          uv pip install --system pytest pytest-qt ruff
+        run: uv sync --python 3.12
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: uv run pytest tests/ -v --tb=short
