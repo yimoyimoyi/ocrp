@@ -6,8 +6,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-path = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = Path(path) if not path.endswith("style_loader.py") else Path(os.getcwd())
+BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STYLES_DIR = BASE_DIR / "styles"
 
 DEFAULT_DARK_QSS = """
@@ -97,50 +96,81 @@ QProgressBar::chunk { background-color: #2dd4bf; border-radius: 5px; }
 """
 
 DEFAULT_LIGHT_QSS = """
-QMainWindow, QDialog { background-color: #f5f5f5; color: #333333; }
-QLabel { color: #333333; }
-QWidget { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; font-size: 12px; }
-QPushButton { 
-    background-color: #ffffff; color: #333333; border: 1px solid #cccccc;
-    padding: 4px 12px; border-radius: 3px; min-height: 24px;
+QMainWindow, QDialog { background-color: #f6f8fa; color: #1f2328; }
+QLabel { color: #1f2328; background: transparent; }
+QWidget { font-family: "Microsoft YaHei", "Segoe UI", "Noto Sans SC", sans-serif; font-size: 13px; }
+QFrame { background: transparent; color: #1f2328; border: none; }
+QAbstractItemView { background-color: #ffffff; color: #1f2328; outline: none; }
+QAbstractScrollArea { background-color: #ffffff; }
+QMenu { background-color: #ffffff; color: #1f2328; border: 1px solid #c0c8d0; }
+QPushButton {
+    background-color: #f6f8fa; color: #1f2328; border: 1px solid #c0c8d0;
+    padding: 6px 16px; border-radius: 6px; min-height: 28px; font-weight: 500;
 }
-QPushButton:hover { background-color: #e8e8e8; }
-QPushButton:pressed { background-color: #d0d0d0; }
-QPushButton:disabled { color: #999999; }
+QPushButton:hover { background-color: #eaeef2; border-color: #afb8c1; }
+QPushButton:pressed { background-color: #c0c8d0; border-color: #0d9488; }
+QPushButton:disabled { color: #8c959f; background-color: #f6f8fa; border-color: #e1e4e8; }
+QPushButton:focus { border-color: #0d9488; }
 QLineEdit, QTextEdit, QPlainTextEdit {
-    background-color: #ffffff; color: #333333; border: 1px solid #cccccc;
-    padding: 4px; border-radius: 3px;
+    background-color: #ffffff; color: #1f2328; border: 1px solid #c0c8d0;
+    padding: 6px 8px; border-radius: 6px; selection-background-color: #0d948833;
 }
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus { border-color: #0d9488; }
 QTableWidget {
-    background-color: #ffffff; color: #333333; gridline-color: #cccccc;
-    border: 1px solid #cccccc; selection-background-color: #007acc;
+    background-color: #ffffff; color: #1f2328; gridline-color: #c0c8d0;
+    border: 1px solid #c0c8d0; alternate-background-color: #f6f8fa;
+    border-radius: 0; font-size: 15px;
+    selection-background-color: #0d948818; selection-color: #1f2328;
 }
 QHeaderView::section {
-    background-color: #e8e8e8; color: #333333; border: 1px solid #cccccc;
-    padding: 4px; font-weight: bold;
+    background-color: #f6f8fa; color: #1f2328; border: none;
+    border-bottom: 2px solid #0d9488; border-right: 1px solid #c0c8d0;
+    padding: 8px 10px; font-weight: 600; font-size: 13px;
 }
 QListWidget {
-    background-color: #ffffff; color: #333333; border: 1px solid #cccccc;
+    background-color: #ffffff; color: #1f2328; border: 1px solid #c0c8d0;
+    border-radius: 6px; outline: none;
+    selection-background-color: #0d948818; selection-color: #1f2328;
 }
-QListWidget::item:selected { background-color: #007acc; color: #ffffff; }
+QListWidget::item:selected { background-color: #0d948818; color: #1f2328; }
 QComboBox {
-    background-color: #ffffff; color: #333333; border: 1px solid #cccccc;
-    padding: 4px 8px; border-radius: 3px;
+    background-color: #f6f8fa; color: #1f2328; border: 1px solid #c0c8d0;
+    padding: 5px 12px; border-radius: 6px; min-height: 26px;
 }
-QTabWidget::pane { border: 1px solid #cccccc; background-color: #f5f5f5; }
+QComboBox:focus { border-color: #0d9488; }
+QComboBox QAbstractItemView {
+    background-color: #ffffff; color: #1f2328;
+    selection-background-color: #0d948818; selection-color: #1f2328;
+    border: 1px solid #c0c8d0; border-radius: 6px; padding: 2px;
+}
+QTabWidget::pane { border: 1px solid #c0c8d0; background-color: #f6f8fa; }
 QTabBar::tab {
-    background-color: #e8e8e8; color: #888888; padding: 6px 16px;
-    border: 1px solid #cccccc; border-bottom: none;
+    background-color: #f6f8fa; color: #656d76; padding: 8px 20px;
+    border: 1px solid #c0c8d0; border-bottom: none;
+    border-radius: 6px 6px 0 0; margin-right: 2px; font-weight: 500;
 }
-QTabBar::tab:selected { background-color: #f5f5f5; color: #333333; }
-QSplitter::handle { background-color: #cccccc; }
-QStatusBar { background-color: #007acc; color: #ffffff; }
-QGroupBox { color: #333333; border: 1px solid #cccccc; border-radius: 4px; }
-QCheckBox { color: #333333; }
+QTabBar::tab:selected { background-color: #ffffff; color: #1f2328; border-bottom: 2px solid #0d9488; }
+QTabBar::tab:hover { color: #1f2328; background-color: #0d948811; }
+QSplitter::handle { background-color: #c0c8d0; }
+QSplitter::handle:hover { background-color: #0d9488; }
+QGroupBox {
+    color: #1f2328; border: 1px solid #c0c8d0; border-radius: 8px;
+    margin-top: 16px; padding-top: 14px; font-weight: 600;
+}
+QGroupBox::title { subcontrol-origin: margin; left: 16px; padding: 0 8px; color: #0d9488; }
+QCheckBox { color: #1f2328; spacing: 8px; }
+QCheckBox::indicator:checked { border: 1.5px solid #0d9488; background-color: #0d9488; }
 QSpinBox, QDoubleSpinBox {
-    background-color: #ffffff; color: #333333; border: 1px solid #cccccc;
-    padding: 4px; border-radius: 3px;
+    background-color: #f6f8fa; color: #1f2328; border: 1px solid #c0c8d0;
+    padding: 5px 8px; border-radius: 6px;
 }
+QSpinBox:focus, QDoubleSpinBox:focus { border-color: #0d9488; }
+QStatusBar { background-color: #ffffff; color: #656d76; border-top: 1px solid #c0c8d0; padding: 2px 8px; font-size: 11px; }
+QProgressBar {
+    background-color: #e8ecf0; border: 1px solid #c0c8d0; border-radius: 6px;
+    text-align: center; color: #1f2328; font-size: 11px; font-weight: 600;
+}
+QProgressBar::chunk { background-color: #0d9488; border-radius: 5px; }
 """
 
 

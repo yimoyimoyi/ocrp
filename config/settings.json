@@ -5,26 +5,26 @@
   "last_engine": "paddleocr",
   "last_directory": "F:\\Downloads",
   "window_geometry": {
-    "x": 435,
-    "y": 131,
-    "width": 1910,
+    "x": 137,
+    "y": 141,
+    "width": 1738,
     "height": 1116
   },
   "splitter_sizes": [
-    582,
-    393
+    577,
+    369
   ],
   "recent_videos": [
+    "F:/Downloads/评剧电影《杨三姐告状》.wma",
+    "F:/Downloads/37749722223-1-192.mp4",
     "F:/Downloads/116764878_p0_master1200.jpg",
     "F:/Downloads/WHEN WILL YOU LEARN TO NOT CHALLENGE ME!!!!.mp4",
     "F:/Downloads/I Fixed Every Bug in Minecraft.mp4",
-    "F:/Downloads/37749722223-1-192.mp4",
     "F:/Downloads/你干嘛～哎哟～.m4a",
     "F:/Downloads/关于“小嘴巴”和“接线员”的二三事 狐狸出洞了！ 选择跳跳猪挑战23分钟登顶记录中…… 依旧毒奶 于是此狐开始闭麦玩游戏 #胡夏 #直播 #游戏 #攀爬动物 #什么电话这么难打 - 抖音.mp3",
     "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-08-17 204549.png",
     "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-09-15 195634.png",
-    "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-09-15 195244.png",
-    "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-08-15 004938.png"
+    "C:/Users/32559/Pictures/Screenshots/屏幕截图 2025-09-15 195244.png"
   ],
   "ai_correction_enabled": true,
   "hw_accel": true,
@@ -46,7 +46,7 @@
     "r_filter_keywords": "",
     "r_interval": 2.0,
     "subtitle_duration": 3.0,
-    "region_order": "区域1",
+    "region_order": "",
     "srt_export_mode": "仅纠正结果",
     "post_keep_longest": false,
     "post_sim_dedup": false,
@@ -72,7 +72,7 @@
     "asr_enabled": false,
     "asr_model_size": "models--Systran--faster-whisper-large-v3",
     "asr_model_path": "E:\\orcp\\models\\asr\\models--Systran--faster-whisper-large-v3",
-    "asr_language": "en",
+    "asr_language": "zh",
     "asr_vad": true,
     "asr_word_ts": true,
     "asr_region_name": "语音",
@@ -87,10 +87,10 @@
     "asr_vad_threshold": 0.5
   },
   "top_splitter_sizes": [
-    1091,
-    803
+    992,
+    730
   ],
   "window_maximized": false,
-  "config_panel_tab": 2,
+  "config_panel_tab": 5,
   "engine_dialog_geometry": "AdnQywADAAAAAAPlAAABpAAABekAAAPSAAAD5gAAAdEAAAXoAAAD0QAAAAAAAAAACgAAAAPmAAAB0QAABegAAAPR"
 }

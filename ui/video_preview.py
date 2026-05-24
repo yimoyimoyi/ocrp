@@ -9,12 +9,13 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QSizePolicy, QSlider, QPushButton,
     QApplication,
 )
-from PyQt5.QtCore import Qt, QObject, QPoint, pyqtSignal, QRect, QRectF
+from PyQt5.QtCore import Qt, QObject, QPoint, pyqtSignal, QRect, QRectF, QUrl
 from PyQt5.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QFont,
     QDragEnterEvent, QDropEvent, QMouseEvent, QResizeEvent,
     QKeyEvent,
 )
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -101,22 +102,17 @@ class _PreviewLabel(QLabel):
         painter.fillRect(0, 0, lw, lh, grad)
 
         if pix is None or pix.isNull():
-            # 占位文字 — 主标题 + 副标题（快捷键提示）
-            painter.setPen(self.palette().color(self.foregroundRole()))
+            # 占位文字 — 主标题居中 + 副标题底部（防播放栏遮挡）
+            painter.setPen(QColor(0x9a, 0xa0, 0xa6))
             painter.setFont(QFont("Microsoft YaHei", 14))
             lines = self._placeholder_text.split("\n")
-            # 主标题（前2行）
             main_text = "\n".join(lines[:2])
-            painter.drawText(QRect(0, 0, lw, lh - 40), Qt.AlignCenter | Qt.AlignBottom,
-                             main_text)
-            # 副标题（快捷键提示，更小更暗）
+            painter.drawText(QRect(0, 0, lw, lh - 56), Qt.AlignCenter, main_text)
             if len(lines) > 2:
                 painter.setFont(QFont("Microsoft YaHei", 10))
-                hint_color = self.palette().color(self.foregroundRole())
-                hint_color.setAlpha(120)
-                painter.setPen(hint_color)
+                painter.setPen(QColor(0x9a, 0xa0, 0xa6, 120))
                 hint_text = "\n".join(lines[2:])
-                painter.drawText(QRect(0, lh - 50, lw, 40), Qt.AlignCenter,
+                painter.drawText(QRect(0, lh - 60, lw, 50), Qt.AlignCenter,
                                  hint_text)
             painter.end()
             return
@@ -370,12 +366,13 @@ class VideoPreviewWidget(QWidget):
         self._drag_seek_timer.setInterval(80)  # 80ms 防抖
         self._drag_seek_timer.timeout.connect(self._on_drag_seek)
 
-        # 音频播放定时器（无视频帧时模拟播放进度）
+        # 音频播放（QMediaPlayer 提供真实音频输出）
+        self._audio_player: Optional[QMediaPlayer] = None
         self._audio_timer = QTimer()
-        self._audio_timer.setInterval(50)
+        self._audio_timer.setInterval(100)
         self._audio_timer.timeout.connect(self._on_audio_tick)
         self._audio_speed: float = 1.0
-        self._audio_speed_idx: int = 3  # SPEEDS[3] = 1.0x
+        self._audio_speed_idx: int = 3
 
     # ── 属性 ──
     @property
@@ -582,6 +579,8 @@ class VideoPreviewWidget(QWidget):
         if self._is_playing:
             if self._player:
                 self._player.pause()
+            if self._audio_player:
+                self._audio_player.pause()
             self._audio_timer.stop()
             self._is_playing = False
             self._btn_play.setText("▶")
@@ -591,16 +590,51 @@ class VideoPreviewWidget(QWidget):
             if self._player:
                 self._player.play(self._current_position)
             elif self._is_audio:
-                self._audio_timer.start()
+                self._start_audio_playback()
             self._is_playing = True
             self._btn_play.setText("⏸")
 
+    def _start_audio_playback(self):
+        """使用 QMediaPlayer 播放音频文件（真实音频输出）。"""
+        if self._audio_player is None:
+            self._audio_player = QMediaPlayer(self)
+            self._audio_player.positionChanged.connect(self._on_audio_position)
+            self._audio_player.durationChanged.connect(self._on_audio_duration)
+            self._audio_player.stateChanged.connect(self._on_audio_state)
+        url = QUrl.fromLocalFile(self._video_path)
+        self._audio_player.setMedia(QMediaContent(url))
+        self._audio_player.setPosition(int(self._current_position * 1000))
+        self._audio_player.play()
+
+    def _on_audio_position(self, ms: int):
+        """QMediaPlayer 位置更新 → 同步滑块。"""
+        if self._is_playing and not self._slider_dragging:
+            self._current_position = ms / 1000.0
+            self._set_slider(self._current_position)
+            self._update_preview_label()
+
+    def _on_audio_duration(self, ms: int):
+        """QMediaPlayer 时长回调。"""
+        dur = ms / 1000.0
+        if dur > 0:
+            self._video_duration = dur
+            self._preview_slider.setRange(0, max(1, int(dur * 100)))
+
+    def _on_audio_state(self, state):
+        """QMediaPlayer 播放结束。"""
+        if state == QMediaPlayer.StoppedState and self._is_playing:
+            self._is_playing = False
+            self._btn_play.setText("▶")
+            self._set_slider(self._video_duration)
+
     def _on_audio_tick(self):
-        """音频播放定时器：每 50ms 推进播放位置。"""
+        """保留作为后备（QMediaPlayer 不可用时）。"""
         if not self._is_playing or not self._is_audio:
             self._audio_timer.stop()
             return
-        self._current_position += 0.05 * self._audio_speed
+        if self._audio_player and self._audio_player.state() == QMediaPlayer.PlayingState:
+            return  # QMediaPlayer 驱动，无需 timer
+        self._current_position += 0.1 * self._audio_speed
         if self._current_position >= self._video_duration:
             self._current_position = 0.0
             self._audio_timer.stop()
@@ -613,6 +647,8 @@ class VideoPreviewWidget(QWidget):
         """停止播放并回到起点。"""
         if self._player:
             self._player.stop()
+        if self._audio_player:
+            self._audio_player.stop()
         self._audio_timer.stop()
         self._is_playing = False
         self._btn_play.setText("▶")
@@ -627,6 +663,8 @@ class VideoPreviewWidget(QWidget):
         self._current_position = new_pos
         if self._player and self._is_playing:
             self._player.seek(new_pos)
+        elif self._audio_player:
+            self._audio_player.setPosition(int(new_pos * 1000))
         elif not self._is_audio:
             self.seek_to(new_pos)
         self._update_preview_label()
@@ -638,6 +676,8 @@ class VideoPreviewWidget(QWidget):
             spd = self._player.cycle_speed()
         elif self._is_audio:
             spd = self._cycle_audio_speed()
+            if self._audio_player:
+                self._audio_player.setPlaybackRate(spd)
         else:
             return
         self._btn_speed.setText(f"{spd:g}x")

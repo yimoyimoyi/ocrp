@@ -430,7 +430,9 @@ class MainWindow(QMainWindow):
         self._top_splitter.addWidget(left)
 
         # 右：区域管理器（紧凑）+ 快速模板选择
-        right = QWidget()
+        right = QFrame()
+        right.setObjectName("rightPanel")
+        right.setFrameShape(QFrame.NoFrame)
         rl = QVBoxLayout(right); rl.setContentsMargins(0, 0, 0, 0); rl.setSpacing(4)
         self._region_manager = RegionManagerWidget()
         self._region_manager.region_selected.connect(self._on_region_selected)
@@ -1266,7 +1268,7 @@ class MainWindow(QMainWindow):
             self._status_label.setText("⚠ 无匹配关键词的结果")
 
     def _on_result_cell_edit(self, row: int):
-        """点击/编辑表格行后跳转到对应时间并渲染帧。"""
+        """点击/编辑表格行后跳转到对应时间。"""
         results = self._result_table.get_results()
         if row < 0 or row >= len(results):
             return
@@ -1276,13 +1278,18 @@ class MainWindow(QMainWindow):
         # 图片禁止跳转
         if vp.is_image:
             return
-        # 音频跳到开始处
-        if self._is_audio_file():
-            ts = 0.0
-        # 停止播放（通过公开方法）
-        vp._on_stop_playback()
         # 跳转并渲染帧
-        vp.seek_to(ts)
+        if self._is_audio_file():
+            # 音频：停止播放 → 设置位置 → 更新 UI
+            vp._on_stop_playback()
+            vp._current_position = ts
+            vp._set_slider(ts)
+            vp._update_preview_label()
+            if vp._audio_player:
+                vp._audio_player.setPosition(int(ts * 1000))
+        else:
+            vp._on_stop_playback()
+            vp.seek_to(ts)
         self._status_label.setText(f"已跳转到 {r.get('time', '--:--')}")
 
     def _on_prompt_changed(self, p):
@@ -1319,6 +1326,10 @@ class MainWindow(QMainWindow):
         cfg["temperature"] = params.get("asr_temperature", cfg.get("temperature", "0.0,0.2,0.4,0.6,0.8,1.0"))
         cfg["hotwords"] = params.get("asr_hotwords", cfg.get("hotwords", ""))
         self._asr_mgr.reload_config()
+        # 同步到活动中引擎（不重启子进程）
+        eng = self._asr_mgr.get_engine()
+        if eng and hasattr(eng, 'sync_params_from_config'):
+            eng.sync_params_from_config(cfg)
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)

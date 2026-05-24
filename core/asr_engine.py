@@ -170,6 +170,21 @@ class WhisperXEngine(BaseASREngine):
             self._model_size = model_path_or_size
             self._stop_server()
 
+    def sync_params_from_config(self, config: dict):
+        """从配置同步运行时参数（无需重启子进程）。"""
+        self._language = config.get("language", self._language)
+        self._beam_size = config.get("beam_size", self._beam_size)
+        self._initial_prompt = config.get("initial_prompt", "") or None
+        self._condition_on_prev = config.get("condition_on_previous_text", self._condition_on_prev)
+        self._no_speech_thresh = config.get("no_speech_threshold", self._no_speech_thresh)
+        self._comp_ratio_thresh = config.get("compression_ratio_threshold", self._comp_ratio_thresh)
+        self._temperature_str = config.get("temperature", self._temperature_str)
+        self._hotwords = config.get("hotwords", "") or None
+        self._vad_enabled = config.get("vad_enabled", self._vad_enabled)
+        self._vad_min_silence = config.get("vad_min_silence_ms", self._vad_min_silence)
+        self._vad_threshold = config.get("vad_threshold", self._vad_threshold)
+        self._word_timestamps = config.get("word_timestamps", self._word_timestamps)
+
     def set_hw_accel(self, e: bool):
         self._hw_accel = e
         self._device = "cuda" if e else "cpu"

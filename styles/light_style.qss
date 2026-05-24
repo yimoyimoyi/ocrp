@@ -174,7 +174,7 @@ QPushButton#btnSpeed { background-color: #0d948822; color: #0d9488; border: 1px 
 QPushButton#btnSpeed:hover { background-color: #0d948833; border-color: #0d9488; }
 
 /* ── Labels ── */
-QLabel#videoLabel { border: 1px solid #c0c8d0; border-radius: 12px; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f8fafc, stop:1 #f0f2f5); color: #8c959f; font-size: 14px; padding: 2px; }
+QLabel#videoLabel { border: 1px solid #c0c8d0; border-radius: 12px; background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f8fafc, stop:1 #f0f2f5); color: #8c959f; font-size: 14px; padding: 20px 12px 28px 12px; }
 QLabel#regionTitle { font-weight: bold; font-size: 13px; color: #0d9488; }
 QLabel#resultTitle { font-weight: bold; font-size: 14px; color: #0d9488; }
 QLabel#engineStatus { color: #656d76; }
@@ -235,3 +235,6 @@ QLabel#hintLabel { color: #656d76; font-size: 11px; padding: 6px 8px; background
 
 /* ── Play Bar Widget ── */
 QWidget#playBarWidget { background-color: #ffffff; border-top: 1px solid #c0c8d0; }
+
+/* ── Right Panel ── */
+QFrame#rightPanel { background-color: #f6f8fa; }

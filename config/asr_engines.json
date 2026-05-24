@@ -3,7 +3,7 @@
   "engine": "whisperx",
   "model_size": "models--Systran--faster-whisper-large-v3",
   "model_dir": "models/asr",
-  "language": "en",
+  "language": "zh",
   "device": "cuda",
   "compute_type": "float16",
   "batch_size": 16,
