@@ -1,7 +1,5 @@
-# -*- coding: utf-8 -*-
 """结果处理器单元测试。"""
 
-import pytest
 
 
 class TestFormatTime:

@@ -1,15 +1,26 @@
-# -*- coding: utf-8 -*-
 """区域管理面板 —— 区域列表 + 滑动属性编辑器。"""
 
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QListWidgetItem,
-    QComboBox, QLineEdit, QTextEdit, QSpinBox, QCheckBox, QMessageBox,
-    QGridLayout, QSizePolicy, QScrollArea, QFrame,
-)
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
-from typing import List
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class RegionManagerWidget(QWidget):
@@ -30,10 +41,10 @@ class RegionManagerWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._regions: List[dict] = []
+        self._regions: list[dict] = []
         self._current_index: int = -1
-        self._engine_names: List[str] = ["paddleocr"]
-        self._template_names: List[str] = ["通用OCR"]
+        self._engine_names: list[str] = ["paddleocr"]
+        self._template_names: list[str] = ["通用OCR"]
         self._init_ui()
 
     @property
@@ -45,12 +56,12 @@ class RegionManagerWidget(QWidget):
         self._regions = list(val)
         self._refresh_list()
 
-    def set_engine_names(self, names: List[str]):
+    def set_engine_names(self, names: list[str]):
         self._engine_names = list(names)
         self._engine_combo.clear()
         self._engine_combo.addItems(self._engine_names)
 
-    def set_template_names(self, names: List[str]):
+    def set_template_names(self, names: list[str]):
         self._template_names = list(names)
         self._template_combo.clear()
         self._template_combo.addItems(self._template_names)

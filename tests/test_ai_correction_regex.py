@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 """AI 纠错正则和解析容错测试。"""
 
 import re
-import pytest
 
 # 直接定义从 ai_correction.py 提取的正则和函数，避免触发 torch DLL 导入链
 # 这些正则与 core/ai_correction.py 中的定义保持同步

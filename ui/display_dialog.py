@@ -1,12 +1,16 @@
-# -*- coding: utf-8 -*-
 """显示设置对话框 —— 主题 / 字体大小 / UI 缩放"""
 
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFormLayout, QComboBox, QSpinBox, QDoubleSpinBox,
-    QDialogButtonBox, QWidget,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
 )
-from PyQt5.QtCore import Qt
 
 
 class DisplayDialog(QDialog):

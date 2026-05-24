@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
 """提示词模板管理器单元测试。"""
 
 import json
-from pathlib import Path
 
 
 class TestPromptTemplateManager:
@@ -10,8 +8,8 @@ class TestPromptTemplateManager:
 
     def test_reload_from_file(self, tmp_path):
         """测试从模板文件重新加载。"""
-        from core.prompt_manager import PromptTemplateManager
         import core.prompt_manager as pm
+        from core.prompt_manager import PromptTemplateManager
 
         data = {
             "templates": [

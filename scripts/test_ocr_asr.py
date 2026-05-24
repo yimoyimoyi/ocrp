@@ -1,10 +1,12 @@
-# -*- coding: utf-8 -*-
 """串行测试：先 ASR (faster-whisper + GPU)，再 OCR"""
-import os, sys, time
+import os
+import sys
+import time
 
 # ── DLL 搜索路径注册 + 显式预加载 ──
 if sys.platform == "win32":
-    import importlib.util, ctypes
+    import ctypes
+    import importlib.util
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     try:
@@ -93,8 +95,8 @@ except Exception: pass
 print()
 print("=" * 60)
 print("[OCR] PaddleOCR ...")
-from core.ocr_engine import OCREngineManager as OCRMgr
 from core.ffmpeg_reader import FFmpegReader
+from core.ocr_engine import OCREngineManager as OCRMgr
 
 ocr = OCRMgr()
 e = ocr.get_engine("paddleocr")

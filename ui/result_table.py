@@ -1,14 +1,25 @@
-# -*- coding: utf-8 -*-
 """结果表格组件 —— QTableWidget + 持久化 cell widget，编辑前后视觉完全一致。"""
 
+
+from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QFont, QKeyEvent, QPalette
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton,
-    QTableWidget, QHeaderView, QAbstractItemView,
-    QFileDialog, QMessageBox, QSizePolicy, QLineEdit, QFrame, QTextEdit,
+    QAbstractItemView,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QTableWidget,
+    QTextEdit,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QEvent, QRect
-from PyQt5.QtGui import QColor, QKeyEvent, QFont, QPalette
-from typing import List
 
 from core.i18n import _
 from core.logger import get_logger
@@ -151,9 +162,9 @@ class ResultTableWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._results: List[dict] = []
+        self._results: list[dict] = []
         self._is_templated = False
-        self._search_matches: List[int] = []
+        self._search_matches: list[int] = []
         self._search_current_idx = -1
         self._init_ui()
         self._table.installEventFilter(self)
@@ -514,7 +525,7 @@ class ResultTableWidget(QWidget):
         if not self._results:
             QMessageBox.information(self, _("提示"), _("暂无识别结果可导出。"))
             return
-        file_path, _ = QFileDialog.getSaveFileName(
+        file_path, _filter = QFileDialog.getSaveFileName(
             self, f"导出为 {fmt.upper()}", "",
             f"{fmt.upper()} Files (*.{fmt});;All Files (*.*)")
         if file_path:
@@ -542,14 +553,14 @@ class ResultTableWidget(QWidget):
             self._search_edit.setFocus()
             self._search_edit.selectAll()
 
-    def _find_all_matches(self, keyword: str) -> List[int]:
+    def _find_all_matches(self, keyword: str) -> list[int]:
         if not keyword.strip():
             return []
         kw = keyword.lower()
         return [i for i, r in enumerate(self._results)
                 if kw in r.get("raw", "").lower() or kw in r.get("corrected", "").lower()]
 
-    def _highlight_rows(self, matches: List[int], current: int = -1):
+    def _highlight_rows(self, matches: list[int], current: int = -1):
         from PyQt5.QtGui import QPalette
         match_set = set(matches)
         _MATCH = QColor(45, 160, 60, 60)

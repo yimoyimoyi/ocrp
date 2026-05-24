@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """pre-commit 检查：防止 DLL/GPU 导入相关的已知回归问题。
 
 检查项:
@@ -8,10 +7,9 @@
   3. .bat 文件必须是纯 ASCII（无多字节 UTF-8 字符）
 """
 
+import ast
 import os
 import sys
-import ast
-import re
 from pathlib import Path
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -44,15 +42,13 @@ def check_torch_before_pyqt():
             if node.module and node.module.startswith("PyQt5"):
                 pyqt_line = node.lineno
     if torch_line and pyqt_line and torch_line < pyqt_line:
-        ok("ocr_gui.py: import torch (L{}) < PyQt5 import (L{})".format(
-            torch_line, pyqt_line))
+        ok(f"ocr_gui.py: import torch (L{torch_line}) < PyQt5 import (L{pyqt_line})")
     elif not torch_line:
         fail("ocr_gui.py: 缺少 'import torch' 预加载")
     elif not pyqt_line:
         ok("ocr_gui.py: 未检测到 PyQt5 import（可能已被重构）")
     else:
-        fail("ocr_gui.py: import torch (L{}) 必须在 PyQt5 import (L{}) 之前".format(
-            torch_line, pyqt_line))
+        fail(f"ocr_gui.py: import torch (L{torch_line}) 必须在 PyQt5 import (L{pyqt_line}) 之前")
 
 
 # ── 2) ui/*.py: no QTimer.singleShot inside threading.Thread ──
@@ -88,8 +84,7 @@ def check_no_qtimer_in_thread(filepath: Path):
                     f = sub.func
                     if (isinstance(f, ast.Attribute) and f.attr == "singleShot" and
                             isinstance(f.value, ast.Name) and f.value.id == "QTimer"):
-                        fail("{}:{} '{}' 函数在 threading.Thread 中使用 QTimer.singleShot（应改用 pyqtSignal）".format(
-                            filepath.name, sub.lineno, node.name))
+                        fail(f"{filepath.name}:{sub.lineno} '{node.name}' 函数在 threading.Thread 中使用 QTimer.singleShot（应改用 pyqtSignal）")
                         return
 
 
@@ -109,10 +104,9 @@ def check_bat_ascii(filepath: Path):
     for i, byte in enumerate(data):
         if byte > 127 and byte not in (0x0D, 0x0A):  # skip CR, LF
             line = data[:i].count(b"\n") + 1
-            fail("{}:L{} 包含非 ASCII 字节 0x{:02X}（批处理必须为纯 ASCII）".format(
-                filepath.name, line, byte))
+            fail(f"{filepath.name}:L{line} 包含非 ASCII 字节 0x{byte:02X}（批处理必须为纯 ASCII）")
             return
-    ok("{}: 纯 ASCII".format(filepath.name))
+    ok(f"{filepath.name}: 纯 ASCII")
 
 
 def check_all_bat_files():

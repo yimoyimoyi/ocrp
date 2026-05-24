@@ -1,16 +1,15 @@
-# -*- coding: utf-8 -*-
 """配置 Schema 验证器 —— 在加载 JSON 配置时校验结构和类型。"""
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def _validate_type(value: Any, expected: str, path: str) -> Optional[str]:
+def _validate_type(value: Any, expected: str, path: str) -> str | None:
     """验证值的类型，返回错误信息或 None。"""
     type_map = {
         "str": str, "int": int, "float": float, "bool": bool,
@@ -23,7 +22,7 @@ def _validate_type(value: Any, expected: str, path: str) -> Optional[str]:
     return None
 
 
-def _validate_value(value: Any, rule: dict, path: str) -> List[str]:
+def _validate_value(value: Any, rule: dict, path: str) -> list[str]:
     """验证单个值是否符合规则，返回错误列表。"""
     errors = []
 
@@ -52,7 +51,7 @@ def _validate_value(value: Any, rule: dict, path: str) -> List[str]:
     return errors
 
 
-def validate_config(data: dict, schema: dict, name: str = "") -> Tuple[bool, List[str]]:
+def validate_config(data: dict, schema: dict, name: str = "") -> tuple[bool, list[str]]:
     """根据 schema 验证配置数据。
 
     Args:
@@ -127,7 +126,7 @@ def validate_config_file(path: Path, schema: dict) -> dict:
     import json
     name = path.name if isinstance(path, Path) else str(path)
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         logger.warning("无法加载配置文件 %s: %s", name, e)

@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """提示词模板管理器 —— 加载、查询、增删改、导入导出 prompt_templates.json。"""
 
-import os
 import json
+import os
 from pathlib import Path
-from typing import List, Optional
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
@@ -45,7 +43,7 @@ class PromptTemplateManager:
     CATEGORY_TRANSLATION = "translation"
 
     def __init__(self):
-        self._templates: List[dict] = []
+        self._templates: list[dict] = []
         self.reload()
 
     def reload(self):
@@ -66,26 +64,26 @@ class PromptTemplateManager:
             logger.warning("提示词模板文件不存在: %s", path)
             self._templates = []
 
-    def get_all_templates(self) -> List[dict]:
+    def get_all_templates(self) -> list[dict]:
         """获取全部模板。"""
         return list(self._templates)
 
-    def get_template_names(self) -> List[str]:
+    def get_template_names(self) -> list[str]:
         """获取全部模板名称。"""
         return [t.get("name", "未命名") for t in self._templates]
 
-    def get_templates_by_category(self, category: str) -> List[dict]:
+    def get_templates_by_category(self, category: str) -> list[dict]:
         """按分类获取模板列表。"""
         return [dict(t) for t in self._templates if t.get("category") == category]
 
-    def get_template_by_name(self, name: str) -> Optional[dict]:
+    def get_template_by_name(self, name: str) -> dict | None:
         """按名称查找模板。"""
         for t in self._templates:
             if t.get("name") == name:
                 return dict(t)
         return None
 
-    def get_template_by_index(self, index: int) -> Optional[dict]:
+    def get_template_by_index(self, index: int) -> dict | None:
         """按索引查找模板。"""
         if 0 <= index < len(self._templates):
             return dict(self._templates[index])
@@ -96,7 +94,7 @@ class PromptTemplateManager:
         t = self.get_template_by_name(name)
         return t.get("prompt", "") if t else ""
 
-    def find_templates_for_region(self, region_type: str) -> List[dict]:
+    def find_templates_for_region(self, region_type: str) -> list[dict]:
         """查找适用于指定区域类型的模板。"""
         result = []
         for t in self._templates:
@@ -137,7 +135,7 @@ class PromptTemplateManager:
     def import_templates(self, filepath: str) -> int:
         """从 JSON 文件导入模板。返回导入数量。"""
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(filepath, encoding="utf-8") as f:
                 data = json.load(f)
             imported = data.get("templates", []) if isinstance(data, dict) else data
             if not isinstance(imported, list):

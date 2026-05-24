@@ -1,15 +1,15 @@
-# -*- coding: utf-8 -*-
 """GPU 环境 / 导入链完整性测试 —— 防止 DLL 回归。
 
 注意: import torch 测试需要在 ocr_gui.py 的 DLL 搜索路径设置之后才能成功。
       pytest 直接运行不会执行 ocr_gui.py 的 DLL 初始化，因此需要手动设置。
 """
 
-import os
 import ast
+import os
 import sys
-import pytest
 from pathlib import Path
+
+import pytest
 
 BASE_DIR = Path(__file__).parent.parent
 
@@ -98,9 +98,9 @@ class TestTorchImport:
 
     def test_torch_can_import_in_isolation(self):
         """torch 应能在独立进程中正常导入（无 PyQt5 干扰）。"""
-        code = """
+        code = f"""
 import os, sys
-sys.path.insert(0, r'{base}')
+sys.path.insert(0, r'{BASE_DIR!s}')
 # Setup DLL paths like ocr_gui.py
 import importlib.util
 ts = importlib.util.find_spec("torch")
@@ -111,16 +111,16 @@ if ts and ts.origin:
 import torch
 print("torch", torch.__version__)
 print("CUDA", torch.cuda.is_available())
-""".format(base=str(BASE_DIR))
+"""
         rc, out, err = self._run_subprocess(code)
         assert rc == 0, f"torch 导入失败 (exit {rc}):\n{err}"
         assert "torch" in out, f"torch 导入未输出版本:\n{out}"
 
     def test_cuda_availability_consistent(self):
         """如果 torch/lib 包含 CUDA DLL，子进程中 cuda.is_available() 应为 True。"""
-        code = """
+        code = f"""
 import os, sys
-sys.path.insert(0, r'{base}')
+sys.path.insert(0, r'{BASE_DIR!s}')
 import importlib.util
 ts = importlib.util.find_spec("torch")
 if ts and ts.origin:
@@ -134,7 +134,7 @@ cuda_ok = torch.cuda.is_available()
 if has_cuda and not cuda_ok:
     raise SystemExit("torch/lib has CUDA DLLs but cuda.is_available()=False")
 print("OK")
-""".format(base=str(BASE_DIR))
+"""
         rc, out, err = self._run_subprocess(code)
         assert rc == 0, f"CUDA 一致性检查失败 (exit {rc}):\n{err}\n{out}"
 
@@ -219,16 +219,12 @@ class TestImportChain:
 
     def test_core_imports_work(self):
         """所有 core 模块应能正常导入。"""
-        from core.logger import get_logger
-        from core.i18n import _
-        from core.utils import find_ffmpeg, MODE_OCR_ONLY
-        from core.filter_manager import FilterManager
-        from core.prompt_manager import PromptTemplateManager
+        from core.utils import MODE_OCR_ONLY, find_ffmpeg
         assert find_ffmpeg and MODE_OCR_ONLY
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows DLL 检查")
     def test_ocr_engine_imports_on_windows(self):
         """PaddleOCR 引擎模块应能导入（DLL 搜索路径已设置）。"""
-        from core.ocr_engine import OCREngineManager, PaddleOCREngine
+        from core.ocr_engine import OCREngineManager
         mgr = OCREngineManager()
         assert "paddleocr" in mgr.get_engine_names()

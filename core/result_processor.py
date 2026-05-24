@@ -1,14 +1,13 @@
-# -*- coding: utf-8 -*-
 """结果后处理器 —— 保留 run_ocr.py 的 polish_and_save 去重 + 后处理逻辑。"""
 
-import re
-import json
 import csv
 import difflib
-from typing import List, Dict, Any, Optional
+import json
+import re
+from typing import Any
 
 # ── 默认过滤规则（可由 filters.json 的 garbage_patterns 覆盖） ──
-_DEFAULT_GARBAGE: List[str] = []
+_DEFAULT_GARBAGE: list[str] = []
 
 GARBAGE_PATTERN = re.compile(r"^(\d+|剩余回合|剩餘回合|回合|[\.\-0-9]+)$")
 
@@ -21,7 +20,7 @@ def polish_results(raw_results: list, post_keep_longest: bool = False,
                    post_sim_dedup: bool = True,
                    post_sim_threshold: float = 0.9,
                    post_min_text_len: int = 2,
-                   garbage_patterns: Optional[List[str]] = None) -> list:
+                   garbage_patterns: list[str] | None = None) -> list:
     if not raw_results:
         return []
 
@@ -45,7 +44,7 @@ def polish_results(raw_results: list, post_keep_longest: bool = False,
             "content": clean_content, "raw": raw_text
         })
 
-    region_groups: Dict[str, list] = {}
+    region_groups: dict[str, list] = {}
     for cur in parsed:
         rname = cur["region"]
         if rname not in region_groups:
@@ -102,7 +101,7 @@ def sort_results_by_order(results: list, order_text: str) -> list:
             continue
         template_lines.append(line)
 
-    time_groups: Dict[float, Dict[str, Any]] = {}
+    time_groups: dict[float, dict[str, Any]] = {}
     for r in results:
         ts = r.get("time_sec", 0.0) or 0.0
         ts_key = round(ts, 1)
@@ -159,7 +158,7 @@ def _fmt_srt_time(total_seconds: float) -> str:
 
 
 def _export_srt(results: list, output_path: str, include_corrected: bool,
-                corrected_map: Dict[int, str], keep_original: bool = False,
+                corrected_map: dict[int, str], keep_original: bool = False,
                 srt_mode: str = "corrected"):
     """导出为 SRT 字幕格式。
 
@@ -207,7 +206,7 @@ def export_results(
     output_path: str,
     fmt: str = "txt",
     include_corrected: bool = False,
-    corrected_map: Optional[Dict[int, str]] = None,
+    corrected_map: dict[int, str] | None = None,
     keep_original: bool = False,
     srt_mode: str = "corrected",
 ):
@@ -243,7 +242,7 @@ def _clean_id_markers(text: str) -> str:
 
 
 def _export_txt(results: list, output_path: str, include_corrected: bool,
-                corrected_map: Dict[int, str], keep_original: bool = False):
+                corrected_map: dict[int, str], keep_original: bool = False):
     seen = set()
     with open(output_path, "w", encoding="utf-8") as f:
         for i, item in enumerate(results):
@@ -267,7 +266,7 @@ def _export_txt(results: list, output_path: str, include_corrected: bool,
 
 
 def _export_json(results: list, output_path: str, include_corrected: bool,
-                 corrected_map: Dict[int, str], keep_original: bool = False):
+                 corrected_map: dict[int, str], keep_original: bool = False):
     data = []
     for i, item in enumerate(results):
         raw = item.get("raw", "").strip()
@@ -293,7 +292,7 @@ def _export_json(results: list, output_path: str, include_corrected: bool,
 
 
 def _export_csv(results: list, output_path: str, include_corrected: bool,
-                corrected_map: Dict[int, str], keep_original: bool = False):
+                corrected_map: dict[int, str], keep_original: bool = False):
     fieldnames = ["timestamp", "region", "engine", "speaker", "content", "raw"]
     if include_corrected:
         fieldnames.append("corrected")

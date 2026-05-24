@@ -1,14 +1,12 @@
-# -*- coding: utf-8 -*-
 """QThread 工作线程 —— OCR 处理、AI 纠错、视频处理、批量处理。"""
 
-import traceback
 import threading
+import traceback
 from pathlib import Path
+
 import cv2
 import numpy as np
-
-from PyQt5.QtCore import QThread, pyqtSignal, QObject
-from typing import Optional
+from PyQt5.QtCore import QObject, QThread, pyqtSignal
 
 from core.logger import get_logger
 
@@ -75,8 +73,8 @@ class AICorrectionWorker(QThread):
     correction_stream = pyqtSignal(int, str)  # row, partial_text (流式增量更新)
 
     def __init__(self, corrector, result_index: int, raw_text: str,
-                 context_texts: Optional[list] = None,
-                 image: Optional[np.ndarray] = None,
+                 context_texts: list | None = None,
+                 image: np.ndarray | None = None,
                  region_correction_prompt: str = ""):
         super().__init__()
         self._corrector = corrector
@@ -164,9 +162,7 @@ class BatchCorrectionWorker(QThread):
                 self.batch_finished.emit()
                 return
 
-            # 构建流式回调
-            stream_mode = getattr(self._corrector, 'stream_mode', False)
-            stream_cb = None if not stream_mode else None  # 批量流式暂不输出到表格
+            stream_cb = None  # 批量流式暂不输出到表格
 
             # 调用批量纠错
             corrected_map = self._corrector.correct_batch(
@@ -341,8 +337,9 @@ class AudioProcessWorker(QThread):
                 return
 
             self.progress.emit("正在提取音频...")
-            from core.asr_engine import extract_audio_from_video, convert_to_wav
             import os
+
+            from core.asr_engine import convert_to_wav, extract_audio_from_video
 
             if self._is_video:
                 audio_path = extract_audio_from_video(
@@ -476,8 +473,9 @@ class BatchProcessWorker(QThread):
 
     def _process_one_file(self, file_path: str) -> list:
         """处理单个文件（视频或图片），返回结果列表。"""
-        from core.frame_processor import FrameProcessor, format_time
         from pathlib import Path
+
+        from core.frame_processor import FrameProcessor, format_time
 
         ext = Path(file_path).suffix.lower()
         results = []
@@ -560,7 +558,8 @@ class BatchProcessWorker(QThread):
     def _auto_export(self, file_path: str, results: list):
         """自动将结果导出到 output 目录。"""
         from pathlib import Path
-        from core.result_processor import polish_results, export_results
+
+        from core.result_processor import export_results, polish_results
 
         output_dir = Path(self._output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)

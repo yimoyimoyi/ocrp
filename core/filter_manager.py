@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """关键词过滤器管理器 —— 包含指定关键词的结果将被自动过滤。"""
 
-import os
 import json
+import os
 from pathlib import Path
-from typing import List
 
 from core.logger import get_logger
 
@@ -19,15 +17,15 @@ class FilterManager:
     """管理过滤关键词的增删查。"""
 
     def __init__(self):
-        self._keywords: List[str] = []
-        self._garbage_patterns: List[str] = []
+        self._keywords: list[str] = []
+        self._garbage_patterns: list[str] = []
         self.reload()
 
     def reload(self):
         """重新加载过滤器配置。"""
         if FILTERS_PATH.exists():
             try:
-                with open(FILTERS_PATH, "r", encoding="utf-8") as f:
+                with open(FILTERS_PATH, encoding="utf-8") as f:
                     data = json.load(f)
                 from core.config_schema import validate_config
                 from core.config_schemas import FILTERS_SCHEMA
@@ -42,11 +40,11 @@ class FilterManager:
             self._keywords = []
             self._garbage_patterns = []
 
-    def get_garbage_patterns(self) -> List[str]:
+    def get_garbage_patterns(self) -> list[str]:
         """获取垃圾文本过滤模式列表。"""
         return list(self._garbage_patterns)
 
-    def get_keywords(self) -> List[str]:
+    def get_keywords(self) -> list[str]:
         """获取所有过滤关键词。"""
         return list(self._keywords)
 

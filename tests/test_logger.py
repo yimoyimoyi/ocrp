@@ -1,12 +1,9 @@
-# -*- coding: utf-8 -*-
 """日志模块单元测试。"""
 
 import importlib.util
 import logging
 import sys
 from pathlib import Path
-
-import pytest
 
 # 直接加载 logger 模块文件，避免触发 core/__init__.py（会加载 torch）
 _ROOT = Path(__file__).resolve().parent.parent

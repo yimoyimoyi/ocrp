@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """OCR 子进程服务器 —— 独立进程空间，隔离 PaddleOCR DLL 环境，避免与 torch CUDA 冲突。
 
 协议（stdin/stdout JSON 行）：
@@ -14,12 +13,10 @@
   python core/ocr_server.py --config config/ocr_engines.json
 """
 
-import sys
-import os
-import json
 import base64
-import io
-import traceback
+import json
+import os
+import sys
 
 # ── 路径设置 ──
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -32,7 +29,6 @@ os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 # ── DLL 路径注册（独立于主进程）──
 if sys.platform == "win32":
     import importlib.util
-    import ctypes
 
     # torch/lib/ — torch 自带 CUDA 运行时
     try:

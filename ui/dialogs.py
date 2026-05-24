@@ -1,17 +1,27 @@
-# -*- coding: utf-8 -*-
 """对话框组件 —— 引擎配置、API 预设管理等。"""
 
-from typing import List
 
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QLabel, QLineEdit, QComboBox, QCheckBox, QPushButton, QSpinBox,
-    QDialogButtonBox, QListWidget, QMessageBox, QSizePolicy,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QSpinBox,
+    QVBoxLayout,
 )
-from PyQt5.QtCore import Qt, QObject, pyqtSignal
 
-from core.logger import get_logger
 from core.i18n import _
+from core.logger import get_logger
 from core.utils import fetch_models_from_url, populate_model_combo
 
 logger = get_logger(__name__)
@@ -180,7 +190,7 @@ class EngineConfigDialog(QDialog):
     def get_config(self) -> dict:
         return dict(self._result)
 
-    def set_models(self, models: List[str]):
+    def set_models(self, models: list[str]):
         populate_model_combo(self._model_edit, models)
 
 
@@ -301,7 +311,7 @@ class PresetManageDialog(QDialog):
         else:
             self._model_status.setText(_("⚠ 未获取到模型"))
 
-    def _set_model_list(self, models: List[str]):
+    def _set_model_list(self, models: list[str]):
         """填充模型下拉列表。"""
         populate_model_combo(self._model_edit, models)
 

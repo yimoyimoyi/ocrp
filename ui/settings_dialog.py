@@ -1,17 +1,33 @@
-# -*- coding: utf-8 -*-
 """参数设置对话框 —— 自身创建所有控件，与 ConfigPanel 通过数据同步。"""
 
 import os
 from pathlib import Path
+
+from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTabWidget, QFormLayout, QComboBox, QTextEdit, QCheckBox,
-    QSpinBox, QDoubleSpinBox, QLineEdit, QMessageBox,
-    QListWidget, QListWidgetItem, QScrollArea,
-    QSizePolicy, QFrame, QDialogButtonBox, QWidget, QAbstractItemView,
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, QObject, pyqtSignal
-from typing import List
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -893,7 +909,7 @@ class SettingsDialog(QDialog):
         else:
             self._corr_model_status.setText("⚠ 未获取到模型")
 
-    def _set_corr_model_list(self, models: List[str]):
+    def _set_corr_model_list(self, models: list[str]):
         """填充纠错模型下拉列表。"""
         populate_model_combo(self._corr_api_model, models)
 

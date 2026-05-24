@@ -1,23 +1,36 @@
-# -*- coding: utf-8 -*-
 """视频预览组件 —— 支持拖放视频帧、图片、鼠标拖动画矩形 ROI 区域。
 QLabel 子类手动绘制 pixmap（保持宽高比居中）+ ROI 叠加层。
 """
 
+from pathlib import Path
+
 import cv2
 import numpy as np
-from PyQt5.QtWidgets import (
-    QWidget, QLabel, QVBoxLayout, QHBoxLayout, QSizePolicy, QSlider, QPushButton,
-    QApplication,
-)
-from PyQt5.QtCore import Qt, QObject, QPoint, pyqtSignal, QRect, QRectF, QUrl
+from PyQt5.QtCore import QObject, QPoint, QRect, QRectF, Qt, QUrl, pyqtSignal
 from PyQt5.QtGui import (
-    QPixmap, QImage, QPainter, QPen, QColor, QFont,
-    QDragEnterEvent, QDropEvent, QMouseEvent, QResizeEvent,
+    QColor,
+    QDragEnterEvent,
+    QDropEvent,
+    QFont,
+    QImage,
     QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPixmap,
+    QResizeEvent,
 )
-from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-from pathlib import Path
-from typing import List, Optional, Tuple
+from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
+from PyQt5.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
 from core.i18n import _
 from core.logger import get_logger
@@ -25,7 +38,7 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _imread_unicode(path: str) -> Optional[np.ndarray]:
+def _imread_unicode(path: str) -> np.ndarray | None:
     try:
         buf = np.fromfile(path, dtype=np.uint8)
         return cv2.imdecode(buf, cv2.IMREAD_COLOR) if buf.size > 0 else None
@@ -210,14 +223,14 @@ class VideoPreviewWidget(QWidget):
         self.setAcceptDrops(True)
         self.setFocusPolicy(Qt.StrongFocus)  # 允许接收键盘事件（Ctrl+V 粘贴）
         self.setMinimumSize(320, 240)
-        self._video_path: Optional[str] = None
+        self._video_path: str | None = None
         self._ffmpeg: object = None
         self._player = None  # FFmpegPlayer 实例（替代 ffplay 子进程）
         self._hw_accel: bool = False
-        self._current_frame: Optional[np.ndarray] = None
-        self._display_pixmap: Optional[QPixmap] = None
+        self._current_frame: np.ndarray | None = None
+        self._display_pixmap: QPixmap | None = None
         self._is_image: bool = False
-        self._regions: List[dict] = []
+        self._regions: list[dict] = []
         self._region_counter = 0
         self._selected_region_index: int = -1
         self._default_engine = "paddleocr"
@@ -367,7 +380,7 @@ class VideoPreviewWidget(QWidget):
         self._drag_seek_timer.timeout.connect(self._on_drag_seek)
 
         # 音频播放（QMediaPlayer 提供真实音频输出）
-        self._audio_player: Optional[QMediaPlayer] = None
+        self._audio_player: QMediaPlayer | None = None
         self._audio_timer = QTimer()
         self._audio_timer.setInterval(100)
         self._audio_timer.timeout.connect(self._on_audio_tick)
@@ -385,11 +398,11 @@ class VideoPreviewWidget(QWidget):
         self._label.update()
 
     @property
-    def current_frame(self) -> Optional[np.ndarray]:
+    def current_frame(self) -> np.ndarray | None:
         return self._current_frame
 
     @property
-    def video_path(self) -> Optional[str]:
+    def video_path(self) -> str | None:
         return self._video_path
 
     @property
@@ -823,7 +836,7 @@ class VideoPreviewWidget(QWidget):
         self._selected_region_index = index
         self._label.update()
 
-    def get_roi_image(self, region_index: int) -> Optional[np.ndarray]:
+    def get_roi_image(self, region_index: int) -> np.ndarray | None:
         if self._current_frame is None:
             return None
         if 0 <= region_index < len(self._regions):
@@ -890,7 +903,7 @@ class VideoPreviewWidget(QWidget):
         r["x"] = max(0, min(pw - w, r["x"]))
         r["y"] = max(0, min(ph - h, r["y"]))
 
-    def _get_region_at(self, pos: QPoint, margin: int = 6) -> Tuple[int, str]:
+    def _get_region_at(self, pos: QPoint, margin: int = 6) -> tuple[int, str]:
         r = self._get_image_display_rect()
         if r is None:
             return -1, ""

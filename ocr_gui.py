@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """ORCP —— 带 GUI 的通用 OCR 工具入口。
 
 用法:
@@ -40,8 +39,8 @@ if str(BASE_DIR) not in sys.path:
 #   2) core/cuda12/ — CUDA 12 运行时
 #   3) core/cudnn8/ — cuDNN 8（ctypes.CDLL 预加载，ctranslate2 GPU 必需）
 if sys.platform == "win32":
-    import importlib.util
     import ctypes
+    import importlib.util
 
     # ── 辅助：启动阶段日志（logger 尚未初始化，使用 print）──
     def _startup_log(msg: str, kind: str = "info"):
@@ -129,6 +128,7 @@ def _verify_startup_environment():
 from PyQt5.QtWidgets import QApplication
 
 from core.i18n import setup_i18n
+
 setup_i18n()
 
 from core.logger import get_logger
@@ -168,7 +168,8 @@ _install_crash_handler()
 def _check_sync():
     """如果 pyproject.toml 比 uv.lock 新，自动增量同步依赖。"""
     try:
-        import subprocess, shutil
+        import shutil
+        import subprocess
         uv = shutil.which("uv")
         if not uv:
             return
@@ -213,7 +214,7 @@ def main():
     window.setWindowOpacity(0.0)
     window.show()
 
-    from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
+    from PyQt5.QtCore import QEasingCurve, QPropertyAnimation
     _fade = QPropertyAnimation(window, b"windowOpacity")
     _fade.setDuration(150)
     _fade.setStartValue(0.0)

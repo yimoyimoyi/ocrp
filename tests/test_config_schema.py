@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """配置 Schema 验证单元测试。"""
 
 
@@ -123,8 +122,8 @@ class TestSchemaRegistry:
             assert "properties" in schema, f"{name} missing properties"
 
     def test_ocr_engines_schema_valid(self):
-        from core.config_schemas import OCR_ENGINES_SCHEMA
         from core.config_schema import validate_config
+        from core.config_schemas import OCR_ENGINES_SCHEMA
 
         cfg = {
             "engines": {
@@ -136,8 +135,8 @@ class TestSchemaRegistry:
         assert ok
 
     def test_asr_schema_valid(self):
-        from core.config_schemas import ASR_ENGINES_SCHEMA
         from core.config_schema import validate_config
+        from core.config_schemas import ASR_ENGINES_SCHEMA
 
         cfg = {
             "engine": "whisperx", "model_size": "large-v3", "device": "cpu",
@@ -147,16 +146,16 @@ class TestSchemaRegistry:
         assert ok
 
     def test_ai_correction_schema_valid(self):
-        from core.config_schemas import AI_CORRECTION_SCHEMA
         from core.config_schema import validate_config
+        from core.config_schemas import AI_CORRECTION_SCHEMA
 
         cfg = {"engine": "openai_vision", "enabled": False}
         ok, _ = validate_config(cfg, AI_CORRECTION_SCHEMA)
         assert ok
 
     def test_api_presets_schema_valid(self):
-        from core.config_schemas import API_PRESETS_SCHEMA
         from core.config_schema import validate_config
+        from core.config_schemas import API_PRESETS_SCHEMA
 
         cfg = {
             "presets": {
@@ -168,8 +167,8 @@ class TestSchemaRegistry:
         assert ok
 
     def test_filters_schema_valid(self):
-        from core.config_schemas import FILTERS_SCHEMA
         from core.config_schema import validate_config
+        from core.config_schemas import FILTERS_SCHEMA
 
         cfg = {"keywords": ["test"], "garbage_patterns": []}
         ok, _ = validate_config(cfg, FILTERS_SCHEMA)

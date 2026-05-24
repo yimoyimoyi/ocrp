@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 FFmpeg 高质量媒体处理工具 v3.1
 - 外部 QSS 样式加载（styles/default.qss）
@@ -9,12 +8,12 @@ FFmpeg 高质量媒体处理工具 v3.1
 - 预设管理功能
 """
 
-import sys
+import json
 import os
+import re
 import shutil
 import subprocess
-import re
-import json
+import sys
 import traceback
 from pathlib import Path
 from typing import Any, Union
@@ -22,7 +21,7 @@ from typing import Any, Union
 
 def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
     """读取 JSON 文件，自动去除 // 行注释和 /* */ 块注释后解析"""
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         text = f.read()
     # 去除 /* ... */ 块注释（非贪婪匹配）
     text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
@@ -39,17 +38,40 @@ def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
         lines.append(line)
     clean = '\n'.join(lines)
     return json.loads(clean)
+from PyQt5.QtCore import QObject, QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot
+from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent, QFont, QPalette
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QComboBox, QCheckBox,
-    QLineEdit, QTextEdit, QFileDialog, QGroupBox, QGridLayout,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QProgressBar, QSplitter, QMessageBox, QSpinBox, QDialog,
-    QDialogButtonBox, QFormLayout, QListWidget, QListWidgetItem,
-    QMenuBar, QMenu, QAction, QSlider, QInputDialog
+    QAbstractItemView,
+    QAction,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMenuBar,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSlider,
+    QSpinBox,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QRunnable, pyqtSlot, QThreadPool
-from PyQt5.QtGui import QFont, QColor, QPalette, QDragEnterEvent, QDropEvent
 
 # ================= 基础路径与初始化 =================
 BASE_DIR = Path(sys.argv[0]).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
@@ -242,7 +264,7 @@ class StyleLoader:
                 return ""
 
         try:
-            with open(qss_path, "r", encoding="utf-8") as f:
+            with open(qss_path, encoding="utf-8") as f:
                 template = f.read()
         except Exception:
             return ""

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """ASR —— 子进程隔离方案。
 
 通过 core/asr_server.py 子进程运行 faster-whisper，
@@ -7,19 +6,19 @@
 通信协议：stdin/stdout JSON 行。
 """
 
-import os
-import sys
-import json
 import atexit
+import contextlib
+import json
+import os
 import subprocess
+import sys
 import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, List, Dict
 
 from core.logger import get_logger
-from core.utils import find_ffmpeg, DEFAULT_ASR_MODEL_DIR
+from core.utils import DEFAULT_ASR_MODEL_DIR, find_ffmpeg
 
 logger = get_logger(__name__)
 
@@ -30,7 +29,7 @@ _FFMPEG = find_ffmpeg("ffmpeg")
 _DEFAULT_MODEL_DIR = DEFAULT_ASR_MODEL_DIR
 
 
-def scan_local_asr_models(model_dir: str = "") -> List[str]:
+def scan_local_asr_models(model_dir: str = "") -> list[str]:
     """扫描本地模型目录，返回所有包含 model.bin 的子目录名（或路径）。
 
     返回的每一项可直接作为 WhisperModel 的 model_size_or_path 参数。
@@ -44,7 +43,7 @@ def scan_local_asr_models(model_dir: str = "") -> List[str]:
             if entry.is_dir():
                 sub_path = os.path.join(target, entry.name)
                 has_bin = False
-                for root, dirs, files in os.walk(sub_path):
+                for _root, _dirs, files in os.walk(sub_path):
                     if "model.bin" in files:
                         has_bin = True
                         break
@@ -57,11 +56,11 @@ def scan_local_asr_models(model_dir: str = "") -> List[str]:
         logger.warning("扫描 ASR 模型目录失败: %s", e)
     return models
 
-# ── 不在模块级别加载任何 torch/cuda DLL ──
-# 子进程 server 有自己隔离的 DLL 环境
-
 from core.config_manager import _load_json_with_comments
 from core.logger import get_logger
+
+# ── 不在模块级别加载任何 torch/cuda DLL ──
+# 子进程 server 有自己隔离的 DLL 环境
 
 logger = get_logger(__name__)
 
@@ -118,8 +117,9 @@ class BaseASREngine(ABC):
     def is_available(self):
         return True
 
+    @abstractmethod
     def warm_up(self):
-        pass
+        ...
 
 
 class WhisperXEngine(BaseASREngine):
@@ -133,7 +133,7 @@ class WhisperXEngine(BaseASREngine):
     def __init__(self, c):
         super().__init__(c)
         self.engine_name = "whisperx"
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: subprocess.Popen | None = None
         self._model_size = c.get("model_size", "large-v3")
         self._model_dir = c.get("model_dir", _DEFAULT_MODEL_DIR) or ""
         self._language = c.get("language", "zh")
@@ -156,11 +156,11 @@ class WhisperXEngine(BaseASREngine):
         self._start_lock = threading.Lock()
         self._ready_event = threading.Event()
         self._stderr_lines: list = []
-        self._stderr_drain_thread: Optional[threading.Thread] = None
+        self._stderr_drain_thread: threading.Thread | None = None
         atexit.register(self._stop_server)
 
     @staticmethod
-    def get_available_models(model_dir: str = "") -> List[str]:
+    def get_available_models(model_dir: str = "") -> list[str]:
         """返回本地可用的 ASR 模型列表（路径），供 UI 填充下拉框。"""
         return scan_local_asr_models(model_dir)
 
@@ -271,11 +271,9 @@ class WhisperXEngine(BaseASREngine):
 
     def _drain_stderr(self):
         """后台线程：持续排空子进程 stderr，防止管道缓冲区满导致死锁。"""
-        try:
+        with contextlib.suppress(Exception):
             for line in self._proc.stderr:
                 self._stderr_lines.append(line.rstrip())
-        except Exception:
-            pass
 
     def _stop_server(self):
         if self._closed:
@@ -308,7 +306,7 @@ class WhisperXEngine(BaseASREngine):
 
     # ── 子进程通信辅助 ──
 
-    def _check_process_alive(self) -> Optional[str]:
+    def _check_process_alive(self) -> str | None:
         """检查子进程是否存活，返回错误信息或 None。"""
         if self._proc and self._proc.poll() is not None:
             code = self._proc.poll()
@@ -446,8 +444,8 @@ class WhisperXEngine(BaseASREngine):
         return results, error[0]
 
     def transcribe_stream(self, audio_path: str,
-                          on_segment: callable = None,
-                          error_holder: list = None) -> None:
+                          on_segment: callable | None = None,
+                          error_holder: list | None = None) -> None:
         """流式语音识别。每识别出一段就调用 on_segment({"start","end","text"})。
 
         on_segment 在子线程中调用，请确保线程安全。
@@ -483,7 +481,6 @@ class WhisperXEngine(BaseASREngine):
                     error_holder[0] = err
                 return
 
-            from threading import Thread
             import time
 
             stderr_reader, stderr_lines = self._start_stderr_reader()
@@ -572,14 +569,12 @@ class WhisperXEngine(BaseASREngine):
         threading.Thread(target=self._start_server, daemon=True).start()
 
     def __del__(self):
-        try:
+        with contextlib.suppress(Exception):
             self._stop_server()
-        except Exception:
-            pass
 
 
 def _ffmpeg_to_wav(input_path: str, output_dir: str = None,
-                   sample_rate: int = 16000, extra_args: list = None) -> Optional[str]:
+                   sample_rate: int = 16000, extra_args: list = None) -> str | None:
     """通用 FFmpeg WAV 转换：输出路径构建 + subprocess 执行 + 验证。"""
     if not os.path.isfile(input_path):
         logger.warning("音频文件不存在: %s", input_path)
@@ -609,17 +604,17 @@ def _ffmpeg_to_wav(input_path: str, output_dir: str = None,
 
 def extract_audio_from_video(video_path: str, output_dir: str = None,
                               time_start: float = 0.0, time_end: float = 0.0,
-                              sample_rate: int = 16000) -> Optional[str]:
+                              sample_rate: int = 16000) -> str | None:
     extra = []
     if time_start > 0:
         extra += ["-ss", str(time_start)]
     if time_end > 0:
         extra += ["-to", str(time_end)]
-    return _ffmpeg_to_wav(video_path, output_dir, sample_rate, extra_args=["-vn"] + extra)
+    return _ffmpeg_to_wav(video_path, output_dir, sample_rate, extra_args=["-vn", *extra])
 
 
 def convert_to_wav(audio_path: str, output_dir: str = None,
-                   sample_rate: int = 16000) -> Optional[str]:
+                   sample_rate: int = 16000) -> str | None:
     """将任意音频文件转换为标准 WAV 格式（16kHz/mono/16bit）。"""
     ext = Path(audio_path).suffix.lower()
     if ext == ".wav":
@@ -632,7 +627,7 @@ SUPPORTED_AUDIO_EXTS = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma',
 
 class ASREngineManager:
     def __init__(self):
-        self._engines: Dict[str, BaseASREngine] = {}
+        self._engines: dict[str, BaseASREngine] = {}
         self._config = load_asr_config()
         self._default_name = self._config.get("engine", "whisperx")
 
@@ -654,7 +649,7 @@ class ASREngineManager:
             if hasattr(eng, 'set_hw_accel'):
                 eng.set_hw_accel(e)
 
-    def get_engine(self, name: Optional[str] = None) -> Optional[BaseASREngine]:
+    def get_engine(self, name: str | None = None) -> BaseASREngine | None:
         en = name or self._default_name
         if en in self._engines:
             return self._engines[en]

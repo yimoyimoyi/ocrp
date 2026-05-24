@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """统一日志配置模块。
 
 所有模块应通过此模块获取 logger：
@@ -15,7 +14,6 @@ import logging.handlers
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 # ── 日志格式 ──
 _LOG_FORMAT = "%(asctime)s [%(levelname)-5s] %(name)s: %(message)s"
@@ -67,7 +65,7 @@ def _setup_root_logger() -> None:
 _setup_root_logger()
 
 
-def get_logger(name: Optional[str] = None) -> logging.Logger:
+def get_logger(name: str | None = None) -> logging.Logger:
     """获取指定名称的 logger（以 'orcp.' 为前缀）。
 
     Args:

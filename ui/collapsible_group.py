@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """可收纳分组控件 —— 点击标题栏展开/折叠内容区域。
 
 用法:
@@ -10,11 +9,16 @@
     group.set_collapsed(True)
 """
 
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QToolButton, QSizePolicy,
-)
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
+from PyQt5.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class CollapsibleGroup(QWidget):

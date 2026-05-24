@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """结果导出器单元测试 —— TXT / JSON / CSV / SRT。"""
 
 import json

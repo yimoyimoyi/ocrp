@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """共享测试夹具（fixtures）。"""
 
 import sys

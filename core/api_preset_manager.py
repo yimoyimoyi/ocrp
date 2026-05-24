@@ -1,14 +1,13 @@
-# -*- coding: utf-8 -*-
 """API 预设管理器 —— 管理多个 API 连接配置预设。
 
 支持 OCR API 引擎（openai_vision / ollama_vision / llamacpp）和
 AI 纠错器共用同一套预设，存储在 config/api_presets.json。
 """
 
-import os
 import json
+import os
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Optional
 
 from core.logger import get_logger
 
@@ -21,7 +20,7 @@ PRESETS_PATH = BASE_DIR / "config" / "api_presets.json"
 def _load_presets() -> dict:
     if PRESETS_PATH.exists():
         try:
-            with open(PRESETS_PATH, "r", encoding="utf-8") as f:
+            with open(PRESETS_PATH, encoding="utf-8") as f:
                 cfg = json.load(f)
             from core.config_schema import validate_config
             from core.config_schemas import API_PRESETS_SCHEMA
@@ -56,7 +55,7 @@ class APIPresetManager:
         _save_presets(self._data)
 
     # ── 查询 ──
-    def get_names(self) -> List[str]:
+    def get_names(self) -> list[str]:
         return list(self._data.get("presets", {}).keys())
 
     def get_default_name(self) -> str:
@@ -66,7 +65,7 @@ class APIPresetManager:
         self._data["default_preset"] = name
         self.save()
 
-    def get_preset(self, name: str) -> Optional[dict]:
+    def get_preset(self, name: str) -> dict | None:
         return self._data.get("presets", {}).get(name)
 
     def get_effective_config(self, name: str = "") -> dict:
@@ -118,5 +117,5 @@ class APIPresetManager:
         self.save()
         return True
 
-    def get_all_presets(self) -> Dict[str, dict]:
+    def get_all_presets(self) -> dict[str, dict]:
         return dict(self._data.get("presets", {}))

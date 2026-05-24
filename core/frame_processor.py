@@ -1,12 +1,13 @@
-# -*- coding: utf-8 -*-
 """视频帧处理器 —— FFmpeg 解码 + 哨兵检测。"""
 
+import difflib
 import os
 import threading
-import numpy as np
-import difflib
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, Callable, List, Dict, Any
+from typing import Any
+
+import numpy as np
 
 from core.ocr_engine import OCREngineManager
 
@@ -26,7 +27,7 @@ def format_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def extract_roi(frame: np.ndarray, region: dict) -> Optional[np.ndarray]:
+def extract_roi(frame: np.ndarray, region: dict) -> np.ndarray | None:
     """从帧中提取区域 ROI，应用膨胀比例和四边裁剪后返回。
 
     规则：
@@ -82,10 +83,10 @@ class FrameProcessor:
     def __init__(
         self,
         engine_manager: OCREngineManager,
-        regions: Optional[List[Dict[str, Any]]] = None,
-        on_result: Optional[Callable] = None,
-        on_progress: Optional[Callable] = None,
-        on_log: Optional[Callable] = None,
+        regions: list[dict[str, Any]] | None = None,
+        on_result: Callable | None = None,
+        on_progress: Callable | None = None,
+        on_log: Callable | None = None,
     ):
         self._engine_mgr = engine_manager
         self._regions = regions or []
@@ -198,7 +199,7 @@ class FrameProcessor:
             pass
         return None
 
-    def process_video(self, video_path: str, engine_name: Optional[str] = None,
+    def process_video(self, video_path: str, engine_name: str | None = None,
                       time_start: float = 0.0, time_end: float = 0.0) -> list:
         from core.ffmpeg_reader import FFmpegReader
         ff = FFmpegReader(video_path, hw_accel=False)
@@ -246,7 +247,7 @@ class FrameProcessor:
         is_regular = "常规" in self._subtitle_mode
         last_regular_sec = -999.0
         if is_regular:
-            regular_frame_step = max(1, int(fps * self._r_interval))
+            max(1, int(fps * self._r_interval))  # 仅用于触发属性校验
 
         self._log(f"🎬 开始: {os.path.basename(video_path)} FPS={fps:.1f} 字幕模式={self._subtitle_mode}")
         if time_start > 0:

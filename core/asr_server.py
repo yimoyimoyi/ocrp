@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """ASR 子进程服务器 —— 独立进程空间，隔离 CUDA DLL 环境，避免与 PaddleOCR 冲突。
 
 协议（stdin/stdout JSON 行）：
@@ -12,9 +11,9 @@
   python core/asr_server.py --config config/asr_engines.json
 """
 
-import sys
-import os
 import json
+import os
+import sys
 
 # ── 路径设置 ──
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -23,8 +22,8 @@ if str(BASE_DIR) not in sys.path:
 
 # ── DLL 路径注册（torch/lib/ + site-packages/nvidia/*/bin/）──
 if sys.platform == "win32":
-    import importlib.util
     import ctypes
+    import importlib.util
 
     # torch/lib/ — torch 自带 CUDA 运行时
     try:
@@ -73,8 +72,9 @@ if sys.platform == "win32":
 # 屏蔽 PaddleOCR 联网检查（虽然此进程不跑 PaddleOCR，但 config_manager 可能会触发）
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
-from core.config_manager import _load_json_with_comments
 from pathlib import Path
+
+from core.config_manager import _load_json_with_comments
 
 _CONFIG_DIR = os.path.join(BASE_DIR, "config")
 
@@ -265,7 +265,7 @@ def main():
     hotwords = cfg.get("hotwords", "") or None
     vad_enabled = cfg.get("vad_enabled", False)
     vad_min_silence = cfg.get("vad_min_silence_ms", 500)
-    vad_threshold = cfg.get("vad_threshold", 0.5)
+    _vad_threshold = cfg.get("vad_threshold", 0.5)
     word_timestamps = cfg.get("word_timestamps", True)
 
     # ── cuDNN 8 预检（GPU 模式）──
@@ -362,7 +362,6 @@ def main():
             hw = req.get("hotwords") or hotwords
             vad = req.get("vad_enabled", vad_enabled)
             vms = req.get("vad_min_silence_ms", vad_min_silence)
-            vt = req.get("vad_threshold", vad_threshold)
             wts = req.get("word_timestamps", word_timestamps)
 
             vad_params = None
@@ -433,8 +432,8 @@ def main():
             # ── 回退到 CPU ──
             print("[ASR_SERVER] falling back to CPU...", file=sys.stderr, flush=True)
             try:
-                from faster_whisper import WhisperModel as _WM
-                cpu_model = _WM(
+                from faster_whisper import WhisperModel as _WhisperModel
+                cpu_model = _WhisperModel(
                     model_arg,
                     device="cpu",
                     compute_type="int8",

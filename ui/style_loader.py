@@ -1,10 +1,8 @@
-# -*- coding: utf-8 -*-
 """主题 / QSS 样式加载器"""
 
 import os
 import re
 from pathlib import Path
-from typing import Optional
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STYLES_DIR = BASE_DIR / "styles"

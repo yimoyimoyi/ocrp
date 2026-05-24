@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
 """FFmpeg 帧读取器 —— 替代 cv2.VideoCapture，支持硬件加速解码。"""
 
-import json
-import time
 import atexit
+import json
 import os
 import subprocess
+import time
+
 import numpy as np
-from typing import Optional
 
 from core.logger import get_logger
 from core.utils import find_ffmpeg
@@ -66,7 +65,7 @@ class FFmpegReader:
             raise FileNotFoundError(f"视频文件不存在: {path}")
         self._path = path
         self._hw_accel = hw_accel
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: subprocess.Popen | None = None
         self._closed = False
         atexit.register(self.close)
         self._width = 0
@@ -139,7 +138,7 @@ class FFmpegReader:
             logger.warning("FFmpeg 打开视频失败: %s", e)
             return False
 
-    def read(self) -> Optional[np.ndarray]:
+    def read(self) -> np.ndarray | None:
         """读取下一帧，返回 BGR numpy 数组。"""
         if not self._proc:
             return None
@@ -159,7 +158,7 @@ class FFmpegReader:
             logger.warning("读取视频帧失败: %s", e)
             return None
 
-    def seek(self, frame_idx: int) -> Optional[np.ndarray]:
+    def seek(self, frame_idx: int) -> np.ndarray | None:
         """跳转到指定帧号并读取（使用 -ss 前置快速 seek）。"""
         self.close()
         target_sec = frame_idx / self._fps if self._fps > 0 else 0
@@ -192,7 +191,7 @@ class FFmpegReader:
             logger.warning("视频 seek 失败: %s", e)
             return None
 
-    def seek_sec(self, seconds: float) -> Optional[np.ndarray]:
+    def seek_sec(self, seconds: float) -> np.ndarray | None:
         """跳转到指定秒数并读取帧。"""
         return self.seek(int(seconds * self._fps))
 

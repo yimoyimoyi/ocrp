@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """各配置文件的 Schema 定义 —— 用于 config_schema.validate_config() 验证。"""
 
 # ── ocr_engines.json ──

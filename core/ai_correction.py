@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """AI 纠错模块 —— 通过引擎配置进行二次纠错。
 
 若引擎为 API 类型（openai_vision / ollama_vision / llamacpp），
@@ -12,8 +11,8 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import requests
@@ -87,7 +86,7 @@ class AICorrector:
     使用独立的 API Key / Base URL / Model 进行文本纠错。
     """
 
-    def __init__(self, config: Optional[dict] = None,
+    def __init__(self, config: dict | None = None,
                  engine_manager=None, preset_name: str = ""):
         self._config = config or load_correction_config()
         self._enabled = self._config.get("enabled", False)
@@ -262,9 +261,9 @@ class AICorrector:
             logger.error("环境提取失败: %s", e)
             return ""
 
-    def correct(self, raw_text: str, context_texts: Optional[list] = None,
-                image: Optional[np.ndarray] = None,
-                stream_callback: Optional[Callable[[str], None]] = None) -> Optional[str]:
+    def correct(self, raw_text: str, context_texts: list | None = None,
+                image: np.ndarray | None = None,
+                stream_callback: Callable[[str], None] | None = None) -> str | None:
         """对一段原始 OCR 文本进行纠错（或重新识别）。
 
         Args:
@@ -305,7 +304,7 @@ class AICorrector:
             if context_str:
                 prompt = context_str + prompt
 
-        for attempt in range(self._retry + 1):
+        for _attempt in range(self._retry + 1):
             result = self._call_api(prompt, env_context=self._env_context,
                                     stream_callback=stream_callback)
             if result is not None:
@@ -346,10 +345,10 @@ class AICorrector:
         ms = int((sec - int(sec)) * 1000)
         return f"{h}:{m:02d}:{s:02d}.{ms:03d}"
 
-    def correct_batch(self, texts: List[Tuple[int, str]],
+    def correct_batch(self, texts: list[tuple[int, str]],
                       context_window: int = 3,
                       max_retries: int = 3,
-                      stream_callback: Optional[Callable[[str], None]] = None) -> Dict[int, str]:
+                      stream_callback: Callable[[str], None] | None = None) -> dict[int, str]:
         """批量对多条文本进行 AI 纠错，使用 [ID:行号] 标记保证顺序与完整性。"""
         if not texts:
             return {}
@@ -406,7 +405,6 @@ class AICorrector:
 
     def _prepare_batch_input(self, texts):
         """预处理批量输入：建立 ID 映射、构建标记行、原文映射。"""
-        has_time = len(texts[0]) >= 3 if texts else False
         lines, id_map, original_map = [], {}, {}
         for idx, item in enumerate(texts):
             row_idx = item[0]
@@ -501,7 +499,7 @@ class AICorrector:
         return prompt + f"\n\n[[系统：上次{reason}（第{attempt + 1}次）。请修正后重新输出。]]"
 
     @staticmethod
-    def _parse_batch_result(text: str) -> Dict[int, str]:
+    def _parse_batch_result(text: str) -> dict[int, str]:
         """从 AI 返回文本中解析 [ID:idx] 标记的内容。
 
         容错处理：
@@ -555,7 +553,7 @@ class AICorrector:
             "timeout": self._timeout,
         }
 
-    def _correct_local(self, image: np.ndarray) -> Optional[str]:
+    def _correct_local(self, image: np.ndarray) -> str | None:
         """调用本地引擎对图像重新识别。"""
         if self._engine_manager is None:
             logger.error("引擎管理器未初始化")
@@ -572,7 +570,7 @@ class AICorrector:
             return None
 
     def _call_api(self, prompt: str, env_context: str = "",
-                  stream_callback: Optional[Callable[[str], None]] = None) -> Optional[str]:
+                  stream_callback: Callable[[str], None] | None = None) -> str | None:
         """调用 AI API 进行纠错（从引擎配置读取连接信息）。"""
         t_start = time.time()
         try:

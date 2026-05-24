@@ -1,14 +1,29 @@
-# -*- coding: utf-8 -*-
 """配置面板 —— 处理参数 / 哨兵参数 / 提示词模板 / 过滤器"""
 import os
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QTextEdit, QCheckBox, QFormLayout,
-    QTabWidget, QSpinBox, QDoubleSpinBox, QLineEdit, QMessageBox,
-    QListWidget, QListWidgetItem, QScrollArea, QGroupBox, QSizePolicy,
-    QFrame,
-)
+
 from PyQt5.QtCore import Qt, pyqtSignal
-from typing import List
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from core.i18n import _
 
@@ -27,8 +42,8 @@ class ConfigPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._template_names: List[str] = ["通用OCR"]
-        self._region_names: List[str] = []
+        self._template_names: list[str] = ["通用OCR"]
+        self._region_names: list[str] = []
         self._collapsed = False
         self._init_ui()
 
@@ -881,8 +896,9 @@ class ConfigPanel(QWidget):
     # ── ASR 模型刷新 ──
     def _refresh_asr_models(self):
         """扫描本地模型目录并填充可用模型列表。"""
-        from core.asr_engine import scan_local_asr_models
         from pathlib import Path
+
+        from core.asr_engine import scan_local_asr_models
         model_dir = self._asr_model_dir_edit.text().strip() or "models/asr"
         base = Path(__file__).parent.parent
         full_dir = str(base / model_dir) if not os.path.isabs(model_dir) else model_dir
@@ -971,7 +987,7 @@ class ConfigPanel(QWidget):
     # ── 公共接口 ──
     def set_template_prompt(self, text):
         self._prompt_edit.setPlainText(text)
-    def set_template_names(self, names: List[str]):
+    def set_template_names(self, names: list[str]):
         self._template_names = list(names)
         cur = self._template_combo.currentText()
         self._template_combo.blockSignals(True); self._template_combo.clear()
@@ -981,9 +997,9 @@ class ConfigPanel(QWidget):
     def select_template(self, name: str):
         idx = self._template_combo.findText(name)
         if idx >= 0: self._template_combo.setCurrentIndex(idx)
-    def set_filter_keywords(self, keywords: List[str]):
+    def set_filter_keywords(self, keywords: list[str]):
         self._filter_list.clear(); self._filter_list.addItems(keywords)
 
-    def set_region_names(self, names: List[str]):
+    def set_region_names(self, names: list[str]):
         self._region_names = list(names)
         self._rebuild_sort_rows_from_regions()

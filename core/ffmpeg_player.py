@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """FFmpeg 后台连续解码播放器 —— 替代 ffplay 子进程方案。
 
 架构：
@@ -16,12 +15,13 @@
 import subprocess
 import threading
 import time
-import numpy as np
-from typing import Optional, Callable
+from collections.abc import Callable
 
+import numpy as np
 from PyQt5.QtCore import QThread, pyqtSignal
-from core.logger import get_logger
+
 from core.ffmpeg_reader import _FFMPEG, _get_video_info
+from core.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -39,10 +39,10 @@ class _DecoderThread(QThread):
         self._hw_accel = hw_accel
         self._stop_flag = threading.Event()
         self._pause_flag = threading.Event()  # set = 暂停中
-        self._seek_request: Optional[float] = None  # 秒数
+        self._seek_request: float | None = None  # 秒数
         self._seek_lock = threading.Lock()
         self._seek_offset: float = 0.0  # seek 后的基准偏移（帧时间戳 = seek_offset + frame_idx/fps）
-        self._proc: Optional[subprocess.Popen] = None
+        self._proc: subprocess.Popen | None = None
         self._width = 0
         self._height = 0
         self._fps = 30.0
@@ -221,15 +221,15 @@ class FFmpegPlayer:
     def __init__(self, path: str, hw_accel: bool = False, video_info: dict = None):
         self._path = path
         self._hw_accel = hw_accel
-        self._decoder: Optional[_DecoderThread] = None
+        self._decoder: _DecoderThread | None = None
         self._is_playing = False
         self._current_speed_idx = 3  # 1.0x
         self._duration = 0.0
 
         # 回调（由外部设置）
-        self.frame_callback: Optional[Callable[[np.ndarray, float], None]] = None
-        self.finished_callback: Optional[Callable[[], None]] = None
-        self.error_callback: Optional[Callable[[str], None]] = None
+        self.frame_callback: Callable[[np.ndarray, float], None] | None = None
+        self.finished_callback: Callable[[], None] | None = None
+        self.error_callback: Callable[[str], None] | None = None
 
         # 优先使用已获取的视频信息，避免重复 ffprobe 阻塞 UI
         if video_info:

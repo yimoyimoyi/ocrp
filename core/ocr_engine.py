@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """多 OCR 引擎管理器 —— 支持 PaddleOCR 本地引擎及各类 Vision API。
 硬件加速由全局设置 hw_accel 统一控制。
 
@@ -7,20 +6,19 @@ DLL 隔离策略：
   - PaddleOCR GPU 模式：在 _ensure_ocr 中按需调用 _register_gpu_dll_dirs() 加载 CUDA/cuDNN
 """
 
-import os
-import sys
-import json
 import atexit
 import base64
+import json
+import os
 import subprocess
+import sys
 import threading
-import requests
 import time
-import numpy as np
-
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional, List, Dict
+
+import numpy as np
+import requests
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
@@ -52,7 +50,7 @@ _dll_load_lock = threading.Lock()
 _gpu_dll_loaded = False
 
 
-def _find_nvidia_site_packages_dirs() -> List[str]:
+def _find_nvidia_site_packages_dirs() -> list[str]:
     """扫描 site-packages/nvidia/*/bin/ 目录，返回所有 DLL 路径列表。"""
     bin_dirs = []
     for sp in sys.path:
@@ -220,7 +218,7 @@ class BaseOCREngine(ABC):
         return self._last_confidence
 
     @abstractmethod
-    def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         pass
 
     def is_available(self) -> bool:
@@ -229,11 +227,12 @@ class BaseOCREngine(ABC):
     def check_availability(self) -> bool:
         return self.is_available()
 
-    def get_model_list(self) -> List[str]:
+    def get_model_list(self) -> list[str]:
         return []
 
+    @abstractmethod
     def warm_up(self):
-        pass
+        ...
 
 
 # ═══════════════ PaddleOCR 本地引擎 ═══════════════
@@ -280,7 +279,7 @@ class PaddleOCREngine(BaseOCREngine):
         ver_map = {"PP-OCRv4 (最快)": "PP-OCRv4",
                    "PP-OCRv5_mobile (平衡)": "PP-OCRv5_mobile",
                    "PP-OCRv5_server (高精度)": None}
-        mapped = ver_map.get(version, None)
+        mapped = ver_map.get(version)
         if mapped != self._ocr_version:
             self._ocr_version = mapped
             self._ocr = None  # 下次 recognize 时重新初始化
@@ -438,7 +437,7 @@ class PaddleOCREngine(BaseOCREngine):
                 else:
                     raise
 
-    def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         if not self._paddle_available:
             return ""
         if self._use_subprocess:
@@ -548,7 +547,7 @@ class OpenAIVisionEngine(BaseOCREngine):
             logger.warning("API ping 失败: %s", e)
             return False
 
-    def get_model_list(self) -> List[str]:
+    def get_model_list(self) -> list[str]:
         try:
             url = self._base_url.rstrip("/") + "/models"
             headers = {"Authorization": f"Bearer {self._api_key}"}
@@ -559,7 +558,7 @@ class OpenAIVisionEngine(BaseOCREngine):
             logger.warning("获取模型列表失败: %s", e)
         return []
 
-    def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         max_retries = getattr(self, '_retry', 2)
         t_start = time.time()
         prompt_text = prompt or self._prompt_template
@@ -623,7 +622,7 @@ class OllamaVisionEngine(BaseOCREngine):
             logger.warning("API ping 失败: %s", e)
             return False
 
-    def get_model_list(self) -> List[str]:
+    def get_model_list(self) -> list[str]:
         try:
             url = self._base_url.rstrip("/") + "/api/tags"
             resp = requests.get(url, timeout=15)
@@ -633,7 +632,7 @@ class OllamaVisionEngine(BaseOCREngine):
             logger.warning("获取模型列表失败: %s", e)
         return []
 
-    def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         max_retries = getattr(self, '_retry', 2)
         t_start = time.time()
         prompt_text = prompt or self._prompt_template
@@ -693,7 +692,7 @@ class LlamaCppEngine(BaseOCREngine):
             logger.warning("API ping 失败: %s", e)
             return False
 
-    def get_model_list(self) -> List[str]:
+    def get_model_list(self) -> list[str]:
         try:
             url = self._base_url.rstrip("/") + "/v1/models"
             resp = requests.get(url, timeout=15)
@@ -703,7 +702,7 @@ class LlamaCppEngine(BaseOCREngine):
             logger.warning("获取模型列表失败: %s", e)
         return []
 
-    def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         max_retries = getattr(self, '_retry', 2)
         t_start = time.time()
         prompt_text = prompt or self._prompt_template
@@ -762,7 +761,7 @@ ENGINE_CLASS_MAP = {
 
 class OCREngineManager:
     def __init__(self):
-        self._engines: Dict[str, BaseOCREngine] = {}
+        self._engines: dict[str, BaseOCREngine] = {}
         self._config = load_engines_config()
         self._default_name = self._config.get("default_engine", "paddleocr")
         self._current_name = self._default_name
@@ -772,7 +771,7 @@ class OCREngineManager:
         self._config = load_engines_config()
         self._engines.clear()
 
-    def get_engine_names(self) -> List[str]:
+    def get_engine_names(self) -> list[str]:
         engines_cfg = self._config.get("engines", {})
         return [name for name, cfg in engines_cfg.items() if cfg.get("enabled", True)]
 
@@ -785,7 +784,7 @@ class OCREngineManager:
             if hasattr(eng, 'set_hw_accel'):
                 eng.set_hw_accel(enabled)
 
-    def get_engine(self, name: Optional[str] = None, warm_up: bool = True) -> Optional[BaseOCREngine]:
+    def get_engine(self, name: str | None = None, warm_up: bool = True) -> BaseOCREngine | None:
         engine_name = name or self._current_name
         if engine_name in self._engines:
             return self._engines[engine_name]
@@ -824,7 +823,7 @@ class OCREngineManager:
     def get_current_engine_name(self) -> str:
         return self._current_name
 
-    def get_current_engine(self, warm_up: bool = True) -> Optional[BaseOCREngine]:
+    def get_current_engine(self, warm_up: bool = True) -> BaseOCREngine | None:
         return self.get_engine(self._current_name, warm_up=warm_up)
 
     def get_default_engine_name(self) -> str:

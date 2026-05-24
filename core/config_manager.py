@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 """配置管理器 —— 支持 JSON 注释，持久化用户设置。"""
 
-import re
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Union
@@ -28,7 +27,7 @@ DEFAULT_SETTINGS = {
 
 def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
     """读取 JSON 文件，自动去除 // 行注释和 /* */ 块注释后解析"""
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         text = f.read()
     text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
     lines = []

@@ -1,9 +1,18 @@
 import os
+
 # 💡 屏蔽联网检查，提升启动速度
 os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
 
-import cv2, requests, base64, threading, queue, time, difflib, collections, re
+import base64
+import collections
+import difflib
+import queue
+import re
+import threading
+
+import cv2
 import numpy as np
+import requests
 from paddleocr import PaddleOCR
 
 # ================= 配置 =================
@@ -44,18 +53,18 @@ def polish_and_save(video_path):
     parsed = []
     for t_str, line in raw_list:
         clean_content = line.replace("『", "").replace("』", "").replace("「", "").replace("」", "").strip()
-        
+
         # 基础过滤逻辑
         if not clean_content or clean_content in STRICT_GARBAGE: continue
         if GARBAGE_PATTERN.search(clean_content): continue
-        
+
         speaker = clean_content.split("：", 1)[0] if "：" in clean_content else "NONE"
         parsed.append({"time": t_str, "speaker": speaker, "content": clean_content, "raw": line})
 
     # 去重逻辑
     refined = []
     for cur in parsed:
-        if not refined: 
+        if not refined:
             refined.append(cur); continue
         last = refined[-1]
         if cur['speaker'] == last['speaker'] and get_similarity(last['content'], cur['content']) > 0.85:
@@ -72,13 +81,13 @@ def polish_and_save(video_path):
             if "：" in final_text:
                 for char in "『』「」[]": final_text = final_text.replace(char, "")
                 final_text = final_text.strip()
-            
+
             # 💡 最终保存格式：[时间] 内容
             output_line = f"[{item['time']}] {final_text}"
             if output_line not in seen:
                 f.write(output_line + "\n")
                 seen.add(output_line)
-    
+
     with print_lock:
         print(f"\n✅ 剧情档案(含时间轴)已生成: {os.path.basename(output_file)}")
 
@@ -90,7 +99,7 @@ def ai_worker():
         file_path, img_frame, timestamp = task # 💡 接收时间戳
         v_name = os.path.basename(file_path)
         t_str = format_time(timestamp)
-        
+
         h = img_frame.shape[0]
         cropped = img_frame[int(h*0.2):, :]
         _, buffer = cv2.imencode('.jpg', cropped, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
@@ -123,7 +132,7 @@ def process_video(video_path):
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     frame_step = max(1, int(fps * 0.1))
-    
+
     frame_buffer = [] # 动态存放当前这一句的所有帧
     last_sent_text = ""
     last_raw_text = "" # 💡 记录上一帧的文字
@@ -132,12 +141,12 @@ def process_video(video_path):
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
-        
+
         current_sec = frame_idx / fps
 
         if frame_idx % frame_step == 0:
             h, w = frame.shape[:2]
-            dia_roi = frame[int(h*0.55):int(h*1), :] 
+            dia_roi = frame[int(h*0.55):int(h*1), :]
             opt_roi = frame[int(h*0.25):int(h*0.65), :]
             combined = np.vstack([opt_roi, np.zeros((30, w, 3), dtype=np.uint8), dia_roi])
             #roi范围截图调试
@@ -168,7 +177,7 @@ def process_video(video_path):
 
             with print_lock:
                 print(f"\r\033[K进度: {int(current_sec)}s | 任务: {task_queue.qsize()} | 哨兵: {curr_text[:12]}", end='', flush=True)
-        
+
         frame_idx += 1
 
     # 视频结束时，把最后缓存里的抓出来

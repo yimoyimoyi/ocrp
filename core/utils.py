@@ -1,9 +1,8 @@
-# -*- coding: utf-8 -*-
 """共享工具函数 —— FFmpeg 查找、常量定义等。"""
 
 import os
-import sys
 import shutil
+import sys
 from pathlib import Path
 
 _BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -62,7 +61,7 @@ def fetch_models_from_url(base_url: str, api_key: str = "", timeout: int = 10) -
         模型名称列表，失败返回空列表
     """
     # 延迟导入避免循环依赖
-    from core.ocr_engine import OpenAIVisionEngine, OllamaVisionEngine
+    from core.ocr_engine import OllamaVisionEngine, OpenAIVisionEngine
 
     # 根据 URL 特征判断引擎类型
     url_lower = base_url.lower()

@@ -1,16 +1,12 @@
-# -*- coding: utf-8 -*-
 """过滤器管理器单元测试。"""
 
 import json
-import tempfile
-from pathlib import Path
 
 
 class TestFilterManager:
     """测试 FilterManager 关键词和垃圾模式管理。"""
 
     def test_init_loads_keywords(self, tmp_path):
-        from core.filter_manager import FilterManager, FILTERS_PATH
 
         # Write temp config
         data = {"keywords": ["test1", "test2"], "garbage_patterns": ["垃圾1"]}

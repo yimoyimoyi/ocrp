@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """工具函数单元测试。"""
 
 
@@ -30,7 +29,7 @@ class TestConstants:
         assert ENGINE_WHISPERX == "whisperx"
 
     def test_mode_constants(self):
-        from core.utils import MODE_OCR_ONLY, MODE_ASR_ONLY, MODE_OCR_ASR_FULL
+        from core.utils import MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
 
         assert "OCR" in MODE_OCR_ONLY
         assert "ASR" in MODE_ASR_ONLY

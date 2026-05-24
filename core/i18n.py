@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """国际化（i18n）模块 —— 基于 Python gettext 的翻译支持。
 
 用法：
@@ -66,7 +65,7 @@ def _load_po(lang: str) -> gettext.NullTranslations:
     catalog = {}
     if po_path.exists():
         try:
-            with open(po_path, "r", encoding="utf-8") as f:
+            with open(po_path, encoding="utf-8") as f:
                 msgid = msgstr = None
                 for line in f:
                     line = line.strip()
@@ -109,7 +108,7 @@ def compile_po(po_path: str, mo_path: str) -> int:
     """将 .po 文件编译为 .mo 文件。返回编译的条目数。"""
     import struct
     msgs = {}
-    with open(po_path, "r", encoding="utf-8") as f:
+    with open(po_path, encoding="utf-8") as f:
         msgid = msgstr = None
         for line in f:
             line = line.strip()

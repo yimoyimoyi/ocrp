@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """WorkflowManager —— 封装所有业务流程逻辑（处理、纠错、批量、导出）。
 
 通过信号与 MainWindow 通信，通过依赖注入获取 UI 数据，
@@ -6,18 +5,23 @@
 """
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, List, Dict, Callable, Any
+from typing import Any
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from core.logger import get_logger
 from core.frame_processor import FrameProcessor
+from core.logger import get_logger
 from core.result_processor import export_results
-from core.utils import ENGINE_WHISPERX, MODE_OCR_ONLY, MODE_ASR_ONLY, MODE_OCR_ASR_FULL
+from core.utils import ENGINE_WHISPERX, MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
 from ui.workers import (
-    VideoProcessWorker, AICorrectionWorker, BatchCorrectionWorker,
-    ImageProcessWorker, BatchProcessWorker, AudioProcessWorker,
+    AICorrectionWorker,
+    AudioProcessWorker,
+    BatchCorrectionWorker,
+    BatchProcessWorker,
+    ImageProcessWorker,
+    VideoProcessWorker,
 )
 
 logger = get_logger(__name__)
@@ -42,7 +46,7 @@ class WorkflowManager(QObject):
     batch_all_done = pyqtSignal()                                   # 批量全部完成
     batch_error = pyqtSignal(str)                                   # 批量出错
 
-    def __init__(self, parent: Optional[QObject] = None):
+    def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
 
         # ── 管理器（通过 configure() 注入） ──
@@ -53,22 +57,22 @@ class WorkflowManager(QObject):
         self._config_mgr = None
 
         # ── 工作线程 ──
-        self._video_worker: Optional[VideoProcessWorker] = None
-        self._audio_worker: Optional[AudioProcessWorker] = None
-        self._image_worker: Optional[ImageProcessWorker] = None
-        self._batch_worker: Optional[BatchProcessWorker] = None
-        self._frame_processor: Optional[FrameProcessor] = None
-        self._correction_workers: List[AICorrectionWorker] = []
+        self._video_worker: VideoProcessWorker | None = None
+        self._audio_worker: AudioProcessWorker | None = None
+        self._image_worker: ImageProcessWorker | None = None
+        self._batch_worker: BatchProcessWorker | None = None
+        self._frame_processor: FrameProcessor | None = None
+        self._correction_workers: list[AICorrectionWorker] = []
         self._correction_workers_lock = threading.Lock()
-        self._batch_correction_worker: Optional[BatchCorrectionWorker] = None
+        self._batch_correction_worker: BatchCorrectionWorker | None = None
 
         # ── 结果状态 ──
-        self._correction_results: Dict[int, str] = {}
+        self._correction_results: dict[int, str] = {}
         self._correction_pending: set = set()
         self._filtered_count: int = 0
 
         # ── 批量状态 ──
-        self._batch_files: List[str] = []
+        self._batch_files: list[str] = []
 
         # ── 串行状态（ASR → OCR） ──
         self._pending_vp: str = ""
@@ -76,7 +80,7 @@ class WorkflowManager(QObject):
         self._pending_ename: str = ""
 
         # ── UI 访问器（通过 configure() 注入） ──
-        self._get_video_path: Callable[[], Optional[str]] = lambda: None
+        self._get_video_path: Callable[[], str | None] = lambda: None
         self._get_is_image: Callable[[], bool] = lambda: False
         self._get_regions: Callable[[], list] = lambda: []
         self._get_batch_files: Callable[[], list] = lambda: []
@@ -685,7 +689,6 @@ class WorkflowManager(QObject):
 
         texts = self._build_correction_texts(results)
         if not texts:
-            finish_label = "全量纠错完成" if is_auto else "批量纠错完成"
             self.status_msg.emit(f"✅ 完成: {len(results)} 条结果 | 无有效文本可纠错")
             return
 
@@ -940,7 +943,7 @@ class WorkflowManager(QObject):
     # 环境提取
     # ═══════════════════════════════════════════════════════════════
 
-    def extract_environment(self, summary_prompt_setter: Optional[Callable[[str], None]] = None):
+    def extract_environment(self, summary_prompt_setter: Callable[[str], None] | None = None):
         """手动提取全文环境。"""
         results = self._get_results()
         if not results:

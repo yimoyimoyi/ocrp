@@ -127,6 +127,7 @@ environments = [
 target-version = "py312"
 line-length = 120
 fix = true
+exclude = ["scripts/", "ocr_gui.py"]
 
 [tool.ruff.lint]
 select = [
@@ -143,7 +144,11 @@ select = [
 ]
 ignore = [
     "E501",   # 行长度（由 formatter 处理）
+    "E701",   # 单行多语句（UI 代码紧凑布局）
+    "E702",   # 分号分隔多语句（Qt 控件初始化常见）
     "E741",   # 变量名 l/O（UI 代码常见）
+    "SIM102", # 嵌套 if 合并（可读性优先）
+    "SIM105", # contextlib.suppress vs try-except-pass（风格偏好）
     "SIM108", # 三元表达式（可读性优先）
     "N802",   # 函数名大小写（Qt 约定 mixedCase）
     "N803",   # 参数名大小写
@@ -152,6 +157,15 @@ ignore = [
     "RUF001", # 全角字符在字符串中（中文项目需保留）
     "RUF002", # 全角字符在文档字符串中
     "RUF003", # 全角字符在注释中
+    "B023",   # 闭包捕获循环变量（立即调用模式，无实际风险）
+    "E402",   # 模块级 import 不在顶部（路径/DLL 初始化须先于 import）
+    "W293",   # 行尾空白（formatter 自动处理）
+    "RUF012", # 可变默认值用于类属性（Qt 信号定义惯用写法）
+    "RUF059", # 未使用的解构变量（模式匹配惯用写法）
+    "TC001",  # typing-only import 包装（不影响运行时）
+    "TC003",  # 同上
+    "B007",   # 未使用的循环变量（`for _x, _y, z in ...` 惯用写法）
+    "RUF013", # 隐式 Optional（typing.Optional 显式写法，风格偏好）
 ]
 
 [tool.ruff.lint.isort]

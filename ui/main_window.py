@@ -1,23 +1,36 @@
-# -*- coding: utf-8 -*-
 """主窗口 —— ORCP OCR 处理工具。
 引擎/模板选择 → 顶端菜单栏；所有参数设置 → 统一的「参数设置」对话框。"""
 
+import json
 import os
 import sys
-import json
 from pathlib import Path
-from typing import Optional, List, Dict
 
+from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QComboBox, QCheckBox,
-    QPushButton, QSpinBox, QFileDialog,
-    QFrame, QMessageBox, QStatusBar, QProgressBar, QSplitter,
-    QAction, QActionGroup, QDialog, QDialogButtonBox,
-    QFormLayout, QListWidget, QAbstractSpinBox, QToolBar, QSizePolicy,
+    QAbstractSpinBox,
+    QAction,
+    QActionGroup,
+    QApplication,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
     QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSplitter,
+    QStatusBar,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, QEvent
 
 from core.logger import get_logger
 
@@ -27,25 +40,25 @@ BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from core.config_manager import ConfigManager
-from ui.style_loader import load_qss_theme, scale_stylesheet
-from core.ocr_engine import OCREngineManager
 from core.ai_correction import AICorrector, load_correction_config
-from core.frame_processor import FrameProcessor
+from core.asr_engine import ASREngineManager
+from core.config_manager import ConfigManager
 from core.filter_manager import FilterManager
-from core.result_processor import export_results
-from core.prompt_manager import PromptTemplateManager
-from core.workflow_manager import WorkflowManager
+from core.frame_processor import FrameProcessor
 from core.i18n import _
-from core.utils import MODE_OCR_ONLY, MODE_ASR_ONLY, MODE_OCR_ASR_FULL
-from ui.dialogs import EngineConfigDialog, PresetManageDialog
-from ui.video_preview import VideoPreviewWidget
-from ui.region_manager import RegionManagerWidget
+from core.ocr_engine import OCREngineManager
+from core.prompt_manager import PromptTemplateManager
+from core.result_processor import export_results
+from core.utils import MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
+from core.workflow_manager import WorkflowManager
 from ui.config_panel import ConfigPanel
+from ui.dialogs import EngineConfigDialog, PresetManageDialog
+from ui.display_dialog import DisplayDialog
+from ui.region_manager import RegionManagerWidget
 from ui.result_table import ResultTableWidget
 from ui.settings_dialog import SettingsDialog
-from ui.display_dialog import DisplayDialog
-from core.asr_engine import ASREngineManager
+from ui.style_loader import load_qss_theme, scale_stylesheet
+from ui.video_preview import VideoPreviewWidget
 
 WIN_TITLE = _("ORCP - OCR 处理工具")
 
@@ -70,16 +83,16 @@ class MainWindow(QMainWindow):
         self._workflow = WorkflowManager(self)
 
         self._filtered_count: int = 0
-        self._frame_processor: Optional[FrameProcessor] = None
+        self._frame_processor: FrameProcessor | None = None
         self._all_raw_results: list = []
         self._asr_results: list = []
-        self._correction_results: Dict[int, str] = {}
+        self._correction_results: dict[int, str] = {}
         self._correction_pending: set = set()
         self._custom_prompt: str = ""
         self._mode_params: dict = {}
         self._current_engine: str = "paddleocr"
         self._current_template: str = ""
-        self._batch_files: List[str] = []
+        self._batch_files: list[str] = []
 
         self._theme = self._config_mgr.get_theme()
 
@@ -103,7 +116,7 @@ class MainWindow(QMainWindow):
         self._progress_bar.setFormat("")
         self._progress_bar.setTextVisible(False)
 
-        from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
+        from PyQt5.QtCore import QEasingCurve, QPropertyAnimation
         self._progress_anim = QPropertyAnimation(self._progress_bar, b"value")
         self._progress_anim.setDuration(300)
         self._progress_anim.setEasingCurve(QEasingCurve.OutCubic)
@@ -628,7 +641,7 @@ class MainWindow(QMainWindow):
         self._restore_dialog_geometry(dlg, "display_dialog_geometry")
         if dlg.exec_() == QDialog.Accepted:
             self._save_dialog_geometry(dlg, "display_dialog_geometry")
-            cfg = dlg.get_config()
+            dlg.get_config()  # 触发配置收集
             self._status_label.setText("✅ 显示设置已更新")
 
     def _apply_theme_from_dialog(self, theme: str, font_size: int, scale: float):
@@ -1340,7 +1353,7 @@ class MainWindow(QMainWindow):
         """将 UI 中的纠错参数同步写入 ai_correction.json。"""
         config_path = BASE_DIR / "config" / "ai_correction.json"
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 cfg = json.load(f)
         except Exception as e:
             logger.warning("读取纠错配置失败: %s", e)
@@ -1355,11 +1368,11 @@ class MainWindow(QMainWindow):
             cfg["retry"] = params["corr_retry"]
         if "corr_prompt" in params:
             cfg.setdefault("prompts", {})["default"] = params["corr_prompt"]
-        if "corr_summary_prompt" in params and params["corr_summary_prompt"]:
+        if params.get("corr_summary_prompt"):
             cfg["summary_prompt"] = params["corr_summary_prompt"]
-        if "corr_system_prompt" in params and params["corr_system_prompt"]:
+        if params.get("corr_system_prompt"):
             cfg["correction_system_prompt"] = params["corr_system_prompt"]
-        if "corr_output_format" in params and params["corr_output_format"]:
+        if params.get("corr_output_format"):
             cfg["output_format"] = params["corr_output_format"]
         if "corr_stream" in params:
             cfg["stream_mode"] = params["corr_stream"]
@@ -1629,7 +1642,7 @@ class MainWindow(QMainWindow):
         if self._filter_mgr.matches(raw):
             self._filtered_count += 1
             return
-        row = self._result_table.add_result(time_str=t_str, region=rname, engine=ename,
+        self._result_table.add_result(time_str=t_str, region=rname, engine=ename,
                                             raw_text=raw, time_sec=ts, confidence=conf, end_sec=end_sec)
         self._all_raw_results.append((ts, t_str, rname, ename, raw, conf, end_sec))
 
