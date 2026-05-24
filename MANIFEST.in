@@ -1,0 +1,20 @@
+include README.md CHANGELOG.md CONTRIBUTING.md CLAUDE.md LICENSE
+
+recursive-include config *.json
+recursive-include styles *.qss
+recursive-include scripts *.bat *.sh
+
+prune .github
+prune tests
+prune logs
+prune models
+prune __pycache__
+prune *.egg-info
+
+exclude .pre-commit-config.yaml
+exclude requirements.txt
+exclude setup.bat
+exclude setup.sh
+exclude diagnose.bat
+exclude diagnose.sh
+exclude *.log

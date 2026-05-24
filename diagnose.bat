@@ -63,7 +63,10 @@ rem -- [6] cuDNN 8 -----------------------------------------------------
 echo.
 echo --- 6. cuDNN 8 (GPU ASR) ---
 if !PY_OK! equ 1 (
-    python -c "import ctypes; ctypes.CDLL('cudnn_cnn_infer64_8.dll')" >nul 2>&1
+    set "DPY="
+    if exist ".venv\Scripts\python.exe" set "DPY=.venv\Scripts\python.exe"
+    if not defined DPY set "DPY=python"
+    "!DPY!" -c "import ctypes; ctypes.CDLL('cudnn_cnn_infer64_8.dll')" >nul 2>&1
     if !errorlevel! equ 0 (
         echo   OK: cuDNN 8 ready
     ) else (

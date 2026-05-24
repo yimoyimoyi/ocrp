@@ -3,12 +3,20 @@
 硬件加速由全局设置 hw_accel 统一控制。
 
 DLL 隔离策略：
-  - PaddleOCR CPU 模式：不加载 CUDA DLL，torch/WhisperX 正常运行
-  - PaddleOCR GPU 模式：从 site-packages/nvidia/*/bin/ 加载 CUDA/cuDNN（pip 安装的 nvidia-* 包）
-  - albumentations → torch 导入由 _BlockTorchImport 阻断，PaddleOCR 初始化完即恢复
+  - PaddleOCR CPU 模式：仅注册 torch/lib，不加载 CUDA DLL，避免与 CPU torch 冲突
+  - PaddleOCR GPU 模式：在 _ensure_ocr 中按需调用 _register_gpu_dll_dirs() 加载 CUDA/cuDNN
 """
 
-import os, sys, ctypes, re, json, base64, threading, requests, time, numpy as np
+import os
+import sys
+import json
+import atexit
+import base64
+import subprocess
+import threading
+import requests
+import time
+import numpy as np
 
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -18,22 +26,30 @@ BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
 _CORE_DLL_DIR = os.path.dirname(os.path.abspath(__file__))
 
-from config_manager import _load_json_with_comments
+from core.config_manager import _load_json_with_comments
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def load_engines_config() -> dict:
     path = CONFIG_DIR / "ocr_engines.json"
     if path.exists():
         try:
-            return _load_json_with_comments(path)
-        except Exception:
-            pass
+            cfg = _load_json_with_comments(path)
+            from core.config_schema import validate_config
+            from core.config_schemas import OCR_ENGINES_SCHEMA
+            validate_config(cfg, OCR_ENGINES_SCHEMA, "ocr_engines.json")
+            return cfg
+        except Exception as e:
+            logger.warning("加载 OCR 引擎配置失败: %s", e)
     return {"engines": {}, "default_engine": "paddleocr"}
 
 
 # ── DLL 预加载 ──
 _dll_loaded = False
 _dll_load_lock = threading.Lock()
+_gpu_dll_loaded = False
 
 
 def _find_nvidia_site_packages_dirs() -> List[str]:
@@ -53,13 +69,8 @@ def _find_nvidia_site_packages_dirs() -> List[str]:
     return bin_dirs
 
 
-def _preload_core_dlls():
-    """GPU 模式时从 site-packages/nvidia/*/bin/ 加载 CUDA/cuDNN DLL。
-
-    这些 DLL 由 pip 包（nvidia-cuda-runtime-cu12, nvidia-cublas-cu12,
-    nvidia-cudnn-cu12 等）安装，不再需要捆绑到仓库中。
-    使用 os.add_dll_directory() 注册搜索路径，让 Windows 在需要时自动解析。
-    """
+def _register_dll_dirs():
+    """模块级别执行：注册 torch/lib DLL 搜索路径（CPU/GPU 均需要）。"""
     global _dll_loaded
     if _dll_loaded:
         return
@@ -70,18 +81,75 @@ def _preload_core_dlls():
         if sys.platform != "win32":
             return
 
-        # 优先从 site-packages/nvidia/*/bin/ 加载
-        nvidia_dirs = _find_nvidia_site_packages_dirs()
-        if nvidia_dirs:
-            for d in nvidia_dirs:
-                try:
-                    os.add_dll_directory(d)
-                except OSError:
-                    pass
-            print(f"[PaddleOCR] ✅ 已注册 {len(nvidia_dirs)} 个 nvidia DLL 搜索路径")
+        # torch/lib/ —— 从 sys.path 定位（避免 importlib.util 触发导入）
+        for sp in sys.path:
+            if not sp:
+                continue
+            _torch_init = os.path.join(sp, "torch", "__init__.py")
+            if os.path.isfile(_torch_init):
+                _tl = os.path.join(sp, "torch", "lib")
+                if os.path.isdir(_tl):
+                    os.add_dll_directory(_tl)
+                break
+
+        # paddle/libs/ — PaddlePaddle 自带 DLL（common.dll, phi.dll 等）
+        for _sp in sys.path:
+            if not _sp:
+                continue
+            _paddle_init = os.path.join(_sp, "paddle", "__init__.py")
+            if os.path.isfile(_paddle_init):
+                _pl = os.path.join(_sp, "paddle", "libs")
+                if os.path.isdir(_pl):
+                    os.add_dll_directory(_pl)
+                break
+
+        logger.debug("DLL 搜索路径已注册: torch/lib, paddle/libs")
+
+
+def _register_gpu_dll_dirs():
+    """GPU 模式专用：注册 CUDA/cuDNN DLL 搜索路径（纯 pip 包 DLL 方案）。
+
+    不使用系统 CUDA Toolkit（会与 pip 包 DLL 版本冲突）。
+    DLL 来源：
+      - torch/lib/（ocr_gui.py 已添加）→ torch 自带全部 CUDA DLL
+      - site-packages/nvidia/*/lib/ → paddlepaddle-gpu 依赖的 nvidia-*-cu12 包
+    """
+    global _gpu_dll_loaded
+    if _gpu_dll_loaded:
+        return
+    with _dll_load_lock:
+        if _gpu_dll_loaded:
+            return
+        _gpu_dll_loaded = True
+        if sys.platform != "win32":
             return
 
-        # 备选：从旧 core/cuda12/ core/cudnn8/ 目录加载（向后兼容迁移期）
+        # nvidia pip 包 DLL 目录（paddlepaddle-gpu 依赖）
+        # 例如 site-packages/nvidia/cuda_runtime/lib/
+        _nvidia_root = os.path.join(os.path.dirname(__file__), "..", ".venv",
+                                     "Lib", "site-packages", "nvidia")
+        if not os.path.isdir(_nvidia_root):
+            # fallback: 从 torch 安装路径推断 site-packages
+            try:
+                import torch
+                _sp = os.path.dirname(os.path.dirname(torch.__file__))
+                _nvidia_root = os.path.join(_sp, "nvidia")
+            except Exception as _e:
+                logger.debug("nvidia 包路径推断失败: %s", _e)
+                _nvidia_root = None
+
+        _nvidia_dirs = 0
+        if _nvidia_root and os.path.isdir(_nvidia_root):
+            for _entry in os.listdir(_nvidia_root):
+                _lib_dir = os.path.join(_nvidia_root, _entry, "bin")
+                if os.path.isdir(_lib_dir):
+                    try:
+                        os.add_dll_directory(_lib_dir)
+                        _nvidia_dirs += 1
+                    except OSError as _e:
+                        logger.debug("nvidia DLL 目录注册失败 (%s): %s", _entry, _e)
+
+        # 兼容旧目录
         for legacy in ("cuda12", "cudnn8"):
             _legacy_dir = os.path.join(_CORE_DLL_DIR, legacy)
             if os.path.isdir(_legacy_dir):
@@ -90,18 +158,54 @@ def _preload_core_dlls():
                 except OSError:
                     pass
 
-        if not nvidia_dirs:
-            print("[PaddleOCR] ⚠ 未找到 nvidia-* pip 包的 DLL，"
-                  "GPU 加速可能不可用，请运行: uv sync")
+        logger.debug("GPU DLL 搜索路径已注册（nvidia pip 包: %d 个目录）", _nvidia_dirs)
 
 
-# ── 临时阻断 torch 导入 ──
-class _BlockTorchImport:
-    """sys.meta_path 导入钩子 —— 阻截 torch 及其子模块的导入。"""
-    def find_spec(self, fullname, path, target=None):
-        if fullname == "torch" or fullname.startswith("torch."):
-            raise ImportError("torch blocked during PaddleOCR init: " + fullname)
-        return None
+# ── IPC 辅助（子进程 stdin/stdout JSON 行通信）──
+def _send_json(fp, obj: dict):
+    """原子写入 JSON 行到子进程 stdin。"""
+    line = json.dumps(obj, ensure_ascii=False)
+    fp.write(line + "\n")
+    fp.flush()
+
+
+def _read_any_response(proc: subprocess.Popen, timeout: float = 60) -> dict | None:
+    """从子进程 stdout 读取下一个 JSON 响应（不限 req_id）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return None
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                return None
+            continue
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _read_one_response(proc: subprocess.Popen, req_id: int, timeout: float = 60) -> dict | None:
+    """从子进程 stdout 读取匹配 req_id 的 JSON 响应。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return None
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                return None
+            continue
+        try:
+            resp = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if resp.get("id") == req_id:
+            return resp
+    logger.warning("OCR 子进程响应超时 (%.0fs)", timeout)
+    return None
 
 
 # ═══════════════ 抽象基类 ═══════════════
@@ -134,6 +238,12 @@ class BaseOCREngine(ABC):
 
 # ═══════════════ PaddleOCR 本地引擎 ═══════════════
 class PaddleOCREngine(BaseOCREngine):
+    """PaddleOCR 引擎 —— 默认进程内直接调用（最快），可选子进程隔离。
+
+    进程内模式：参考 run_ocr.py，直接 `PaddleOCR.predict()`，零 IPC 开销。
+    子进程模式：通过 ocr_server.py 隔离 DLL，避免 CUDA 冲突（后备方案）。
+    """
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.engine_name = "paddleocr"
@@ -141,106 +251,278 @@ class PaddleOCREngine(BaseOCREngine):
         self._ocr = None
         self._init_lock = threading.Lock()
         self._lang = cfg.get("lang", "ch")
+        self._device = cfg.get("device") or ("gpu" if cfg.get("use_gpu") else "cpu")
+        self._ocr_version = cfg.get("ocr_version") or None
         self._use_angle_cls = cfg.get("use_angle_cls", True)
-        self._use_gpu = cfg.get("use_gpu", False)
-        self._show_log = cfg.get("show_log", False)
-        self._fast_mode = cfg.get("fast_mode", True)
-        self._rec_batch = cfg.get("rec_batch_num", 6)
+        self._use_doc_orientation_classify = cfg.get("use_doc_orientation_classify", False)
+        self._use_doc_unwarping = cfg.get("use_doc_unwarping", False)
+        self._use_textline_orientation = cfg.get("use_textline_orientation", False)
+        self._paddle_available = True
+
+        # 子进程模式（后备，config 中可设置 use_subprocess: true）
+        self._use_subprocess = bool(cfg.get("use_subprocess", False))
+        self._proc: subprocess.Popen | None = None
+        self._ready = False
+        self._req_id = 0
+        self._req_lock = threading.Lock()
+        self._stderr_thread = None
+        self._stderr_lines: list = []
+        if self._use_subprocess:
+            atexit.register(self._stop_server)
+
+    def is_available(self) -> bool:
+        return self._paddle_available
+
+    def set_ocr_version(self, version: str):
+        """动态切换 OCR 模型版本（哨兵模式专用）。"""
+        if not version or version == "跟随全局":
+            return
+        ver_map = {"PP-OCRv4 (最快)": "PP-OCRv4",
+                   "PP-OCRv5_mobile (平衡)": "PP-OCRv5_mobile",
+                   "PP-OCRv5_server (高精度)": None}
+        mapped = ver_map.get(version, None)
+        if mapped != self._ocr_version:
+            self._ocr_version = mapped
+            self._ocr = None  # 下次 recognize 时重新初始化
 
     def set_hw_accel(self, enabled: bool):
-        if self._use_gpu != enabled:
-            self._use_gpu = enabled
+        new_device = "gpu" if enabled else "cpu"
+        if self._device != new_device:
+            self._device = new_device
             self._ocr = None
+            if self._use_subprocess and self._ready and self._proc and self._proc.poll() is None:
+                try:
+                    _send_json(self._proc.stdin, {"cmd": "set_device", "device": new_device})
+                    _read_any_response(self._proc, timeout=30)
+                except Exception as e:
+                    logger.warning("OCR 子进程 set_device 失败: %s", e)
+                    self._stop_server()
 
+    # ── 子进程管理 ──
+    def _start_server(self) -> bool:
+        if self._ready and self._proc and self._proc.poll() is None:
+            return True
+        _OCR_SERVER = str(BASE_DIR / "core" / "ocr_server.py")
+        _CONFIG_PATH = str(CONFIG_DIR / "ocr_engines.json")
+        _PYTHON = sys.executable
+        try:
+            self._proc = subprocess.Popen(
+                [_PYTHON, _OCR_SERVER, "--config", _CONFIG_PATH],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            )
+            # 启动 stderr 排空线程，防止管道缓冲区满导致子进程阻塞
+            self._stderr_lines = []
+            self._stderr_thread = threading.Thread(
+                target=self._drain_stderr, daemon=True)
+            self._stderr_thread.start()
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                if self._proc.poll() is not None:
+                    err = self._proc.stderr.read()
+                    logger.error("OCR 子进程提前退出: %s", err[:300])
+                    self._proc = None
+                    self._paddle_available = False
+                    return False
+                line = self._proc.stderr.readline()
+                if not line:
+                    time.sleep(0.1)
+                    continue
+                logger.debug("OCR_SERVER: %s", line.rstrip())
+                if "ready" in line:
+                    self._ready = True
+                    # 子进程默认读取 config 中的 device (CPU)，主进程可能已设为 GPU
+                    if self._device.startswith("gpu"):
+                        try:
+                            _send_json(self._proc.stdin, {"cmd": "set_device", "device": self._device})
+                            _read_any_response(self._proc, timeout=30)
+                            logger.info("OCR 子进程已切换到 GPU")
+                        except Exception as _e:
+                            logger.warning("OCR 子进程 GPU 切换失败: %s", _e)
+                    return True
+                if "error" in line.lower() and "failed" in line.lower():
+                    err = self._proc.stderr.read()
+                    logger.error("OCR 子进程启动失败: %s", err[:300])
+                    self._stop_server()
+                    self._paddle_available = False
+                    return False
+            logger.error("OCR 子进程启动超时 (120s)")
+            self._stop_server()
+            return False
+        except Exception as e:
+            logger.error("OCR 子进程启动异常: %s", e)
+            self._stop_server()
+            return False
+
+    def _stop_server(self):
+        if self._proc and self._proc.poll() is None:
+            try:
+                _send_json(self._proc.stdin, {"cmd": "shutdown"})
+                self._proc.wait(timeout=3)
+            except Exception:
+                pass
+            if self._proc.poll() is None:
+                try:
+                    self._proc.kill()
+                    self._proc.wait(timeout=3)
+                except Exception:
+                    pass
+        self._proc = None
+        self._ready = False
+        self._stderr_lines.clear()
+
+    def _drain_stderr(self):
+        """后台线程：持续排空子进程 stderr，防止管道缓冲区满导致死锁。"""
+        try:
+            for line in self._proc.stderr:
+                self._stderr_lines.append(line.rstrip())
+        except Exception:
+            pass
+
+    def _check_process_alive(self):
+        if self._proc and self._proc.poll() is not None:
+            code = self._proc.poll()
+            err = "\n".join(self._stderr_lines[-20:]) if self._stderr_lines else "(no stderr)"
+            logger.warning("OCR 子进程意外退出 (code=%d): %s", code, err[:200])
+            self._proc = None
+            self._ready = False
+
+    # ── 进程内模式：零 IPC 开销，参考 run_ocr.py ──
     def _ensure_ocr(self):
-        if self._ocr is None:
-            with self._init_lock:
-                if self._ocr is None:
-                    _blocker = _BlockTorchImport()
-                    sys.meta_path.insert(0, _blocker)
-                    try:
-                        if self._use_gpu:
-                            _preload_core_dlls()
-                        from paddleocr import PaddleOCR
-                    finally:
-                        if _blocker in sys.meta_path:
-                            sys.meta_path.remove(_blocker)
-
-                    try:
-                        self._ocr = PaddleOCR(
-                            use_angle_cls=self._use_angle_cls,
-                            lang=self._lang,
-                            use_gpu=self._use_gpu,
-                            show_log=self._show_log,
-                            det_db_score_mode="fast" if self._fast_mode else "slow",
-                            rec_batch_num=self._rec_batch,
-                        )
-                    except Exception as e:
-                        if self._use_gpu:
-                            print(f"[PaddleOCR] GPU 初始化失败: {e}")
-                            print("[PaddleOCR] 自动退回 CPU 模式...")
-                            self._use_gpu = False
-                            self._ocr = PaddleOCR(
-                                use_angle_cls=self._use_angle_cls,
-                                lang=self._lang,
-                                use_gpu=False,
-                                show_log=self._show_log,
-                                det_db_score_mode="fast" if self._fast_mode else "slow",
-                                rec_batch_num=self._rec_batch,
-                            )
-                        else:
-                            raise
-
-    def _upscale_if_small(self, image: np.ndarray, min_side: int = 300) -> np.ndarray:
-        """PaddleOCR 的文字检测模型（DB）对极小图片检测不到文本框。
-        若图片最短边小于 min_side，等比放大到短边为 min_side。"""
-        h, w = image.shape[:2]
-        if h >= min_side and w >= min_side:
-            return image
-        scale = min_side / min(h, w)
-        import cv2
-        return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        """懒加载 PaddleOCR（主进程内，零 IPC）。"""
+        if self._ocr is not None:
+            return
+        with self._init_lock:
+            if self._ocr is not None:
+                return
+            # 抑制 PaddleOCR / PaddlePaddle 内部 stderr 日志
+            import logging as _logging
+            for _name in ("paddleocr", "paddle", "ppocr"):
+                _logging.getLogger(_name).setLevel(_logging.WARNING)
+            device = self._device
+            if device.startswith("gpu"):
+                _register_gpu_dll_dirs()
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        device = "cpu"
+                except Exception as e:
+                    logger.warning("GPU 检测失败，回退 CPU: %s", e)
+                    device = "cpu"
+            try:
+                from paddleocr import PaddleOCR
+            except Exception as e:
+                logger.warning("PaddleOCR 导入失败: %s", e)
+                self._paddle_available = False
+                return
+            kwargs = {
+                "lang": self._lang, "device": device,
+                "use_angle_cls": self._use_angle_cls,
+                "enable_mkldnn": False,
+                "use_doc_orientation_classify": self._use_doc_orientation_classify,
+                "use_doc_unwarping": self._use_doc_unwarping,
+            }
+            if self._ocr_version:
+                kwargs["ocr_version"] = self._ocr_version
+            logger.info("PaddleOCR 进程内初始化: device=%s, version=%s", device,
+                        self._ocr_version or "latest")
+            try:
+                self._ocr = PaddleOCR(**kwargs)
+            except Exception as e:
+                if device.startswith("gpu"):
+                    logger.warning("GPU 初始化失败: %s，回退 CPU", e)
+                    self._device = "cpu"
+                    kwargs["device"] = "cpu"
+                    self._ocr = PaddleOCR(**kwargs)
+                else:
+                    raise
 
     def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
+        if not self._paddle_available:
+            return ""
+        if self._use_subprocess:
+            return self._recognize_subprocess(image)
+        return self._recognize_in_process(image)
+
+    def _recognize_in_process(self, image: np.ndarray) -> str:
+        """进程内直接调用 PaddleOCR，零 IPC（默认，最快）。"""
         try:
             self._ensure_ocr()
-            upscaled = self._upscale_if_small(image)
-            results = self._ocr.ocr(upscaled, cls=self._use_angle_cls)
-            if results and results[0]:
-                confs = [line[1][1] for line in results[0]]
-                text = "".join([line[1][0] for line in results[0]]).replace(" ", "")
-                self._last_confidence = sum(confs) / len(confs) if confs else 0.0
-                return text
+            if self._ocr is None:
+                return ""
+            result = self._ocr.predict(image)
+            if result and len(result) > 0:
+                j = result[0].json
+                res_data = j.get("res", j)
+                texts = res_data.get("rec_texts", [])
+                scores = res_data.get("rec_scores", [])
+                if texts:
+                    text = "".join(texts).replace(" ", "")
+                    self._last_confidence = sum(scores) / len(scores) if scores else 0.0
+                    return text
             self._last_confidence = 0.0
             return ""
         except Exception as e:
-            err_msg = str(e)
-            if self._use_gpu and any(kw in err_msg.lower() for kw in
-                ("cudnn", "preconditionnotmet", "dynamic library")):
-                print(f"[PaddleOCR] GPU 运行时失败: {e}")
-                print("[PaddleOCR] 自动退回 CPU 模式，重建引擎...")
-                self._use_gpu = False
+            err = str(e)
+            if self._device.startswith("gpu") and any(kw in err.lower() for kw in
+                ("cuda", "cublas", "gpu", "out of memory", "onednn", "pir", "dll")):
+                logger.warning("GPU 运行时失败: %s，回退 CPU", e)
+                self._device = "cpu"
                 self._ocr = None
-                try:
-                    self._ensure_ocr()
-                except Exception:
-                    self._last_confidence = 0.0
-                    return ""
-                try:
-                    results = self._ocr.ocr(image, cls=self._use_angle_cls)
-                    if results and results[0]:
-                        confs = [line[1][1] for line in results[0]]
-                        self._last_confidence = sum(confs) / len(confs) if confs else 0.0
-                        return "".join([line[1][0] for line in results[0]]).replace(" ", "")
-                except Exception as e2:
-                    print(f"[PaddleOCR] CPU 重试失败: {e2}")
-                return ""
+                return self._recognize_in_process(image)
+            logger.error("PaddleOCR 识别失败: %s", e)
             self._last_confidence = 0.0
-            print(f"[PaddleOCR] 识别失败: {e}")
+            return ""
+
+    # ── 子进程模式（后备，use_subprocess=true 时启用）──
+    def _recognize_subprocess(self, image: np.ndarray) -> str:
+        if not self._paddle_available:
+            return ""
+        try:
+            self._check_process_alive()
+            if not self._ready:
+                if not self._start_server():
+                    return ""
+            raw_bytes = image.tobytes()
+            image_b64 = base64.b64encode(raw_bytes).decode("ascii")
+            h, w = image.shape[:2]
+            with self._req_lock:
+                self._req_id += 1
+                req_id = self._req_id
+            _send_json(self._proc.stdin, {
+                "cmd": "recognize", "id": req_id,
+                "image_b64": image_b64,
+                "width": w, "height": h, "channels": image.shape[2] if image.ndim == 3 else 1,
+                "lang": self._lang, "device": self._device,
+            })
+            resp = _read_one_response(self._proc, req_id, timeout=60)
+            if resp and resp.get("status") == "result":
+                self._last_confidence = resp.get("confidence", 0.0)
+                return resp.get("text", "")
+            if resp and resp.get("status") == "error":
+                logger.error("OCR 子进程识别失败: %s", resp.get("message", ""))
+            if resp is None:
+                logger.warning("OCR 子进程无响应，重建连接")
+                self._stop_server()
+            return ""
+        except Exception as e:
+            logger.error("OCR 子进程通信异常: %s", e)
+            self._stop_server()
             return ""
 
     def warm_up(self):
-        threading.Thread(target=self._ensure_ocr, daemon=True).start()
+        if self._use_subprocess:
+            threading.Thread(target=self._start_server, daemon=True).start()
+        else:
+            pass
+
+    def __del__(self):
+        if self._use_subprocess:
+            try:
+                self._stop_server()
+            except Exception:
+                pass
 
 
 # ═══════════════ OpenAI Vision API ═══════════════
@@ -262,7 +544,8 @@ class OpenAIVisionEngine(BaseOCREngine):
             headers = {"Authorization": f"Bearer {self._api_key}"}
             resp = requests.get(url, headers=headers, timeout=10)
             return resp.status_code == 200
-        except Exception:
+        except Exception as e:
+            logger.warning("API ping 失败: %s", e)
             return False
 
     def get_model_list(self) -> List[str]:
@@ -272,19 +555,17 @@ class OpenAIVisionEngine(BaseOCREngine):
             resp = requests.get(url, headers=headers, timeout=15)
             if resp.status_code == 200:
                 return [m["id"] for m in resp.json().get("data", [])]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("获取模型列表失败: %s", e)
         return []
 
     def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
         max_retries = getattr(self, '_retry', 2)
         t_start = time.time()
         prompt_text = prompt or self._prompt_template
-        print(f"[OpenAI Vision] ═══════════ API 请求 ═══════════")
-        print(f"[OpenAI Vision]   🔗 URL: {self._base_url}/chat/completions")
-        print(f"[OpenAI Vision]   🤖 Model: {self._model}")
-        print(f"[OpenAI Vision]   📝 Prompt: {prompt_text[:80]}{'...' if len(prompt_text) > 80 else ''}")
-        print(f"[OpenAI Vision]   🖼 Image: {image.shape[1]}x{image.shape[0]}")
+        logger.info("OpenAI Vision 请求 | model=%s | image=%dx%d",
+                     self._model, image.shape[1], image.shape[0])
+        logger.debug("Prompt: %s", prompt_text[:120])
         for attempt in range(max_retries + 1):
             try:
                 import cv2
@@ -301,26 +582,23 @@ class OpenAIVisionEngine(BaseOCREngine):
                 elapsed = time.time() - t_start
                 if resp.status_code == 200:
                     content = resp.json()["choices"][0]["message"]["content"].strip()
-                    preview = content[:80].replace("\n", " ")
-                    print(f"[OpenAI Vision]   ⏱ {elapsed:.1f}s | ✅ 响应({len(content)} chars): {preview}{'...' if len(content) > 80 else ''}")
+                    logger.info("OpenAI Vision 响应: %.1fs, %d chars", elapsed, len(content))
                     return content
-                print(f"[OpenAI Vision]   ❌ HTTP {resp.status_code} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.warning("OpenAI Vision HTTP %d (第%d次) | %.1fs", resp.status_code, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[OpenAI Vision]   ↻ 第{attempt+2}次重试...")
+                    logger.info("重试第 %d 次...", attempt + 2)
             except requests.exceptions.Timeout:
                 elapsed = time.time() - t_start
-                print(f"[OpenAI Vision]   ❌ 请求超时 ({self._timeout}s) (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.warning("OpenAI Vision 超时 (%ds, 第%d次) | %.1fs", self._timeout, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[OpenAI Vision]   ↻ 第{attempt+2}次重试...")
                     continue
             except Exception as e:
                 elapsed = time.time() - t_start
-                print(f"[OpenAI Vision]   ❌ 请求异常: {e} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.error("OpenAI Vision 请求异常: %s (第%d次) | %.1fs", e, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[OpenAI Vision]   ↻ 第{attempt+2}次重试...")
                     continue
                 return ""
-        print(f"[OpenAI Vision]   ❌ 最终失败 (已重试 {max_retries} 次)")
+        logger.error("OpenAI Vision 最终失败 (已重试 %d 次)", max_retries)
         return ""
 
 
@@ -341,7 +619,8 @@ class OllamaVisionEngine(BaseOCREngine):
             url = self._base_url.rstrip("/")
             resp = requests.get(url, timeout=10)
             return resp.status_code == 200
-        except Exception:
+        except Exception as e:
+            logger.warning("API ping 失败: %s", e)
             return False
 
     def get_model_list(self) -> List[str]:
@@ -350,19 +629,17 @@ class OllamaVisionEngine(BaseOCREngine):
             resp = requests.get(url, timeout=15)
             if resp.status_code == 200:
                 return [m["name"] for m in resp.json().get("models", [])]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("获取模型列表失败: %s", e)
         return []
 
     def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
         max_retries = getattr(self, '_retry', 2)
         t_start = time.time()
         prompt_text = prompt or self._prompt_template
-        print(f"[Ollama Vision] ═══════════ API 请求 ═══════════")
-        print(f"[Ollama Vision]   🔗 URL: {self._base_url}/api/generate")
-        print(f"[Ollama Vision]   🤖 Model: {self._model}")
-        print(f"[Ollama Vision]   📝 Prompt: {prompt_text[:80]}{'...' if len(prompt_text) > 80 else ''}")
-        print(f"[Ollama Vision]   🖼 Image: {image.shape[1]}x{image.shape[0]}")
+        logger.info("Ollama Vision 请求 | model=%s | image=%dx%d",
+                     self._model, image.shape[1], image.shape[0])
+        logger.debug("Prompt: %s", prompt_text[:120])
         for attempt in range(max_retries + 1):
             try:
                 import cv2
@@ -374,26 +651,23 @@ class OllamaVisionEngine(BaseOCREngine):
                 elapsed = time.time() - t_start
                 if resp.status_code == 200:
                     content = resp.json().get("response", "").strip()
-                    preview = content[:80].replace("\n", " ")
-                    print(f"[Ollama Vision]   ⏱ {elapsed:.1f}s | ✅ 响应({len(content)} chars): {preview}{'...' if len(content) > 80 else ''}")
+                    logger.info("Ollama Vision 响应: %.1fs, %d chars", elapsed, len(content))
                     return content
-                print(f"[Ollama Vision]   ❌ HTTP {resp.status_code} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.warning("Ollama Vision HTTP %d (第%d次) | %.1fs", resp.status_code, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[Ollama Vision]   ↻ 第{attempt+2}次重试...")
+                    logger.info("重试第 %d 次...", attempt + 2)
             except requests.exceptions.Timeout:
                 elapsed = time.time() - t_start
-                print(f"[Ollama Vision]   ❌ 请求超时 ({self._timeout}s) (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.warning("Ollama Vision 超时 (%ds, 第%d次) | %.1fs", self._timeout, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[Ollama Vision]   ↻ 第{attempt+2}次重试...")
                     continue
             except Exception as e:
                 elapsed = time.time() - t_start
-                print(f"[Ollama Vision]   ❌ 请求异常: {e} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.error("Ollama Vision 请求异常: %s (第%d次) | %.1fs", e, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[Ollama Vision]   ↻ 第{attempt+2}次重试...")
                     continue
                 return ""
-        print(f"[Ollama Vision]   ❌ 最终失败 (已重试 {max_retries} 次)")
+        logger.error("Ollama Vision 最终失败 (已重试 %d 次)", max_retries)
         return ""
 
 
@@ -415,7 +689,8 @@ class LlamaCppEngine(BaseOCREngine):
             url = self._base_url.rstrip("/") + "/v1/models"
             resp = requests.get(url, timeout=10)
             return resp.status_code == 200
-        except Exception:
+        except Exception as e:
+            logger.warning("API ping 失败: %s", e)
             return False
 
     def get_model_list(self) -> List[str]:
@@ -424,19 +699,17 @@ class LlamaCppEngine(BaseOCREngine):
             resp = requests.get(url, timeout=15)
             if resp.status_code == 200:
                 return [m["id"] for m in resp.json().get("data", [])]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("获取模型列表失败: %s", e)
         return []
 
     def recognize(self, image: np.ndarray, prompt: Optional[str] = None) -> str:
         max_retries = getattr(self, '_retry', 2)
         t_start = time.time()
         prompt_text = prompt or self._prompt_template
-        print(f"[llama.cpp] ═══════════ API 请求 ═══════════")
-        print(f"[llama.cpp]   🔗 URL: {self._base_url}/v1/chat/completions")
-        print(f"[llama.cpp]   🤖 Model: {self._model or '(default)'}")
-        print(f"[llama.cpp]   📝 Prompt: {prompt_text[:80]}{'...' if len(prompt_text) > 80 else ''}")
-        print(f"[llama.cpp]   🖼 Image: {image.shape[1]}x{image.shape[0]}")
+        logger.info("[llama.cpp] API 请求: %s 模型=%s 图片=%dx%d prompt=%.80s",
+                     self._base_url, self._model or "(default)",
+                     image.shape[1], image.shape[0], prompt_text)
         for attempt in range(max_retries + 1):
             try:
                 import cv2
@@ -449,30 +722,36 @@ class LlamaCppEngine(BaseOCREngine):
                 elapsed = time.time() - t_start
                 if resp.status_code == 200:
                     content = resp.json()["choices"][0]["message"]["content"].strip()
-                    preview = content[:80].replace("\n", " ")
-                    print(f"[llama.cpp]   ⏱ {elapsed:.1f}s | ✅ 响应({len(content)} chars): {preview}{'...' if len(content) > 80 else ''}")
+                    logger.info("[llama.cpp] ✅ 响应 %d chars | 耗时 %.1fs", len(content), elapsed)
                     return content
-                print(f"[llama.cpp]   ❌ HTTP {resp.status_code} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
-                if attempt < max_retries:
-                    print(f"[llama.cpp]   ↻ 第{attempt+2}次重试...")
+                logger.warning("[llama.cpp] HTTP %d (第%d次) 耗时 %.1fs", resp.status_code, attempt + 1, elapsed)
+                if attempt >= max_retries:
+                    continue
             except requests.exceptions.Timeout:
                 elapsed = time.time() - t_start
-                print(f"[llama.cpp]   ❌ 请求超时 ({self._timeout}s) (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
+                logger.warning("[llama.cpp] 超时 %ds (第%d次) 耗时 %.1fs", self._timeout, attempt + 1, elapsed)
                 if attempt < max_retries:
-                    print(f"[llama.cpp]   ↻ 第{attempt+2}次重试...")
                     continue
             except Exception as e:
                 elapsed = time.time() - t_start
-                print(f"[llama.cpp]   ❌ 请求异常: {e} (第{attempt+1}次) | 耗时 {elapsed:.1f}s")
-                if attempt < max_retries:
-                    print(f"[llama.cpp]   ↻ 第{attempt+2}次重试...")
-                    continue
-                return ""
-        print(f"[llama.cpp]   ❌ 最终失败 (已重试 {max_retries} 次)")
+                logger.warning("[llama.cpp] 请求异常: %s (第%d次) 耗时 %.1fs", e, attempt + 1, elapsed)
+                if attempt >= max_retries:
+                    break
+                continue
+            return ""
+        logger.error("[llama.cpp] 最终失败 (已重试 %d 次)", max_retries)
         return ""
 
 
 # ═══════════════ 引擎注册表 ═══════════════
+# 模块导入时立即注册 DLL 路径并预加载 torch
+# 必须在 PyQt5 等可能干扰 DLL 搜索路径的模块之前执行
+_register_dll_dirs()
+try:
+    pass
+except Exception as e:
+    logger.warning("torch 导入失败: %s", e)
+
 ENGINE_CLASS_MAP = {
     "paddleocr": PaddleOCREngine,
     "openai_vision": OpenAIVisionEngine,
@@ -487,6 +766,7 @@ class OCREngineManager:
         self._config = load_engines_config()
         self._default_name = self._config.get("default_engine", "paddleocr")
         self._current_name = self._default_name
+        self._hw_accel_enabled: bool = False
 
     def reload_config(self):
         self._config = load_engines_config()
@@ -500,11 +780,12 @@ class OCREngineManager:
         return self._config.get("engines", {}).get(name, {})
 
     def set_hw_accel(self, enabled: bool):
+        self._hw_accel_enabled = enabled
         for name, eng in self._engines.items():
             if hasattr(eng, 'set_hw_accel'):
                 eng.set_hw_accel(enabled)
 
-    def get_engine(self, name: Optional[str] = None) -> Optional[BaseOCREngine]:
+    def get_engine(self, name: Optional[str] = None, warm_up: bool = True) -> Optional[BaseOCREngine]:
         engine_name = name or self._current_name
         if engine_name in self._engines:
             return self._engines[engine_name]
@@ -530,7 +811,9 @@ class OCREngineManager:
 
         engine = engine_cls(cfg)
         self._engines[engine_name] = engine
-        if hasattr(engine, 'warm_up'):
+        if self._hw_accel_enabled and hasattr(engine, 'set_hw_accel'):
+            engine.set_hw_accel(True)
+        if warm_up and hasattr(engine, 'warm_up'):
             engine.warm_up()
         return engine
 
@@ -541,8 +824,8 @@ class OCREngineManager:
     def get_current_engine_name(self) -> str:
         return self._current_name
 
-    def get_current_engine(self) -> Optional[BaseOCREngine]:
-        return self.get_engine(self._current_name)
+    def get_current_engine(self, warm_up: bool = True) -> Optional[BaseOCREngine]:
+        return self.get_engine(self._current_name, warm_up=warm_up)
 
     def get_default_engine_name(self) -> str:
         return self._default_name

@@ -1,48 +1,21 @@
 # -*- coding: utf-8 -*-
 """FFmpeg 帧读取器 —— 替代 cv2.VideoCapture，支持硬件加速解码。"""
 
+import json
+import time
+import atexit
 import os
-import sys
 import subprocess
-import shutil
 import numpy as np
-from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
-_BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.logger import get_logger
+from core.utils import find_ffmpeg
 
+logger = get_logger(__name__)
 
-# Windows 包管理器常见 FFmpeg 安装路径（不在系统 PATH 中的情况）
-_WIN_FFMPEG_EXTRA_PATHS = [
-    # winget (Gyan.FFmpeg)
-    r"C:\Program Files\FFmpeg\bin",
-    # scoop
-    os.path.expanduser(r"~\scoop\apps\ffmpeg\current\bin"),
-    # chocolatey
-    r"C:\ProgramData\chocolatey\bin",
-    r"C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin",
-]
-
-
-def _find_ffmpeg(name: str) -> str:
-    """查找 ffmpeg 系列工具：优先系统 PATH → 包管理器路径 → core/ 捆绑二进制。"""
-    system = shutil.which(name)
-    if system:
-        return system
-
-    if sys.platform == "win32":
-        # 检查 winget/scoop/choco 安装路径（可能不在 PATH）
-        for base in _WIN_FFMPEG_EXTRA_PATHS:
-            candidate = os.path.join(base, f"{name}.exe")
-            if os.path.isfile(candidate):
-                return candidate
-        return str(_BASE_DIR / "core" / f"{name}.exe")
-    else:
-        return str(_BASE_DIR / "core" / name)
-
-
-_FFMPEG = _find_ffmpeg("ffmpeg")
-_FFPROBE = _find_ffmpeg("ffprobe")
+_FFMPEG = find_ffmpeg("ffmpeg")
+_FFPROBE = find_ffmpeg("ffprobe")
 
 
 def _get_video_info(path: str) -> dict:
@@ -52,7 +25,6 @@ def _get_video_info(path: str) -> dict:
             _FFPROBE, "-v", "quiet", "-print_format", "json",
             "-show_format", "-show_streams", path
         ]
-        import json
         result = subprocess.run(cmd, capture_output=True, timeout=30)
         if result.returncode != 0:
             return {}
@@ -75,7 +47,8 @@ def _get_video_info(path: str) -> dict:
         fmt = data.get("format", {})
         info["duration"] = float(fmt.get("duration", 0))
         return info
-    except Exception:
+    except Exception as e:
+        logger.warning("获取视频信息失败: %s", e)
         return {"duration": 0.0, "fps": 30.0, "width": 0, "height": 0}
 
 
@@ -89,14 +62,17 @@ class FFmpegReader:
     """
 
     def __init__(self, path: str, hw_accel: bool = False):
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"视频文件不存在: {path}")
         self._path = path
         self._hw_accel = hw_accel
         self._proc: Optional[subprocess.Popen] = None
+        self._closed = False
+        atexit.register(self.close)
         self._width = 0
         self._height = 0
         self._fps = 30.0
         self._duration = 0.0
-        self._frame_idx: int = 0
         self._info = _get_video_info(path)
         self._width = self._info.get("width", 0)
         self._height = self._info.get("height", 0)
@@ -154,12 +130,13 @@ class FFmpegReader:
                 stdin=subprocess.DEVNULL,
             )
             # 短暂等待确认进程存活
-            import time; time.sleep(0.1)
+            time.sleep(0.1)
             if self._proc.poll() is not None:
                 self._proc = None
                 return False
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning("FFmpeg 打开视频失败: %s", e)
             return False
 
     def read(self) -> Optional[np.ndarray]:
@@ -178,7 +155,8 @@ class FFmpegReader:
                 (self._height, self._width, 3))
             self._frame_idx += 1
             return frame
-        except Exception:
+        except Exception as e:
+            logger.warning("读取视频帧失败: %s", e)
             return None
 
     def seek(self, frame_idx: int) -> Optional[np.ndarray]:
@@ -202,15 +180,16 @@ class FFmpegReader:
                                  timeout=30).stdout
             expected = self._width * self._height * 3
             if not raw or len(raw) < expected:
-                print(f"[FFmpegReader] seek({frame_idx}): got {len(raw) if raw else 0} bytes, expected {expected}")
+                logger.warning("FFmpeg seek(%d): 数据不足 (got %d, expected %d)", frame_idx, len(raw) if raw else 0, expected)
                 return None
             frame = np.frombuffer(raw[:expected], dtype=np.uint8).reshape(
                 (self._height, self._width, 3))
             self._frame_idx = frame_idx + 1
             if not self.open():
-                print(f"[FFmpegReader] seek({frame_idx}): reopen failed after seek")
+                logger.warning("FFmpeg seek(%d): 重新打开失败", frame_idx)
             return frame
-        except Exception:
+        except Exception as e:
+            logger.warning("视频 seek 失败: %s", e)
             return None
 
     def seek_sec(self, seconds: float) -> Optional[np.ndarray]:
@@ -221,17 +200,24 @@ class FFmpegReader:
         return self._proc is not None and self._proc.returncode is None
 
     def close(self):
+        if self._closed:
+            return
+        self._closed = True
         if self._proc:
             try:
                 self._proc.stdout.close()
                 self._proc.terminate()
                 self._proc.wait(timeout=5)
-            except Exception:
+            except Exception as e:
+                logger.warning("FFmpeg 进程终止失败: %s", e)
                 try:
                     self._proc.kill()
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.debug("FFmpeg 进程强杀失败: %s", e2)
             self._proc = None
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass

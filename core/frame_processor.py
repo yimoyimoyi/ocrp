@@ -2,10 +2,10 @@
 """视频帧处理器 —— FFmpeg 解码 + 哨兵检测。"""
 
 import os
-import time
 import threading
 import numpy as np
 import difflib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable, List, Dict, Any
 
 from core.ocr_engine import OCREngineManager
@@ -16,8 +16,14 @@ def get_similarity(a: str, b: str) -> float:
 
 
 def format_time(seconds: float) -> str:
-    m, s = divmod(int(seconds), 60)
-    return f"{m:02d}:{s:02d}"
+    """格式化秒数为 HH:MM:SS,mmm（SRT 标准格式）。"""
+    if seconds < 0:
+        seconds = 0.0
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds - int(seconds)) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
 def extract_roi(frame: np.ndarray, region: dict) -> Optional[np.ndarray]:
@@ -55,21 +61,21 @@ def extract_roi(frame: np.ndarray, region: dict) -> Optional[np.ndarray]:
         return roi
 
     # ── 全画幅模式（无自定义区域）—— 应用四边裁剪 ──
-    roi = frame.copy()
     crop_l = region.get("crop_left", 0)
     crop_r = region.get("crop_right", 0)
     crop_t = region.get("crop_top", 0)
     crop_b = region.get("crop_bottom", 0)
     if any([crop_l, crop_r, crop_t, crop_b]):
-        rh, rw = roi.shape[:2]
+        rh, rw = frame.shape[:2]
         cl = min(crop_l, rw - 1)
         cr = min(crop_r, rw - 1)
         ct = min(crop_t, rh - 1)
         cb = min(crop_b, rh - 1)
-        roi = roi[ct:rh-cb, cl:rw-cr]
+        roi = frame[ct:rh-cb, cl:rw-cr]
         if roi.size == 0:
             return None
-    return roi
+        return roi
+    return frame
 
 
 class FrameProcessor:
@@ -97,6 +103,7 @@ class FrameProcessor:
         self._s_sim_threshold: float = 0.85
         self._s_min_text_len: int = 2
         self._s_filter_keywords: str = ""
+        self._s_ocr_version: str = ""
         # ── 常规参数 ──
         self._r_dedup: bool = True
         self._r_sim_threshold: float = 0.9
@@ -136,8 +143,60 @@ class FrameProcessor:
         if is_paddle:
             conf = ocr_engine.last_confidence if hasattr(ocr_engine, 'last_confidence') else 0.0
         else:
-            conf = 1.0  # API 引擎默认可信
+            conf = 1.0
         return (text, conf)
+
+    def _process_regions_parallel(self, frame: np.ndarray, engine_name: str,
+                                   regions: list, max_workers: int = 4) -> list:
+        """并行处理同一帧内的多个区域 OCR，大幅减少多 ROI 场景耗时。"""
+        if len(regions) <= 1:
+            # 单区域：直接串行，避免线程池开销
+            result = []
+            for region in regions:
+                rname = region.get("name", "unknown")
+                re_name = region.get("engine", engine_name) or engine_name
+                re_engine = self._engine_mgr.get_engine(re_name)
+                if not re_engine:
+                    continue
+                try:
+                    text, conf = self._process_frame(re_engine, frame, region)
+                except Exception as e:
+                    self._log(f"⚠ OCR [{rname}]: {e}")
+                    continue
+                result.append((rname, re_name, text, conf))
+            return result
+
+        results = []
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(regions))) as executor:
+            futures = {}
+            for region in regions:
+                re_name = region.get("engine", engine_name) or engine_name
+                re_engine = self._engine_mgr.get_engine(re_name)
+                if not re_engine:
+                    continue
+                future = executor.submit(self._process_frame, re_engine, frame, region)
+                futures[future] = (region.get("name", "unknown"), re_name)
+
+            for future in as_completed(futures):
+                rname, re_name = futures[future]
+                try:
+                    text, conf = future.result()
+                except Exception as e:
+                    self._log(f"⚠ OCR [{rname}]: {e}")
+                    continue
+                results.append((rname, re_name, text, conf))
+        return results
+
+    def _prefetch_reader(self, ff, fps: float):
+        """后台预读线程：提前读取下一帧，让 I/O 与 OCR 重叠。"""
+        try:
+            if ff.is_opened() and not self._stop_flag.is_set():
+                frame = ff.read()
+                if frame is not None and frame.size > 0:
+                    return frame
+        except Exception:
+            pass
+        return None
 
     def process_video(self, video_path: str, engine_name: Optional[str] = None,
                       time_start: float = 0.0, time_end: float = 0.0) -> list:
@@ -151,6 +210,15 @@ class FrameProcessor:
         total_sec = ff.duration
         frame_step = max(1, int(fps * self._frame_interval))
 
+        # 哨兵模式：应用专用 OCR 模型版本（更快）
+        if self._sentinel_enabled and self._s_ocr_version and self._s_ocr_version != "跟随全局":
+            for region in self._regions:
+                re_name = region.get("engine", engine_name) or engine_name
+                re_engine = self._engine_mgr.get_engine(re_name)
+                if re_engine and hasattr(re_engine, 'set_ocr_version'):
+                    re_engine.set_ocr_version(self._s_ocr_version)
+            self._log(f"🔤 哨兵 OCR: {self._s_ocr_version}")
+
         # 哨兵状态：全区域共享
         region_last_raw = {}  # rname → 上一帧原始文本
         region_last_sent = {}  # rname → 上一帧已发送文本
@@ -161,10 +229,16 @@ class FrameProcessor:
             filter_kw = self._r_filter_keywords
         else:
             filter_kw = self._s_filter_keywords
-        filter_keywords_list = [kw.strip() for kw in filter_kw.split(",") if kw.strip()] if filter_kw else []
+        # 解析过滤关键词（支持逗号、分号、中文顿号分隔）
+        filter_keywords_list = []
+        if filter_kw:
+            import re as _re
+            filter_keywords_list = [kw.strip() for kw in _re.split(r'[,;，；、]', filter_kw) if kw.strip()]
 
         def _matches_filter(text: str) -> bool:
-            return any(kw in text for kw in filter_keywords_list) if filter_keywords_list else False
+            if not filter_keywords_list or not text:
+                return False
+            return any(kw in text for kw in filter_keywords_list)
 
         all_results = []
         frame_idx = 0
@@ -179,7 +253,16 @@ class FrameProcessor:
             frame_idx = int(time_start * fps)
             ff.seek(frame_idx)
 
-        while ff.is_opened():
+        # ── 帧预读：后台线程提前读取下一帧，让 I/O 与 OCR 重叠 ──
+        prefetch_executor = ThreadPoolExecutor(max_workers=1)
+        prefetch_future = None
+
+        # 读取首帧
+        frame = ff.read()
+        if frame is not None:
+            frame_idx += 1
+
+        while ff.is_opened() and frame is not None:
             # ── 暂停等待 ──
             while self._pause_flag.is_set():
                 if self._stop_flag.is_set():
@@ -192,28 +275,21 @@ class FrameProcessor:
                 self._log("⏹ 已中止")
                 break
 
-            frame = ff.read()
-            if frame is None:
-                break
-            frame_idx += 1
-
             if frame_idx % frame_step != 0:
+                # 跳过非采样帧：直接读下一帧
+                if prefetch_future is not None:
+                    frame = prefetch_future.result()
+                    prefetch_future = None
+                else:
+                    frame = ff.read()
+                frame_idx += 1
                 continue
 
-            # ── 同一帧内对全部区域做 OCR，统一 time_sec ──
-            frame_results = []
-            for region in self._regions:
-                rname = region.get("name", "unknown")
-                re_name = region.get("engine", engine_name) or engine_name
-                re_engine = self._engine_mgr.get_engine(re_name)
-                if not re_engine:
-                    continue
-                try:
-                    text, conf = self._process_frame(re_engine, frame, region)
-                except Exception as e:
-                    self._log(f"⚠ OCR [{rname}]: {e}")
-                    continue
-                frame_results.append((rname, re_name, text, conf))
+            # ── 启动预读下一帧（在 OCR 期间并行执行）──
+            next_future = prefetch_executor.submit(self._prefetch_reader, ff, fps)
+
+            # ── 并行 OCR 当前帧的全部区域 ──
+            frame_results = self._process_regions_parallel(frame, engine_name, self._regions)
 
             if is_regular:
                 # ── 常规字幕模式：按固定间隔输出，可选基本去重 ──
@@ -302,6 +378,14 @@ class FrameProcessor:
                 s = region_last_raw.get(self._regions[0].get("name", ""), "")[:12] if self._regions else ""
                 self._on_progress(int(current_sec), int(total_sec), 0, s)
 
+            # ── 获取预读的下一帧 ──
+            try:
+                frame = next_future.result()
+            except Exception:
+                frame = ff.read()
+            frame_idx += 1
+
+        prefetch_executor.shutdown(wait=False)
         ff.close()
         self._log(f"✅ 完成: {len(all_results)} 条")
         return all_results

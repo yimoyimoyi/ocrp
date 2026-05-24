@@ -1,0 +1,408 @@
+msgid ""
+msgstr ""
+"Language: en_US
+"
+"MIME-Version: 1.0
+"
+"Content-Type: text/plain; charset=UTF-8
+"
+
+msgid "  |  引擎: paddleocr"
+msgstr "  |  Engine: paddleocr"
+
+msgid "(0 条)"
+msgstr "(0 条)"
+
+msgid "(空)"
+msgstr "(空)"
+
+msgid "+ 新建"
+msgstr "+ 新建"
+
+msgid "+ 添加"
+msgstr "+ 添加"
+
+msgid "- 删除"
+msgstr "- 删除"
+
+msgid "- 删除此区域"
+msgstr "- 删除此区域"
+
+msgid "AI 纠错"
+msgstr "AI 纠错"
+
+msgid "API Key:"
+msgstr "API Key:"
+
+msgid "API Key（可选）"
+msgstr "API Key（可选）"
+
+msgid "API 连接"
+msgstr "API 连接"
+
+msgid "API 预设管理"
+msgstr "API 预设管理"
+
+msgid "ASR 语音识别引擎"
+msgstr "ASR 语音识别引擎"
+
+msgid "Base URL:"
+msgstr "Base URL:"
+
+msgid "ORCP - OCR 处理工具"
+msgstr "ORCP - OCR Processing Tool"
+
+msgid "gpt-4o"
+msgstr "gpt-4o"
+
+msgid "gpt-4o / gemma 等"
+msgstr "gpt-4o / gemma 等"
+
+msgid "http://127.0.0.1:8080"
+msgstr "http://127.0.0.1:8080"
+
+msgid "https://api.openai.com/v1"
+msgstr "https://api.openai.com/v1"
+
+msgid "sk-xxx（可选）"
+msgstr "sk-xxx（可选）"
+
+msgid "⏳ 获取中..."
+msgstr "⏳ 获取中..."
+
+msgid "⏸ 暂停"
+msgstr "⏸ Pause"
+
+msgid "⏹ 停止"
+msgstr "⏹ Stop"
+
+msgid "── 关键词过滤 ──"
+msgstr "── 关键词过滤 ──"
+
+msgid "── 常规参数（基本去重） ──"
+msgstr "── 常规参数（基本去重） ──"
+
+msgid "── 流式参数（哨兵去重） ──"
+msgstr "── 流式参数（哨兵去重） ──"
+
+msgid "── 流程失败重试 ──"
+msgstr "── 流程失败重试 ──"
+
+msgid "▶ 开始处理"
+msgstr "▶ Start Processing"
+
+msgid "⚙ 参数设置"
+msgstr "⚙ 参数设置"
+
+msgid "⚠ 未获取到模型"
+msgstr "⚠ 未获取到模型"
+
+msgid "⚠ 请先输入 Base URL"
+msgstr "⚠ 请先输入 Base URL"
+
+msgid "⚡ GPU"
+msgstr "⚡ GPU"
+
+msgid "✅ {n} 个"
+msgstr "✅ {n} 个"
+
+msgid "✏ 纠正全部"
+msgstr "✏ Correct All"
+
+msgid "✏ 纠错选中"
+msgstr "✏ Correct Selected"
+
+msgid "✕"
+msgstr "✕"
+
+msgid "➕ 添加"
+msgstr "➕ 添加"
+
+msgid "上一个匹配"
+msgstr "上一个匹配"
+
+msgid "下一个匹配"
+msgstr "下一个匹配"
+
+msgid "保留最长文本"
+msgstr "保留最长文本"
+
+msgid "停止播放"
+msgstr "停止播放"
+
+msgid "关键词过滤"
+msgstr "关键词过滤"
+
+msgid "删除所有包含过滤器关键词的结果行"
+msgstr "删除所有包含过滤器关键词的结果行"
+
+msgid "前进 5 秒 (→)"
+msgstr "前进 5 秒 (→)"
+
+msgid "区域"
+msgstr "区域"
+
+msgid "区域名称"
+msgstr "区域名称"
+
+msgid "名称:"
+msgstr "名称:"
+
+msgid "后处理"
+msgstr "后处理"
+
+msgid "后处理参数"
+msgstr "后处理参数"
+
+msgid "后处理相似度去重"
+msgstr "后处理相似度去重"
+
+msgid "后退 5 秒 (←)"
+msgstr "后退 5 秒 (←)"
+
+msgid "启用"
+msgstr "启用"
+
+msgid "启用 AI 纠错"
+msgstr "启用 AI 纠错"
+
+msgid "启用 GPU 加速"
+msgstr "启用 GPU 加速"
+
+msgid "启用 VAD（跳过静音段）"
+msgstr "启用 VAD（跳过静音段）"
+
+msgid "启用/关闭 AI 纠错"
+msgstr "Enable/Disable AI Correction"
+
+msgid "启用/关闭 GPU 硬件加速"
+msgstr "Enable/Disable GPU Hardware Acceleration"
+
+msgid "启用/关闭后处理相似度去重"
+msgstr "Enable/Disable Post-Processing Similarity Dedup"
+
+msgid "启用/关闭哨兵去重（字数骤降检测触发输出）"
+msgstr "Enable/Disable Sentinel Dedup (Word Count Drop Triggers Output)"
+
+msgid "启用哨兵去重（骤降/缓冲区/相似度）"
+msgstr "启用哨兵去重（骤降/缓冲区/相似度）"
+
+msgid "启用基本去重（相似文本合并）"
+msgstr "启用基本去重（相似文本合并）"
+
+msgid "启用置信度过滤（仅 PaddleOCR）"
+msgstr "启用置信度过滤（仅 PaddleOCR）"
+
+msgid "基于上文条件解码"
+msgstr "基于上文条件解码"
+
+msgid "处理参数"
+msgstr "处理参数"
+
+msgid "处理模式"
+msgstr "处理模式"
+
+msgid "外观"
+msgstr "外观"
+
+msgid "字幕模式"
+msgstr "字幕模式"
+
+msgid "字幕模式:"
+msgstr "字幕模式:"
+
+msgid "字幕设置"
+msgstr "字幕设置"
+
+msgid "字级时间戳"
+msgstr "字级时间戳"
+
+msgid "容错重试"
+msgstr "容错重试"
+
+msgid "将此条内容加入过滤器"
+msgstr "将此条内容加入过滤器"
+
+msgid "就绪"
+msgstr "Ready"
+
+msgid "应用后处理设置"
+msgstr "应用后处理设置"
+
+msgid "应用处理参数"
+msgstr "应用处理参数"
+
+msgid "应用字幕参数"
+msgstr "应用字幕参数"
+
+msgid "应用排序规则"
+msgstr "应用排序规则"
+
+msgid "应用纠错设置"
+msgstr "应用纠错设置"
+
+msgid "应用语音识别设置"
+msgstr "应用语音识别设置"
+
+msgid "开始:"
+msgstr "开始:"
+
+msgid "打开/关闭搜索替换"
+msgstr "打开/关闭搜索替换"
+
+msgid "批量参数"
+msgstr "批量参数"
+
+msgid "排序规则"
+msgstr "排序规则"
+
+msgid "排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:"
+msgstr "排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:"
+
+msgid "提取全文环境（领域/氛围/内容摘要作为纠错参考）"
+msgstr "提取全文环境（领域/氛围/内容摘要作为纠错参考）"
+
+msgid "提示"
+msgstr "提示"
+
+msgid "提示词内容:"
+msgstr "提示词内容:"
+
+msgid "提示词模板"
+msgstr "提示词模板"
+
+msgid "搜索..."
+msgstr "搜索..."
+
+msgid "播放/暂停 (Space)"
+msgstr "播放/暂停 (Space)"
+
+msgid "播放速度：点击切换"
+msgstr "播放速度：点击切换"
+
+msgid "暂无识别结果可导出。"
+msgstr "暂无识别结果可导出。"
+
+msgid "替换为..."
+msgstr "替换为..."
+
+msgid "替换当前选中结果"
+msgstr "替换当前选中结果"
+
+msgid "替换所有匹配结果"
+msgstr "替换所有匹配结果"
+
+msgid "模型:"
+msgstr "模型:"
+
+msgid "模型名（可选）"
+msgstr "模型名（可选）"
+
+msgid "模板:"
+msgstr "模板:"
+
+msgid "此区域专用的纠错提示词（留空用全局）"
+msgstr "此区域专用的纠错提示词（留空用全局）"
+
+msgid "清空"
+msgstr "清空"
+
+msgid "清空全部"
+msgstr "清空全部"
+
+msgid "清空所有识别结果"
+msgstr "清空所有识别结果"
+
+msgid "硬件加速 (GPU)"
+msgstr "硬件加速 (GPU)"
+
+msgid "确认删除"
+msgstr "确认删除"
+
+msgid "纠错模式"
+msgstr "纠错模式"
+
+msgid "结束:"
+msgstr "结束:"
+
+msgid "结果排序"
+msgstr "结果排序"
+
+msgid "翻译模式：将 OCR 结果翻译为中文"
+msgstr "Translation Mode: Translate OCR Results to Chinese"
+
+msgid "自定义 OCR 提示词（覆盖模板）"
+msgstr "自定义 OCR 提示词（覆盖模板）"
+
+msgid "语音识别"
+msgstr "语音识别"
+
+msgid "请输入预设名称。"
+msgstr "请输入预设名称。"
+
+msgid "超时:"
+msgstr "超时:"
+
+msgid "输出控制"
+msgstr "输出控制"
+
+msgid "预设名称"
+msgstr "预设名称"
+
+msgid "🌐 翻译"
+msgstr "🌐 Translate"
+
+msgid "🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"
+msgstr "🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"
+
+msgid "🎨 应用预览"
+msgstr "🎨 应用预览"
+
+msgid "💾 保存"
+msgstr "💾 保存"
+
+msgid "💾 保存为 API 预设"
+msgstr "💾 保存为 API 预设"
+
+msgid "📋 JSON 输出模式（API 返回结构化 JSON 格式）"
+msgstr "📋 JSON 输出模式（API 返回结构化 JSON 格式）"
+
+msgid "📋 获取模型"
+msgstr "📋 获取模型"
+
+msgid "📋 识别结果"
+msgstr "📋 识别结果"
+
+msgid "📋 队列:"
+msgstr "📋 队列:"
+
+msgid "📐 区域"
+msgstr "📐 区域"
+
+msgid "🔄 刷新模型列表"
+msgstr "🔄 刷新模型列表"
+
+msgid "🔄 检测可用性"
+msgstr "🔄 检测可用性"
+
+msgid "🔍 去重"
+msgstr "🔍 Dedup"
+
+msgid "🔍 立即提取全文环境"
+msgstr "🔍 立即提取全文环境"
+
+msgid "🔤 AI纠错"
+msgstr "🔤 AI Correction"
+
+msgid "🔴 流式输出模式（实时逐字显示 API 响应）"
+msgstr "🔴 流式输出模式（实时逐字显示 API 响应）"
+
+msgid "🖥 显示设置"
+msgstr "🖥 显示设置"
+
+msgid "🗑 删除选中"
+msgstr "🗑 删除选中"
+
+msgid "🛡 哨兵"
+msgstr "🛡 Sentinel"
+

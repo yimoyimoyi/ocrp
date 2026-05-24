@@ -2,12 +2,25 @@
 """QThread 工作线程 —— OCR 处理、AI 纠错、视频处理、批量处理。"""
 
 import traceback
+import threading
 from pathlib import Path
 import cv2
 import numpy as np
 
 from PyQt5.QtCore import QThread, pyqtSignal, QObject
 from typing import Optional
+
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+def _recognize_roi(engine, roi, prompt: str = "") -> str:
+    """根据引擎类型调用 OCR 识别 ROI 图片。"""
+    if engine.engine_name == "paddleocr":
+        return engine.recognize(roi)
+    else:
+        return engine.recognize(roi, prompt=prompt)
 
 
 class WorkerSignals(QObject):
@@ -42,17 +55,15 @@ class OCRWorker(QThread):
                 return
 
             prompt = self._region.get("prompt", "")
-            if self._engine.engine_name == "paddleocr":
-                text = self._engine.recognize(roi)
-            else:
-                text = self._engine.recognize(roi, prompt=prompt)
+            text = _recognize_roi(self._engine, roi, prompt)
 
             if text and text.strip():
                 from core.frame_processor import format_time
                 t_str = format_time(self._timestamp)
                 rname = self._region.get("name", "unknown")
                 self.result_ready.emit(self._timestamp, t_str, rname, self._engine_name, text)
-        except Exception:
+        except Exception as e:
+            logger.warning("OCR Worker 运行失败: %s", e)
             traceback.print_exc()
 
 
@@ -74,8 +85,16 @@ class AICorrectionWorker(QThread):
         self._context_texts = context_texts or []
         self._image = image
         self._region_correction_prompt = region_correction_prompt
+        self._stop_flag = threading.Event()
+
+    def stop(self):
+        self._stop_flag.set()
+        if hasattr(self._corrector, 'stop') and callable(self._corrector.stop):
+            self._corrector.stop()
 
     def run(self):
+        if self._stop_flag.is_set():
+            return
         try:
             # 区域级纠错提示词临时覆盖
             saved = ""
@@ -130,14 +149,14 @@ class BatchCorrectionWorker(QThread):
         self._texts = list(texts)
         self._context_window = context_window
         self._max_retries = max_retries
-        self._stop_flag = False
+        self._stop_flag = threading.Event()
 
     def stop(self):
-        self._stop_flag = True
+        self._stop_flag.set()
 
     def run(self):
         try:
-            if self._stop_flag:
+            if self._stop_flag.is_set():
                 return
 
             n = len(self._texts)
@@ -147,12 +166,7 @@ class BatchCorrectionWorker(QThread):
 
             # 构建流式回调
             stream_mode = getattr(self._corrector, 'stream_mode', False)
-            stream_cb = None
-            if stream_mode:
-                def on_batch_stream(chunk: str):
-                    # 批量模式下流式输出完整文本（无法区分单条）
-                    pass  # 批量流式暂不输出到表格，只走后台日志
-                stream_cb = on_batch_stream
+            stream_cb = None if not stream_mode else None  # 批量流式暂不输出到表格
 
             # 调用批量纠错
             corrected_map = self._corrector.correct_batch(
@@ -162,7 +176,7 @@ class BatchCorrectionWorker(QThread):
                 stream_callback=stream_cb,
             )
 
-            if self._stop_flag:
+            if self._stop_flag.is_set():
                 return
 
             # 发射每条结果（兼容 (row, raw) 和 (row, raw, ts, te) 两种格式）
@@ -240,12 +254,17 @@ class ImageProcessWorker(QThread):
         self._frame = frame
         self._regions = regions
         self._timestamp = timestamp
+        self._stop_flag = threading.Event()
 
     def run(self):
+        if self._stop_flag.is_set():
+            return
         try:
             from core.frame_processor import extract_roi
             results = []
             for region in self._regions:
+                if self._stop_flag.is_set():
+                    break
                 engine_name = region.get("engine", "")
                 engine = self._engine_mgr.get_engine(engine_name) if engine_name else self._engine_mgr.get_engine()
                 if engine is None:
@@ -256,10 +275,7 @@ class ImageProcessWorker(QThread):
                     continue
 
                 prompt = region.get("prompt", "")
-                if engine.engine_name == "paddleocr":
-                    text = engine.recognize(roi)
-                else:
-                    text = engine.recognize(roi, prompt=prompt)
+                text = _recognize_roi(engine, roi, prompt)
 
                 # 从引擎读取置信度（与 FrameProcessor._process_frame 相同逻辑）
                 is_paddle = engine.engine_name == "paddleocr"
@@ -289,7 +305,9 @@ class ImageProcessWorker(QThread):
 
     def stop(self):
         """停止图片处理。"""
+        self._stop_flag.set()
         self.quit()
+        self.wait(3000)
 
 
 class AudioProcessWorker(QThread):
@@ -311,15 +329,15 @@ class AudioProcessWorker(QThread):
         self._time_start = time_start
         self._time_end = time_end
         self._region_name = asr_region_name
-        self._stop_flag = False
+        self._stop_flag = threading.Event()
 
     def stop(self):
-        self._stop_flag = True
+        self._stop_flag.set()
 
     def run(self):
         audio_path = None
         try:
-            if self._stop_flag:
+            if self._stop_flag.is_set():
                 return
 
             self.progress.emit("正在提取音频...")
@@ -346,7 +364,7 @@ class AudioProcessWorker(QThread):
                     self.error.emit("音频格式转换失败")
                     return
 
-            if self._stop_flag:
+            if self._stop_flag.is_set():
                 return
 
             self.progress.emit("正在语音识别...")
@@ -357,7 +375,7 @@ class AudioProcessWorker(QThread):
 
             def _on_segment(seg):
                 """每识别出一段立即发射信号，UI 实时更新。"""
-                if self._stop_flag:
+                if self._stop_flag.is_set():
                     return
                 ts = seg.get("start", 0.0)
                 end_ts = seg.get("end", ts + 3.0)
@@ -390,7 +408,7 @@ class AudioProcessWorker(QThread):
                 self.error.emit(f"语音识别失败: {error_holder[0]}")
                 return
 
-            if self._stop_flag:
+            if self._stop_flag.is_set():
                 return
 
             # 无语音内容时给出提示
@@ -408,8 +426,8 @@ class AudioProcessWorker(QThread):
                 try:
                     import os
                     os.unlink(audio_path)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("删除临时音频文件失败: %s", e)
 
 
 class BatchProcessWorker(QThread):
@@ -433,15 +451,15 @@ class BatchProcessWorker(QThread):
         self._mode_params = dict(mode_params)
         self._output_dir = output_dir
         self._corrector = corrector
-        self._stop_flag = False
+        self._stop_flag = threading.Event()
 
     def stop(self):
-        self._stop_flag = True
+        self._stop_flag.set()
 
     def run(self):
         total = len(self._file_list)
         for idx, file_path in enumerate(self._file_list):
-            if self._stop_flag:
+            if self._stop_flag.is_set():
                 self.log.emit("批量处理已停止")
                 break
 
@@ -450,7 +468,7 @@ class BatchProcessWorker(QThread):
             self.log.emit(f"正在处理 [{idx+1}/{total}]: {fname}")
 
             results = self._process_one_file(file_path)
-            if results and not self._stop_flag:
+            if results and not self._stop_flag.is_set():
                 self.finished_one.emit(file_path, results)
                 self._auto_export(file_path, results)
 
@@ -458,7 +476,6 @@ class BatchProcessWorker(QThread):
 
     def _process_one_file(self, file_path: str) -> list:
         """处理单个文件（视频或图片），返回结果列表。"""
-        import cv2
         from core.frame_processor import FrameProcessor, format_time
         from pathlib import Path
 
@@ -498,7 +515,7 @@ class BatchProcessWorker(QThread):
                     self.log.emit(f"⚠ 无法读取图片: {file_path}")
                     return []
                 for region in self._regions:
-                    if self._stop_flag:
+                    if self._stop_flag.is_set():
                         break
                     engine_name = region.get("engine", "") or ""
                     engine = self._engine_mgr.get_engine(engine_name) if engine_name else None
@@ -574,3 +591,89 @@ class BatchProcessWorker(QThread):
             self.log.emit(f"✅ 已导出: {txt_path.name}")
         except Exception as e:
             self.log.emit(f"⚠ 导出失败: {txt_path.name}: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════
+# 异步 UI 操作 Workers（避免主线程堵塞）
+# ═══════════════════════════════════════════════════════════════
+
+class VideoLoadWorker(QThread):
+    """后台加载视频：ffprobe + Popen + 首帧读取均在工作线程。"""
+
+    loaded = pyqtSignal(object, dict)  # (frame: np.ndarray, info: dict)
+    error = pyqtSignal(str)
+
+    def __init__(self, path: str, hw_accel: bool = False):
+        super().__init__()
+        self._path = path
+        self._hw_accel = hw_accel
+
+    def run(self):
+        try:
+            from core.ffmpeg_reader import FFmpegReader
+            ff = FFmpegReader(self._path, self._hw_accel)
+            if not ff.open():
+                self.error.emit("无法打开视频文件")
+                return
+            frame = ff.read()
+            if frame is None or frame.size == 0:
+                ff.close()
+                self.error.emit("无法读取视频首帧")
+                return
+            info = {
+                "width": ff.width, "height": ff.height,
+                "fps": ff.fps, "duration": ff.duration,
+                "reader": ff,
+            }
+            self.loaded.emit(frame, info)
+        except FileNotFoundError as e:
+            self.error.emit(f"文件不存在: {e}")
+        except Exception as e:
+            self.error.emit(f"加载视频失败: {e}")
+
+
+class HttpCheckWorker(QThread):
+    """后台 HTTP 请求：引擎可用性检测 / 模型列表获取。"""
+
+    result = pyqtSignal(object)  # dict: {"type": "check"|"models", "data": ...}
+    error = pyqtSignal(str)
+
+    def __init__(self, engine, action: str):
+        """
+        Args:
+            engine: OCR 引擎实例
+            action: "check" | "models"
+        """
+        super().__init__()
+        self._engine = engine
+        self._action = action
+
+    def run(self):
+        try:
+            if self._action == "check":
+                avail = self._engine.check_availability()
+                self.result.emit({"type": "check", "data": avail})
+            elif self._action == "models":
+                models = self._engine.get_model_list()
+                self.result.emit({"type": "models", "data": models})
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class EnvExtractWorker(QThread):
+    """后台提取全文环境上下文（HTTP 调用）。"""
+
+    finished = pyqtSignal(str)  # 提取的环境文本
+    error = pyqtSignal(str)
+
+    def __init__(self, corrector, all_texts: list):
+        super().__init__()
+        self._corrector = corrector
+        self._texts = all_texts
+
+    def run(self):
+        try:
+            env = self._corrector.extract_environment(self._texts)
+            self.finished.emit(env or "")
+        except Exception as e:
+            self.error.emit(str(e))

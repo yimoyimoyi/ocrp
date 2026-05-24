@@ -1,20 +1,14 @@
 # -*- coding: utf-8 -*-
 """结果后处理器 —— 保留 run_ocr.py 的 polish_and_save 去重 + 后处理逻辑。"""
 
-import os
 import re
 import json
 import csv
 import difflib
-from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-# ── 保留 run_ocr.py 中的过滤规则 ────────────────────────
-STRICT_GARBAGE = [
-    "內容", "內容無", "無內容", "SKIP", "內容：", "內容:",
-    "波次", "UI", "人名", "人名：", "角色：",
-    "熟練的指揮", "熟练的指挥", "剩余回合"
-]
+# ── 默认过滤规则（可由 filters.json 的 garbage_patterns 覆盖） ──
+_DEFAULT_GARBAGE: List[str] = []
 
 GARBAGE_PATTERN = re.compile(r"^(\d+|剩余回合|剩餘回合|回合|[\.\-0-9]+)$")
 
@@ -26,9 +20,12 @@ def get_similarity(a: str, b: str) -> float:
 def polish_results(raw_results: list, post_keep_longest: bool = False,
                    post_sim_dedup: bool = True,
                    post_sim_threshold: float = 0.9,
-                   post_min_text_len: int = 2) -> list:
+                   post_min_text_len: int = 2,
+                   garbage_patterns: Optional[List[str]] = None) -> list:
     if not raw_results:
         return []
+
+    garbage = garbage_patterns if garbage_patterns is not None else _DEFAULT_GARBAGE
 
     parsed = []
     for item in raw_results:
@@ -36,7 +33,7 @@ def polish_results(raw_results: list, post_keep_longest: bool = False,
         clean_content = raw_text.replace("『", "").replace("』", "")\
             .replace("「", "").replace("」", "").strip()
 
-        if not clean_content or clean_content in STRICT_GARBAGE:
+        if not clean_content or clean_content in garbage:
             continue
         if GARBAGE_PATTERN.search(clean_content):
             continue
@@ -178,16 +175,17 @@ def _export_srt(results: list, output_path: str, include_corrected: bool,
             if not raw:
                 continue
             start = item.get("time_sec", 0.0) or 0.0
-            end = item.get("end_sec", start + 3.0) or (start + 3.0)
+            end = item.get("end_sec", 0.0) or 0.0
+            if end <= start:
+                end = start + 3.0  # 默认 3 秒时长
 
             if include_corrected and i in corrected_map:
                 corrected = _clean_id_markers(corrected_map[i])
-                has_correction = (corrected and corrected != raw)
+                has_correction = bool(corrected and corrected != raw)
             else:
                 corrected = ""
                 has_correction = False
 
-            line_count = 0
             f.write(f"{idx}\n")
             f.write(f"{_fmt_srt_time(start)} --> {_fmt_srt_time(end)}\n")
             idx += 1
@@ -236,10 +234,12 @@ def export_results(
         _export_srt(results, output_path, include_corrected, corrected_map, keep_original, srt_mode)
 
 
+from core.ai_correction import ID_TAG
+
+
 def _clean_id_markers(text: str) -> str:
-    """去除 AI 可能残留的 [ID:n] 标记。"""
-    import re
-    return re.sub(r'\[ID:\d+\]\s*', '', text).strip()
+    """去除 AI 可能残留的 [ID:n] 标记（兼容全角冒号、大小写、多余空格）。"""
+    return ID_TAG.sub('', text).strip()
 
 
 def _export_txt(results: list, output_path: str, include_corrected: bool,

@@ -6,6 +6,10 @@ import json
 from pathlib import Path
 from typing import List
 
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
 FILTERS_PATH = CONFIG_DIR / "filters.json"
@@ -16,6 +20,7 @@ class FilterManager:
 
     def __init__(self):
         self._keywords: List[str] = []
+        self._garbage_patterns: List[str] = []
         self.reload()
 
     def reload(self):
@@ -24,11 +29,22 @@ class FilterManager:
             try:
                 with open(FILTERS_PATH, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                from core.config_schema import validate_config
+                from core.config_schemas import FILTERS_SCHEMA
+                validate_config(data, FILTERS_SCHEMA, "filters.json")
                 self._keywords = data.get("keywords", [])
-            except Exception:
+                self._garbage_patterns = data.get("garbage_patterns", [])
+            except Exception as e:
+                logger.warning("加载过滤配置失败: %s", e)
                 self._keywords = []
+                self._garbage_patterns = []
         else:
             self._keywords = []
+            self._garbage_patterns = []
+
+    def get_garbage_patterns(self) -> List[str]:
+        """获取垃圾文本过滤模式列表。"""
+        return list(self._garbage_patterns)
 
     def get_keywords(self) -> List[str]:
         """获取所有过滤关键词。"""
@@ -63,6 +79,6 @@ class FilterManager:
         try:
             FILTERS_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(FILTERS_PATH, "w", encoding="utf-8") as f:
-                json.dump({"keywords": self._keywords}, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+                json.dump({"keywords": self._keywords, "garbage_patterns": self._garbage_patterns}, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning("保存过滤配置失败: %s", e)

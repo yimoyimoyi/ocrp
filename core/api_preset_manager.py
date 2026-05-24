@@ -10,6 +10,10 @@ import json
 from pathlib import Path
 from typing import List, Optional, Dict
 
+from core.logger import get_logger
+
+logger = get_logger(__name__)
+
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 PRESETS_PATH = BASE_DIR / "config" / "api_presets.json"
 
@@ -18,9 +22,13 @@ def _load_presets() -> dict:
     if PRESETS_PATH.exists():
         try:
             with open(PRESETS_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
+                cfg = json.load(f)
+            from core.config_schema import validate_config
+            from core.config_schemas import API_PRESETS_SCHEMA
+            validate_config(cfg, API_PRESETS_SCHEMA, "api_presets.json")
+            return cfg
+        except Exception as e:
+            logger.warning("加载 API 预设配置失败: %s", e)
     return {"presets": {}, "default_preset": ""}
 
 

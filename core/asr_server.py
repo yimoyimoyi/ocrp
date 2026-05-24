@@ -12,7 +12,9 @@
   python core/asr_server.py --config config/asr_engines.json
 """
 
-import sys, os, json, traceback
+import sys
+import os
+import json
 
 # ── 路径设置 ──
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +23,8 @@ if str(BASE_DIR) not in sys.path:
 
 # ── DLL 路径注册（torch/lib/ + site-packages/nvidia/*/bin/）──
 if sys.platform == "win32":
-    import importlib.util, ctypes
+    import importlib.util
+    import ctypes
 
     # torch/lib/ — torch 自带 CUDA 运行时
     try:
@@ -31,8 +34,8 @@ if sys.platform == "win32":
             if os.path.isdir(_tl):
                 os.add_dll_directory(_tl)
                 print(f"[ASR_SERVER] add_dll_directory: {_tl}", file=sys.stderr, flush=True)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[ASR_SERVER] DLL 目录注册失败: {e}", file=sys.stderr, flush=True)
 
     # site-packages/nvidia/*/bin/ — cuDNN 8 等（pip 安装的 nvidia-* 包）
     _nvidia_found = False
@@ -50,7 +53,7 @@ if sys.platform == "win32":
             continue
 
     if _nvidia_found:
-        print(f"[ASR_SERVER] Registered nvidia site-packages DLL dirs", file=sys.stderr, flush=True)
+        print("[ASR_SERVER] Registered nvidia site-packages DLL dirs", file=sys.stderr, flush=True)
 
     # 备选：旧 core/cudnn8/ 目录（向后兼容）
     if not _nvidia_found:
@@ -64,13 +67,13 @@ if sys.platform == "win32":
                 if os.path.exists(_fp):
                     try:
                         ctypes.CDLL(_fp)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[ASR_SERVER] CDLL 加载失败 ({_fp}): {e}", file=sys.stderr, flush=True)
 
 # 屏蔽 PaddleOCR 联网检查（虽然此进程不跑 PaddleOCR，但 config_manager 可能会触发）
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
-from config_manager import _load_json_with_comments
+from core.config_manager import _load_json_with_comments
 from pathlib import Path
 
 _CONFIG_DIR = os.path.join(BASE_DIR, "config")
@@ -104,8 +107,8 @@ def _load_config(config_path: str = None) -> dict:
             for k, v in _DEFAULT_CONFIG.items():
                 cfg.setdefault(k, v)
             return cfg
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ASR_SERVER] 加载配置失败: {e}", file=sys.stderr, flush=True)
     return dict(_DEFAULT_CONFIG)
 
 
@@ -113,7 +116,8 @@ def _parse_temperature(val: str) -> list:
     try:
         parts = [v.strip() for v in val.split(",") if v.strip()]
         return [float(v) for v in parts] if parts else [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-    except Exception:
+    except Exception as e:
+        print(f"[ASR_SERVER] 解析温度参数失败: {e}", file=sys.stderr, flush=True)
         return [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
 
@@ -201,13 +205,13 @@ def _check_cudnn8_gpu_ready() -> bool:
                         os.add_dll_directory(pkg_dir)
                         ctypes.CDLL(dll)
                         found = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[ASR_SERVER] cuDNN DLL 加载失败: {e}", file=sys.stderr, flush=True)
             if not found:
                 missing.append(dll)
 
         if not missing:
-            print(f"[ASR_SERVER] cuDNN 8 found: all 3 DLLs OK", file=sys.stderr, flush=True)
+            print("[ASR_SERVER] cuDNN 8 found: all 3 DLLs OK", file=sys.stderr, flush=True)
             return True
         else:
             print(f"[ASR_SERVER] cuDNN 8 INCOMPLETE - missing: {', '.join(missing)}", file=sys.stderr, flush=True)
@@ -232,7 +236,7 @@ def _check_cudnn8_gpu_ready() -> bool:
                 missing.append(soname)
 
         if not missing:
-            print(f"[ASR_SERVER] cuDNN 8 found: all 3 SOs OK", file=sys.stderr, flush=True)
+            print("[ASR_SERVER] cuDNN 8 found: all 3 SOs OK", file=sys.stderr, flush=True)
             return True
         else:
             print(f"[ASR_SERVER] cuDNN 8 INCOMPLETE - missing: {', '.join(missing)}", file=sys.stderr, flush=True)
@@ -269,13 +273,13 @@ def main():
     # 如果缺失，直接回退到 CPU 模式加载模型，避免 model.transcribe() 硬崩溃。
     _using_gpu = (device == "cuda")
     if _using_gpu and not _check_cudnn8_gpu_ready():
-        print(f"[ASR_SERVER] ⚠ cuDNN 8 不可用，自动回退 CPU 模式", file=sys.stderr, flush=True)
+        print("[ASR_SERVER] ⚠ cuDNN 8 不可用，自动回退 CPU 模式", file=sys.stderr, flush=True)
         device = "cpu"
         compute_type = "int8"
         _using_gpu = False
 
     # ── 加载模型 ──
-    print(f"[ASR_SERVER] loading model...", file=sys.stderr, flush=True)
+    print("[ASR_SERVER] loading model...", file=sys.stderr, flush=True)
     model_arg = None
     dl_root = None
     try:
@@ -300,7 +304,7 @@ def main():
     except Exception as e:
         print(f"[ASR_SERVER] GPU load failed: {e}", file=sys.stderr, flush=True)
         try:
-            print(f"[ASR_SERVER] fallback to CPU...", file=sys.stderr, flush=True)
+            print("[ASR_SERVER] fallback to CPU...", file=sys.stderr, flush=True)
             from faster_whisper import WhisperModel
             model = WhisperModel(
                 model_arg,
@@ -308,20 +312,20 @@ def main():
                 compute_type="int8",
                 download_root=dl_root,
             )
-            print(f"[ASR_SERVER] CPU model loaded OK", file=sys.stderr, flush=True)
+            print("[ASR_SERVER] CPU model loaded OK", file=sys.stderr, flush=True)
         except Exception as e2:
             _send({"status": "error", "message": f"Model load failed: {e2}"})
             sys.exit(1)
 
-    print(f"[ASR_SERVER] ready", file=sys.stderr, flush=True)
+    print("[ASR_SERVER] ready", file=sys.stderr, flush=True)
 
     # ── 辅助函数：原子写入 stderr（绕过 Python 缓冲，确保进程崩溃时数据不丢失）──
     def _log_stderr(msg: str):
         """使用原始文件描述符写入 stderr，确保硬崩溃时数据可送达父进程。"""
         try:
             os.write(2, (msg + "\n").encode("utf-8", errors="replace"))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ASR_SERVER] 写入 stderr 失败: {e}", file=sys.stderr, flush=True)
 
     # ── 主循环 ──
     for line in sys.stdin:
@@ -427,7 +431,7 @@ def main():
                     continue
 
             # ── 回退到 CPU ──
-            print(f"[ASR_SERVER] falling back to CPU...", file=sys.stderr, flush=True)
+            print("[ASR_SERVER] falling back to CPU...", file=sys.stderr, flush=True)
             try:
                 from faster_whisper import WhisperModel as _WM
                 cpu_model = _WM(
@@ -443,7 +447,7 @@ def main():
         else:
             _send({"status": "error", "message": f"Unknown cmd: {cmd}"})
 
-    print(f"[ASR_SERVER] shutdown", file=sys.stderr, flush=True)
+    print("[ASR_SERVER] shutdown", file=sys.stderr, flush=True)
 
 
 def _send(obj: dict):

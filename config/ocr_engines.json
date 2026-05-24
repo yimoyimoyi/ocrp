@@ -5,11 +5,17 @@
       "enabled": true,
       "config": {
         "lang": "ch",
-        "use_angle_cls": true,
+        "use_angle_cls": false,
         "use_gpu": false,
         "show_log": false,
         "fast_mode": true,
-        "rec_batch_num": 6
+        "rec_batch_num": 6,
+        "api_key": "",
+        "base_url": "",
+        "model": "",
+        "timeout": 30,
+        "device": "gpu",
+        "ocr_version": "PP-OCRv4"
       }
     },
     "openai_vision": {

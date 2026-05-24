@@ -36,31 +36,24 @@ echo "  ORCP - OCR / ASR Processing Tool"
 echo "==========================================="
 echo ""
 
-# locate Python -------------------------------------------------------
-PYTHON_CMD=""
-if command -v python3 &>/dev/null; then
-    PYTHON_CMD="python3"
+# locate Python (prefer .venv) ----------------------------------------
+PYTHON_EXE=""
+if [ -f ".venv/bin/python" ]; then
+    PYTHON_EXE=".venv/bin/python"
+    info "Python: .venv/bin/python"
+elif command -v python3 &>/dev/null; then
+    PYTHON_EXE="python3"
+    warn ".venv not found, using system python3"
 elif command -v python &>/dev/null; then
-    PYTHON_CMD="python"
+    PYTHON_EXE="python"
+    warn ".venv not found, using system python"
 fi
 
-if [ -z "$PYTHON_CMD" ]; then
+if [ -z "$PYTHON_EXE" ]; then
     err "Python not found. Run: bash setup.sh"
     exit 1
 fi
-info "Python: $($PYTHON_CMD --version 2>&1)"
-
-# check venv -----------------------------------------------------------
-if [ -f ".venv/bin/python" ]; then
-    info "Using venv: .venv"
-    PYTHON_EXE=".venv/bin/python"
-else
-    PYTHON_EXE="$PYTHON_CMD"
-    # no venv: run setup if requested
-    if $DO_SETUP || [ ! -f "setup.sh" ]; then
-        :  # handled below
-    fi
-fi
+info "Python: $("$PYTHON_EXE" --version 2>&1)"
 
 # run setup if needed --------------------------------------------------
 if $DO_SETUP; then

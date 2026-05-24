@@ -21,18 +21,31 @@ import numpy as np
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
 
-from config_manager import _load_json_with_comments
+from core.config_manager import _load_json_with_comments
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # ── 批量纠错 ID 前缀常量 ──
 ID_PREFIX = "[ID:"
-ID_PATTERN = re.compile(r'\[ID:(\d+)\](.*?)(?=\n\[ID:\d+\]|\Z)', re.DOTALL)
-# 匹配时间标记 [hh:mm:ss.ms -> hh:mm:ss.ms] 或 [hh:mm:ss]
-TIME_MARKER = re.compile(r'\s*\[\s*\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:->|→)\s*\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*\]\s*')
-ID_TAG = re.compile(r'\[ID:\d+\]\s*')
+# 兼容 AI 输出变体：[ID:0]、[ID：0]、[ID 0]、ID:0、[id:0]
+ID_PATTERN = re.compile(
+    r'\[\s*ID\s*[:：]\s*(\d+)\s*\](.*?)(?=\n\[\s*ID\s*[:：]\s*\d+\s*\]|\Z)',
+    re.DOTALL | re.IGNORECASE,
+)
+# 匹配时间标记 [hh:mm:ss.ms -> hh:mm:ss.ms] 或 [hh:mm:ss] 或 (hh:mm:ss)
+TIME_MARKER = re.compile(
+    r'\s*[(\[]\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*(?:->|→|-{1,2}>|,)\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*[)\]]\s*'
+    r'|\s*\[\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*\]\s*',
+)
+ID_TAG = re.compile(r'\[\s*ID\s*[:：]?\s*\d+\s*\]\s*', re.IGNORECASE)
+# AI 可能输出的 markdown 代码块包裹
+_MD_FENCE = re.compile(r'^```(?:json|text)?\s*\n?|\n?```\s*$', re.MULTILINE)
 
 
 def _clean_content(text: str) -> str:
-    """去除 AI 可能附带的时间标记和 [ID:n] 标记。"""
+    """去除 AI 可能附带的时间标记、[ID:n] 标记和 markdown 代码块。"""
+    text = _MD_FENCE.sub('', text)
     text = TIME_MARKER.sub('', text)
     text = ID_TAG.sub('', text)
     return text.strip()
@@ -43,9 +56,13 @@ def load_correction_config() -> dict:
     path = CONFIG_DIR / "ai_correction.json"
     if path.exists():
         try:
-            return _load_json_with_comments(path)
-        except Exception:
-            pass
+            cfg = _load_json_with_comments(path)
+            from core.config_schema import validate_config
+            from core.config_schemas import AI_CORRECTION_SCHEMA
+            validate_config(cfg, AI_CORRECTION_SCHEMA, "ai_correction.json")
+            return cfg
+        except Exception as e:
+            logger.warning("加载纠错配置失败: %s", e)
     return {"enabled": False, "engine": "openai_vision", "retry_on_failure": 2}
 
 
@@ -174,7 +191,7 @@ class AICorrector:
         self._base_url = api_cfg.get("base_url", "http://127.0.0.1:8080")
         self._model = api_cfg.get("model", "")
         self._timeout = api_cfg.get("timeout", 30)
-        print(f"[AI纠错] 已切换预设: {preset_name or '默认'}")
+        logger.info("已切换 API 预设: %s", preset_name or '默认')
 
     @property
     def extract_env(self) -> bool:
@@ -226,24 +243,23 @@ class AICorrector:
                 result = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 self._env_context = (result or "").strip()
                 if self._env_context:
-                    print(f"[AI纠错] 环境提取完成 ({len(self._env_context)} chars):\n{self._env_context}")
+                    logger.info("环境提取完成: %d chars", len(self._env_context))
                 else:
-                    # 🔥 API 返回了 200 但 content 为空——打印完整响应排查
-                    print(f"[AI纠错] 环境提取返回空 content! raw:\n{json.dumps(data, ensure_ascii=False)[:500]}")
+                    logger.warning("环境提取返回空 content, raw keys=%s", list(data.keys()))
                     # 尝试从 reasoning_content 或 text 字段兜底
                     msg = data.get("choices", [{}])[0].get("message", {})
                     for key in ("reasoning_content", "text", "content"):
                         val = msg.get(key, "")
                         if val and val.strip():
                             self._env_context = val.strip()
-                            print(f"[AI纠错] 环境提取兜底: {key} ({len(self._env_context)} chars)")
+                            logger.info("环境提取兜底成功: %s (%d chars)", key, len(self._env_context))
                             return self._env_context
                 return self._env_context
             else:
-                print(f"[AI纠错] 环境提取 HTTP {resp.status_code}: {resp.text[:300]}")
+                logger.error("环境提取 HTTP %d: %s", resp.status_code, resp.text[:300])
                 return ""
         except Exception as e:
-            print(f"[AI纠错] 环境提取失败: {e}")
+            logger.error("环境提取失败: %s", e)
             return ""
 
     def correct(self, raw_text: str, context_texts: Optional[list] = None,
@@ -266,7 +282,7 @@ class AICorrector:
         # ── 本地引擎模式：直接调用引擎的 recognize() 重新识别 ──
         if self._is_local_engine():
             if image is None:
-                print("[AI纠错] 本地引擎模式需要提供 image 参数")
+                logger.error("本地引擎模式需要提供 image 参数")
                 return None
             return self._correct_local(image)
 
@@ -334,89 +350,16 @@ class AICorrector:
                       context_window: int = 3,
                       max_retries: int = 3,
                       stream_callback: Optional[Callable[[str], None]] = None) -> Dict[int, str]:
-        """批量对多条文本进行 AI 纠错，使用 [ID:行号] 标记保证顺序与完整性。
-        texts 每项支持 (row_index, raw_text) 或 (row_index, raw_text, time_sec, end_sec)。
-
-        时间轴仅影响存入位置，不嵌入 prompt（避免 AI 回显时间标记）。
-
-        Args:
-            texts: 待处理文本列表
-            context_window: 上下文窗口大小
-            max_retries: 最大重试次数
-            stream_callback: 流式回调（接收增量文本）
-
-        Returns:
-            字典 {row_index: corrected_text}，仅包含有变更的结果
-        """
+        """批量对多条文本进行 AI 纠错，使用 [ID:行号] 标记保证顺序与完整性。"""
         if not texts:
             return {}
 
-        has_time = len(texts[0]) >= 3
-        # 记录时间信息（仅用于存储，不嵌入 prompt）
-        time_map = {}
-        lines = []
-        id_map = {}
-        for idx, item in enumerate(texts):
-            row_idx = item[0]
-            raw_text = item[1]
-            safe_text = raw_text.replace("\n", " ").strip()
-            if has_time:
-                ts = item[2] if len(item) > 2 and item[2] else None
-                te = item[3] if len(item) > 3 and item[3] else None
-                if ts is not None:
-                    time_map[row_idx] = (ts, te)
-            lines.append(f"{ID_PREFIX}{idx}] {safe_text}")
-            id_map[idx] = row_idx
-
-        # ── 构建上下文 ──
-        batch_text = "\n".join(lines)
+        id_map, batch_text, original_map = self._prepare_batch_input(texts)
         n = len(texts)
 
-        # ── 构建上下文 ──
-        ctx = []
-        all_results = [r[1] for r in texts]
-        for i in range(len(texts)):
-            ctx_lines = []
-            start = max(0, i - context_window)
-            end = min(len(all_results), i + context_window + 1)
-            for j in range(start, end):
-                if j != i:
-                    ctx_lines.append(f"[{j}] {all_results[j]}")
-            ctx.append("\n".join(ctx_lines[-5:]))
+        context_block = self._build_context_block(texts, context_window)
+        prompt = self._build_correction_prompt(batch_text, context_block)
 
-        context_block = ""
-        if any(c for c in ctx):
-            context_block = "以下是一些额外的上下文信息（供参考，不要修改）：\n"
-            for i, c in enumerate(ctx):
-                if c:
-                    context_block += f"--- 条目 {i} 的上下文 ---\n{c}\n"
-            context_block += "\n"
-
-        # ── 核心 prompt ──
-        user_hint = self._prompt_template.strip()
-        custom_hint = ""
-        if user_hint:
-            if "文本校对" not in user_hint[:20] and "翻译以下" not in user_hint[:20]:
-                custom_hint = f"用户额外参考（按需采纳，不必拘泥）：{user_hint}\n"
-
-        if self._translate_mode:
-            prompt = (
-                f"{context_block}"
-                f"以下是需要处理的内容：\n"
-                f"{batch_text}\n\n"
-                f"{custom_hint}"
-                f"请将上述 OCR 文本翻译为中文。每行保持 {ID_PREFIX}行号] 前缀，行号从0开始连续。"
-            )
-        else:
-            prompt = (
-                f"{context_block}"
-                f"以下是需要处理的内容：\n"
-                f"{batch_text}\n\n"
-                f"{custom_hint}"
-                f"请校对文本错误。输出格式：每行保持 {ID_PREFIX}行号] 前缀，行号从0开始连续。"
-            )
-
-        # ── 重试循环 ──
         last_error = ""
         for attempt in range(max_retries + 1):
             result = self._call_api(prompt, env_context=self._env_context,
@@ -425,120 +368,175 @@ class AICorrector:
                 last_error = "API 返回空"
                 continue
 
-            # ── JSON 模式：直接解析 JSON ──
+            # ── JSON 模式 ──
             if self._json_mode:
-                try:
-                    data = json.loads(result) if isinstance(result, str) else result
-                    items = None
-                    if isinstance(data, dict):
-                        items = data.get("results") or data.get("items")
-                    if isinstance(items, list):
-                        corrected_map = {}
-                        for entry in items:
-                            if isinstance(entry, dict):
-                                eid = entry.get("id") if "id" in entry else entry.get("index")
-                                etext = entry.get("text") or entry.get("content") or ""
-                                if eid is None:
-                                    continue
-                                try:
-                                    idx_in_batch = int(eid)
-                                except (ValueError, TypeError):
-                                    continue
-                                if idx_in_batch in id_map:
-                                    row_idx = id_map[idx_in_batch]
-                                    original_text = dict([(r[0], r[1]) for r in texts]).get(row_idx, "")
-                                    clean = _clean_content(etext)
-                                    if clean and clean != original_text.strip():
-                                        corrected_map[row_idx] = clean
-                        if corrected_map:
-                            return corrected_map
-                        if attempt < max_retries:
-                            last_error = f"JSON 解析后全部为空 (共 {len(items)} 条)"
-                            print(f"[AI纠错] 批量 JSON 全部为空 (第{attempt+1}次)，重试...")
-                            prompt += (
-                                "\n\n[[系统：上次返回中 id 字段无效或内容为空，"
-                                "请确保返回 \"id\" 从0开始连续对应输入行。]]"
-                            )
-                            continue
-                    else:
-                        last_error = f"JSON 中未找到 results/items 数组 (keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__})"
-                        print(f"[AI纠错] JSON 结构异常 (第{attempt+1}次): {last_error}")
-                        if attempt < max_retries:
-                            prompt += (
-                                f'\n\n[[系统：上次返回 JSON 中缺少 "results" 数组。]]'
-                            )
-                            continue
-                        else:
-                            print(f"[AI纠错] 批量 JSON 解析最终失败: {last_error}")
-                            return {}
-                except (json.JSONDecodeError, TypeError) as e:
-                    last_error = f"JSON 解析失败: {e}"
-                    print(f"[AI纠错] JSON 解析失败 (第{attempt+1}次): {e}，回退到文本解析...")
-                    # 继续走下面的文本解析
-
-            parsed = self._parse_batch_result(result)
-
-            # ── 解析后处理 ──
-            if not parsed and attempt < max_retries:
-                last_error = "未能解析出任何 [ID:行号]"
-                print(f"[AI纠错] 解析全空 (第{attempt+1}次)，重试...")
-                prompt += (
-                    f"\n\n[[系统：上次未返回任何 {ID_PREFIX}行号] 标记。]]"
-                )
+                corrected = self._try_parse_json_batch(result, id_map, original_map)
+                if corrected is not None:
+                    return corrected if corrected else {}
+                if attempt >= max_retries:
+                    logger.error("批量 JSON 解析最终失败")
+                    return {}
+                prompt = self._append_retry_hint(prompt, "JSON 解析失败，请重试", attempt)
                 continue
 
+            # ── 文本模式 ──
+            parsed = self._parse_batch_result(result)
+            if not parsed and attempt < max_retries:
+                logger.warning("解析全空 (第%d次)，重试...", attempt + 1)
+                prompt = self._append_retry_hint(prompt, "未返回任何 [ID:行号]", attempt)
+                continue
             if not parsed:
-                print(f"[AI纠错] 批量解析最终空（已达最大重试次数），跳过本批")
+                logger.warning("批量解析最终空（已达最大重试次数）")
                 return {}
 
-            corrected_map = {}
-            all_empty = True
-            for idx_in_batch, content in parsed.items():
-                if idx_in_batch in id_map:
-                    row_idx = id_map[idx_in_batch]
-                    original_text = dict([(r[0], r[1]) for r in texts]).get(row_idx, "")
-                    clean = _clean_content(content)
-                    if clean and clean != original_text.strip():
-                        corrected_map[row_idx] = clean
-                        all_empty = False
-
-            # 🔥 仅检查全空，不检查行数匹配（AI 可能合并不返回某些行）
-            if all_empty and attempt < max_retries:
-                last_error = "解析后全部为空"
-                print(f"[AI纠错] 所有行解析为空 (第{attempt+1}次)，重试...")
-                prompt += (
-                    f"\n\n[[系统：上次返回内容全部为空。]]"
-                )
+            corrected_map = self._build_result_map(parsed, id_map, original_map)
+            if not corrected_map and attempt < max_retries:
+                logger.warning("所有行解析为空 (第%d次)，重试...", attempt + 1)
+                prompt = self._append_retry_hint(prompt, "返回内容全部为空", attempt)
                 continue
 
-            # 🔥 缺失行自动填充原文：AI 没返回的行用原文代替
-            original_map = dict([(r[0], r[1]) for r in texts])
-            for idx_in_batch in range(n):
-                if idx_in_batch in id_map:
-                    row_idx = id_map[idx_in_batch]
-                    if row_idx not in corrected_map:
-                        corrected_map[row_idx] = original_map.get(row_idx, "")
-
+            # 缺失行用原文填充
+            self._fill_missing_with_original(corrected_map, id_map, original_map, n)
             return corrected_map
 
-        print(f"[AI纠错] 批量纠错最终失败: {last_error}")
+        logger.error("批量纠错最终失败: %s", last_error)
         return {}
+
+    # ── correct_batch 辅助方法 ──
+
+    def _prepare_batch_input(self, texts):
+        """预处理批量输入：建立 ID 映射、构建标记行、原文映射。"""
+        has_time = len(texts[0]) >= 3 if texts else False
+        lines, id_map, original_map = [], {}, {}
+        for idx, item in enumerate(texts):
+            row_idx = item[0]
+            safe_text = item[1].replace("\n", " ").strip()
+            lines.append(f"{ID_PREFIX}{idx}] {safe_text}")
+            id_map[idx] = row_idx
+            original_map[row_idx] = item[1]
+        return id_map, "\n".join(lines), original_map
+
+    def _build_context_block(self, texts, context_window):
+        """为每个条目构建上下文参考文本块。"""
+        all_results = [r[1] for r in texts]
+        ctx = []
+        for i in range(len(texts)):
+            start = max(0, i - context_window)
+            end = min(len(all_results), i + context_window + 1)
+            ctx_lines = [f"[{j}] {all_results[j]}" for j in range(start, end) if j != i]
+            ctx.append("\n".join(ctx_lines[-5:]))
+        if not any(c for c in ctx):
+            return ""
+        block = "以下是一些额外的上下文信息（供参考，不要修改）：\n"
+        for i, c in enumerate(ctx):
+            if c:
+                block += f"--- 条目 {i} 的上下文 ---\n{c}\n"
+        return block + "\n"
+
+    def _build_correction_prompt(self, batch_text, context_block):
+        """构建纠错 prompt（翻译模式 vs 校对模式）。"""
+        user_hint = self._prompt_template.strip()
+        custom_hint = ""
+        if user_hint and "文本校对" not in user_hint[:20] and "翻译以下" not in user_hint[:20]:
+            custom_hint = f"用户额外参考（按需采纳，不必拘泥）：{user_hint}\n"
+
+        base = f"{context_block}以下是需要处理的内容：\n{batch_text}\n\n{custom_hint}"
+        if self._translate_mode:
+            return f"{base}请将上述 OCR 文本翻译为中文。每行保持 {ID_PREFIX}行号] 前缀，行号从0开始连续。"
+        return f"{base}请校对文本错误。输出格式：每行保持 {ID_PREFIX}行号] 前缀，行号从0开始连续。"
+
+    def _try_parse_json_batch(self, result, id_map, original_map):
+        """尝试从 JSON 响应解析批量结果。成功返回 dict，失败返回 None，全空返回 {}。"""
+        try:
+            data = json.loads(result) if isinstance(result, str) else result
+        except (json.JSONDecodeError, TypeError):
+            return None
+        items = None
+        if isinstance(data, dict):
+            items = data.get("results") or data.get("items")
+        if not isinstance(items, list):
+            return None
+        corrected_map = {}
+        for entry in items:
+            if not isinstance(entry, dict):
+                continue
+            eid = entry.get("id") if "id" in entry else entry.get("index")
+            etext = entry.get("text") or entry.get("content") or ""
+            if eid is None:
+                continue
+            try:
+                idx_in_batch = int(eid)
+            except (ValueError, TypeError):
+                continue
+            if idx_in_batch in id_map:
+                row_idx = id_map[idx_in_batch]
+                clean = _clean_content(etext)
+                if clean and clean != original_map.get(row_idx, "").strip():
+                    corrected_map[row_idx] = clean
+        return corrected_map
+
+    def _build_result_map(self, parsed, id_map, original_map):
+        """从解析结果构建纠错映射（排除与原文相同的项）。"""
+        corrected_map = {}
+        for idx_in_batch, content in parsed.items():
+            if idx_in_batch in id_map:
+                row_idx = id_map[idx_in_batch]
+                clean = _clean_content(content)
+                if clean and clean != original_map.get(row_idx, "").strip():
+                    corrected_map[row_idx] = clean
+        return corrected_map
+
+    @staticmethod
+    def _fill_missing_with_original(corrected_map, id_map, original_map, n):
+        """对 AI 未返回的行，用原文自动填充。"""
+        for idx_in_batch in range(n):
+            if idx_in_batch in id_map:
+                row_idx = id_map[idx_in_batch]
+                if row_idx not in corrected_map:
+                    corrected_map[row_idx] = original_map.get(row_idx, "")
+
+    @staticmethod
+    def _append_retry_hint(prompt, reason, attempt):
+        """在 prompt 末尾追加重试提示。"""
+        return prompt + f"\n\n[[系统：上次{reason}（第{attempt + 1}次）。请修正后重新输出。]]"
 
     @staticmethod
     def _parse_batch_result(text: str) -> Dict[int, str]:
         """从 AI 返回文本中解析 [ID:idx] 标记的内容。
 
+        容错处理：
+        - 去除 markdown 代码块包裹
+        - 兼容全角/半角冒号、大小写变体
+        - 当标准正则无匹配时，回退到宽松模式
+
         Returns:
             {idx: content} 字典
         """
+        # 去除 markdown 代码块
+        cleaned = _MD_FENCE.sub('', text).strip()
+
         result = {}
-        for match in ID_PATTERN.finditer(text):
+        for match in ID_PATTERN.finditer(cleaned):
             try:
                 idx = int(match.group(1))
                 content = match.group(2).strip()
-                result[idx] = content
-            except ValueError:
+                if content:
+                    result[idx] = content
+            except (ValueError, IndexError):
                 continue
+
+        # 回退：宽松模式匹配 "数字. 文本" 或 "数字) 文本" 格式
+        if not result:
+            _LOOSE = re.compile(r'^(\d+)\s*[.)\:：]\s*(.+)', re.MULTILINE)
+            for match in _LOOSE.finditer(cleaned):
+                try:
+                    idx = int(match.group(1))
+                    content = match.group(2).strip()
+                    if content:
+                        result[idx] = content
+                except (ValueError, IndexError):
+                    continue
+
         return result
 
     def _is_local_engine(self) -> bool:
@@ -560,17 +558,17 @@ class AICorrector:
     def _correct_local(self, image: np.ndarray) -> Optional[str]:
         """调用本地引擎对图像重新识别。"""
         if self._engine_manager is None:
-            print(f"[AI纠错] 引擎管理器未初始化")
+            logger.error("引擎管理器未初始化")
             return None
         try:
             eng = self._engine_manager.get_engine(self._engine_name)
             if eng is None:
-                print(f"[AI纠错] 引擎 [{self._engine_name}] 不可用")
+                logger.error("引擎 [%s] 不可用", self._engine_name)
                 return None
             result = eng.recognize(image)
             return result.strip() if result else None
         except Exception as e:
-            print(f"[AI纠错] 本地引擎识别失败: {e}")
+            logger.error("本地引擎识别失败: %s", e)
             return None
 
     def _call_api(self, prompt: str, env_context: str = "",
@@ -629,12 +627,9 @@ class AICorrector:
             url = base_url.rstrip('/') + "/chat/completions"
 
             # ── 后台日志：请求详情 ──
-            prompt_preview = prompt[:120].replace("\n", " ")
-            print(f"[AI纠错] ═══════════ API 请求 ═══════════")
-            print(f"[AI纠错]   🔗 URL: {url}")
-            print(f"[AI纠错]   🤖 Model: {model}")
-            print(f"[AI纠错]   📝 Prompt({len(prompt)} chars): {prompt_preview}{'...' if len(prompt) > 120 else ''}")
-            print(f"[AI纠错]   ⚙️  stream={use_stream}, json_mode={self._json_mode}, translate={self._translate_mode}")
+            logger.info("AI 纠错 API 请求 | model=%s | stream=%s | json=%s | translate=%s",
+                         model, use_stream, self._json_mode, self._translate_mode)
+            logger.debug("Prompt(%d chars): %s", len(prompt), prompt[:200])
 
             if use_stream:
                 payload["stream"] = True
@@ -644,24 +639,24 @@ class AICorrector:
                 resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
 
             elapsed_req = time.time() - t_start
-            print(f"[AI纠错]   ⏱ 首响应: {elapsed_req:.1f}s | HTTP {resp.status_code}")
+            logger.info("首响应: %.1fs | HTTP %d", elapsed_req, resp.status_code)
 
             if resp.status_code != 200:
-                print(f"[AI纠错]   ❌ HTTP {resp.status_code}: {resp.text[:300]}")
+                logger.error("AI 纠错 HTTP %d: %s", resp.status_code, resp.text[:300])
                 return None
 
             if use_stream:
-                # ── 流式解析 SSE（按字节读取，避免 decode_unicode 破坏 UTF-8）──
+                # ── 流式解析 SSE（大块读取 + 按行分割）──
                 full_content = ""
                 chunk_count = 0
-                buffer = b""
-                for raw_chunk in resp.iter_content(chunk_size=1):
+                line_buffer = b""
+                for raw_chunk in resp.iter_content(chunk_size=4096):
                     if not raw_chunk:
                         continue
-                    buffer += raw_chunk
-                    if buffer.endswith(b"\n"):
-                        line = buffer.decode("utf-8", errors="replace").strip()
-                        buffer = b""
+                    line_buffer += raw_chunk
+                    while b"\n" in line_buffer:
+                        line_bytes, line_buffer = line_buffer.split(b"\n", 1)
+                        line = line_bytes.decode("utf-8", errors="replace").strip()
                         if not line:
                             continue
                         if line.startswith("data: "):
@@ -681,17 +676,15 @@ class AICorrector:
                                 continue
 
                 elapsed_total = time.time() - t_start
-                print(f"[AI纠错]   📦 流式接收: {chunk_count} chunks, {len(full_content)} chars")
-                print(f"[AI纠错]   ⏱ 总耗时: {elapsed_total:.1f}s")
-                print(f"[AI纠错]   ✅ 流式结果预览: {full_content[:100].replace(chr(10), ' ')}{'...' if len(full_content) > 100 else ''}")
+                logger.info("流式接收: %d chunks, %d chars | 耗时 %.1fs", chunk_count, len(full_content), elapsed_total)
 
                 # JSON 模式验证
                 if self._json_mode and full_content.strip():
                     try:
                         json.loads(full_content.strip())
-                        print(f"[AI纠错]   ✅ JSON 格式有效")
+                        logger.debug("JSON 格式验证通过")
                     except json.JSONDecodeError as e:
-                        print(f"[AI纠错]   ⚠ JSON 解析失败: {e}")
+                        logger.warning("JSON 格式验证失败: %s", e)
 
                 return full_content.strip()
 
@@ -705,31 +698,28 @@ class AICorrector:
                 # Token 使用统计
                 usage = data.get("usage", {})
                 if usage:
-                    print(f"[AI纠错]   📊 Token: prompt={usage.get('prompt_tokens','?')}, "
-                          f"completion={usage.get('completion_tokens','?')}, "
-                          f"total={usage.get('total_tokens','?')}")
+                    logger.debug("Token 使用: prompt=%s, completion=%s, total=%s",
+                                 usage.get('prompt_tokens', '?'), usage.get('completion_tokens', '?'),
+                                 usage.get('total_tokens', '?'))
 
-                print(f"[AI纠错]   ⏱ 总耗时: {elapsed_total:.1f}s")
-                print(f"[AI纠错]   ✅ 响应({len(content)} chars): {content[:100].replace(chr(10), ' ')}{'...' if len(content) > 100 else ''}")
+                logger.info("AI 纠错响应: %.1fs, %d chars", elapsed_total, len(content))
 
                 # JSON 模式验证
                 if self._json_mode and content.strip():
                     try:
                         parsed = json.loads(content.strip())
                         if isinstance(parsed, dict) and "results" in parsed:
-                            print(f"[AI纠错]   ✅ JSON 结果包含 {len(parsed['results'])} 条条目")
+                            logger.debug("JSON 结果包含 %d 条条目", len(parsed['results']))
                         elif isinstance(parsed, dict):
-                            print(f"[AI纠错]   ✅ JSON 结果键: {list(parsed.keys())}")
+                            logger.debug("JSON 结果键: %s", list(parsed.keys()))
                     except json.JSONDecodeError as e:
-                        print(f"[AI纠错]   ⚠ JSON 解析失败: {e}")
+                        logger.warning("JSON 解析失败: %s", e)
 
                 return content.strip()
 
         except requests.exceptions.Timeout:
-            print(f"[AI纠错]   ❌ 请求超时 ({timeout}s)")
+            logger.error("AI 纠错请求超时 (%ds)", timeout)
             return None
         except Exception as e:
-            print(f"[AI纠错]   ❌ 请求失败: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error("AI 纠错请求失败: %s", e)
             return None

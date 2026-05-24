@@ -2,14 +2,15 @@
 """配置面板 —— 处理参数 / 哨兵参数 / 提示词模板 / 过滤器"""
 import os
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QToolButton,
-    QComboBox, QTextEdit, QCheckBox, QFormLayout,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QTextEdit, QCheckBox, QFormLayout,
     QTabWidget, QSpinBox, QDoubleSpinBox, QLineEdit, QMessageBox,
     QListWidget, QListWidgetItem, QScrollArea, QGroupBox, QSizePolicy,
     QFrame,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from typing import List
+
+from core.i18n import _
 
 
 class ConfigPanel(QWidget):
@@ -58,15 +59,10 @@ class ConfigPanel(QWidget):
                 order_lines.append(line)
         order_text = "\n".join(order_lines)
 
-        def _g(attr, default):
-            w = getattr(self, attr, None)
-            if w is None: return default
-            if isinstance(w, QCheckBox): return w.isChecked()
-            if isinstance(w, QComboBox): return w.currentText() or default
-            if isinstance(w, QLineEdit): return w.text().strip() or default
-            if isinstance(w, QSpinBox): return w.value()
-            if isinstance(w, QDoubleSpinBox): return w.value()
-            return default
+        from ui.widget_helpers import safe_read_widget
+
+        def _w(attr, default=None):
+            return safe_read_widget(getattr(self, attr, None), default)
 
         return {
             "frame_interval": self._frame_interval_spin.value(),
@@ -78,17 +74,18 @@ class ConfigPanel(QWidget):
             "s_buffer_size": self._s_buffer_spin.value(),
             "s_sim_threshold": self._s_sim_spin.value(),
             "s_min_text_len": self._s_min_text_spin.value(),
-            "s_filter_keywords": _g("_s_filter_edit", ""),
+            "s_filter_keywords": _w("_s_filter_edit", ""),
+            "s_ocr_version": self._s_ocr_version_combo.currentText(),
             # ── 常规参数 ──
             "r_dedup": self._r_dedup_check.isChecked(),
             "r_sim_threshold": self._r_sim_spin.value(),
             "r_buffer_size": self._r_buffer_spin.value(),
             "r_min_text_len": self._r_min_text_spin.value(),
-            "r_filter_keywords": _g("_r_filter_edit", ""),
+            "r_filter_keywords": _w("_r_filter_edit", ""),
             "r_interval": self._r_interval_spin.value(),
             "subtitle_duration": self._subtitle_duration_spin.value(),
             "region_order": order_text,
-            "srt_export_mode": _g("_srt_export_combo", "仅纠正结果"),
+            "srt_export_mode": _w("_srt_export_combo", "仅纠正结果"),
             "post_keep_longest": self._post_keep_longest.isChecked(),
             "post_sim_dedup": self._post_sim_dedup.isChecked(),
             "post_conf_enabled": self._post_conf_check.isChecked(),
@@ -96,39 +93,39 @@ class ConfigPanel(QWidget):
             "post_sim_threshold": self._post_sim_threshold.value(),
             "post_min_text_len": self._post_min_text_len.value(),
             # ── OCR 重试参数 ──
-            "ocr_retry": _g("_ocr_retry_spin", 2),
-            "ocr_timeout": _g("_ocr_timeout_spin", 60),
+            "ocr_retry": _w("_ocr_retry_spin", 2),
+            "ocr_timeout": _w("_ocr_timeout_spin", 60),
             # ── AI 纠错参数 ──
-            "corr_enabled": _g("_corr_enabled_check", False),
-            "corr_batch_size": _g("_corr_batch_spin", 5),
-            "corr_context_window": _g("_corr_context_spin", 3),
-            "corr_retry": _g("_corr_retry_spin", 2),
-            "corr_prompt": _g("_corr_prompt_text", ""),
-            "corr_extract_env": _g("_corr_extract_env_check", False),
-            "corr_summary_prompt": _g("_corr_summary_prompt_text", ""),
-            "corr_system_prompt": _g("_corr_system_prompt_text", ""),
-            "corr_output_format": _g("_corr_output_format_edit", ""),
-            "corr_translate": _g("_corr_translate_check", False),
-            "corr_stream": _g("_corr_stream_check", False),
-            "corr_json": _g("_corr_json_check", False),
-            "corr_preset": _g("_corr_preset_combo", ""),
+            "corr_enabled": _w("_corr_enabled_check", False),
+            "corr_batch_size": _w("_corr_batch_spin", 5),
+            "corr_context_window": _w("_corr_context_spin", 3),
+            "corr_retry": _w("_corr_retry_spin", 2),
+            "corr_prompt": _w("_corr_prompt_text", ""),
+            "corr_extract_env": _w("_corr_extract_env_check", False),
+            "corr_summary_prompt": _w("_corr_summary_prompt_text", ""),
+            "corr_system_prompt": _w("_corr_system_prompt_text", ""),
+            "corr_output_format": _w("_corr_output_format_edit", ""),
+            "corr_translate": _w("_corr_translate_check", False),
+            "corr_stream": _w("_corr_stream_check", False),
+            "corr_json": _w("_corr_json_check", False),
+            "corr_preset": _w("_corr_preset_combo", ""),
             # ── ASR 参数 ──
-            "asr_enabled": _g("_asr_enabled_check", False),
-            "asr_model_size": _g("_asr_model_combo", "large-v3"),
+            "asr_enabled": _w("_asr_enabled_check", False),
+            "asr_model_size": _w("_asr_model_combo", "large-v3"),
             "asr_model_path": self._asr_model_combo.currentData() or "",
-            "asr_language": _g("_asr_lang_combo", "zh"),
-            "asr_vad": _g("_asr_vad_check", False),
-            "asr_word_ts": _g("_asr_word_ts_check", True),
-            "asr_region_name": _g("_asr_region_edit", "语音"),
-            "asr_beam_size": _g("_asr_beam_spin", 5),
-            "asr_initial_prompt": _g("_asr_prompt_edit", ""),
-            "asr_condition_prev": _g("_asr_condition_check", True),
-            "asr_no_speech_thresh": _g("_asr_no_speech_spin", 0.6),
-            "asr_comp_ratio_thresh": _g("_asr_comp_ratio_spin", 2.4),
-            "asr_temperature": _g("_asr_temp_edit", "0.0,0.2,0.4,0.6,0.8,1.0"),
-            "asr_hotwords": _g("_asr_hotwords_edit", ""),
-            "asr_vad_min_silence": _g("_asr_vad_silence_spin", 500),
-            "asr_vad_threshold": _g("_asr_vad_thresh_spin", 0.5),
+            "asr_language": _w("_asr_lang_combo", "zh"),
+            "asr_vad": _w("_asr_vad_check", False),
+            "asr_word_ts": _w("_asr_word_ts_check", True),
+            "asr_region_name": _w("_asr_region_edit", "语音"),
+            "asr_beam_size": _w("_asr_beam_spin", 5),
+            "asr_initial_prompt": _w("_asr_prompt_edit", ""),
+            "asr_condition_prev": _w("_asr_condition_check", True),
+            "asr_no_speech_thresh": _w("_asr_no_speech_spin", 0.6),
+            "asr_comp_ratio_thresh": _w("_asr_comp_ratio_spin", 2.4),
+            "asr_temperature": _w("_asr_temp_edit", "0.0,0.2,0.4,0.6,0.8,1.0"),
+            "asr_hotwords": _w("_asr_hotwords_edit", ""),
+            "asr_vad_min_silence": _w("_asr_vad_silence_spin", 500),
+            "asr_vad_threshold": _w("_asr_vad_thresh_spin", 0.5),
         }
 
     def apply_mode_params(self, params: dict):
@@ -170,6 +167,8 @@ class ConfigPanel(QWidget):
             self._s_min_text_spin.setValue(params["s_min_text_len"])
         if "s_filter_keywords" in params:
             self._s_filter_edit.setText(params["s_filter_keywords"])
+        if "s_ocr_version" in params:
+            self._s_ocr_version_combo.setCurrentText(params["s_ocr_version"])
         if "r_dedup" in params:
             self._r_dedup_check.setChecked(params["r_dedup"])
         if "r_sim_threshold" in params:
@@ -313,16 +312,16 @@ class ConfigPanel(QWidget):
         layout.addRow("处理模式:", self._process_mode_combo)
 
         # ── 后处理开关 ──
-        self._post_sim_dedup = QCheckBox("后处理相似度去重")
+        self._post_sim_dedup = QCheckBox(_("后处理相似度去重"))
         self._post_sim_dedup.setChecked(True)
         layout.addRow("", self._post_sim_dedup)
 
-        self._post_keep_longest = QCheckBox("保留最长文本")
+        self._post_keep_longest = QCheckBox(_("保留最长文本"))
         self._post_keep_longest.setChecked(False)
         layout.addRow("", self._post_keep_longest)
 
         # ── AI 纠错开关 ──
-        self._corr_enabled_check = QCheckBox("启用 AI 纠错")
+        self._corr_enabled_check = QCheckBox(_("启用 AI 纠错"))
         self._corr_enabled_check.setChecked(False)
         layout.addRow("", self._corr_enabled_check)
 
@@ -336,17 +335,18 @@ class ConfigPanel(QWidget):
 
         # ── SRT 导出模式 ──
         self._srt_export_combo = QComboBox()
-        self._srt_export_combo.addItems(["仅纠正结果", "仅原文", "双语对照（原文+纠正）"])
+        self._srt_export_combo.addItems(["仅纠正结果", "仅原文", "双语对照（原文+纠正）", "原文 换行 纠正"])
         self._srt_export_combo.setToolTip(
             "SRT 导出时的字幕内容模式：\n"
             "仅纠正结果 = AI 纠错后的文本\n"
             "仅原文 = 原始 OCR/ASR 文本\n"
-            "双语对照 = 原文在上，纠正在下")
+            "双语对照 = 原文在上，纠正在下\n"
+            "原文 换行 纠正 = 原文在上，换行后显示纠正文本")
         layout.addRow("SRT 导出:", self._srt_export_combo)
 
         # ── 失败重试参数 ──
-        sep_retry = QLabel("── 流程失败重试 ──")
-        sep_retry.setStyleSheet("color: #888;")
+        sep_retry = QLabel(_("── 流程失败重试 ──"))
+        sep_retry.setObjectName("sectionSep")
         layout.addRow("", sep_retry)
 
         self._ocr_retry_spin = QSpinBox()
@@ -362,16 +362,10 @@ class ConfigPanel(QWidget):
         self._ocr_timeout_spin.setToolTip("API OCR 引擎请求超时时间")
         layout.addRow("OCR 超时:", self._ocr_timeout_spin)
 
-        self._hw_accel_check = QCheckBox("硬件加速 (GPU)")
-        self._hw_accel_check.setToolTip("FFmpeg 视频解码 + PaddleOCR 均启用 GPU 加速")
-        self._hw_accel_check.setChecked(False)
-        self._hw_accel_check.toggled.connect(self._on_hw_accel_toggled)
-        layout.addRow("", self._hw_accel_check)
-
-        btn = QPushButton("应用处理参数")
+        btn = QPushButton(_("应用处理参数"))
         btn.clicked.connect(self._on_apply_mode)
         layout.addRow("", btn)
-        self._add_tab_with_scroll(tab, "处理参数")
+        self._add_tab_with_scroll(tab, _("处理参数"))
 
     # ── Tab 2: 字幕设置（流式 + 常规，独立配置） ──
     def _init_sentinel_tab(self):
@@ -380,7 +374,7 @@ class ConfigPanel(QWidget):
 
         # ── 字幕模式选择 ──
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("字幕模式:"))
+        mode_row.addWidget(QLabel(_("字幕模式:")))
         self._subtitle_mode_combo = QComboBox()
         self._subtitle_mode_combo.addItems(["流式字幕（去重）", "常规字幕（固定间隔）"])
         self._subtitle_mode_combo.setToolTip("流式：AI 去重后输出，适合对话流\n常规：按固定间隔输出每一帧，不丢字")
@@ -392,11 +386,11 @@ class ConfigPanel(QWidget):
         self._s_group = QWidget()
         s_layout = QFormLayout(self._s_group); s_layout.setSpacing(4)
         s_layout.setContentsMargins(0, 0, 0, 0)
-        s_sep = QLabel("── 流式参数（哨兵去重） ──")
-        s_sep.setStyleSheet("color: #888;")
+        s_sep = QLabel(_("── 流式参数（哨兵去重） ──"))
+        s_sep.setObjectName("sectionSep")
         s_layout.addRow("", s_sep)
 
-        self._s_sentinel_check = QCheckBox("启用哨兵去重（骤降/缓冲区/相似度）")
+        self._s_sentinel_check = QCheckBox(_("启用哨兵去重（骤降/缓冲区/相似度）"))
         self._s_sentinel_check.setChecked(True)
         s_layout.addRow("", self._s_sentinel_check)
 
@@ -424,17 +418,30 @@ class ConfigPanel(QWidget):
         self._s_filter_edit.setPlaceholderText("过滤关键词，逗号分隔（可选）")
         self._s_filter_edit.setToolTip("匹配关键词的结果将被过滤，不输出")
         s_layout.addRow("过滤关键词:", self._s_filter_edit)
+
+        self._s_ocr_version_combo = QComboBox()
+        self._s_ocr_version_combo.addItems([
+            "跟随全局", "PP-OCRv4 (最快)", "PP-OCRv5_mobile (平衡)", "PP-OCRv5_server (高精度)"
+        ])
+        self._s_ocr_version_combo.setToolTip(
+            "哨兵模式专用 OCR 模型版本\n"
+            "跟随全局：使用引擎配置中的版本\n"
+            "v4/快速：速度快 3-5x，适合实时字幕检测\n"
+            "mobile/平衡：速度与精度均衡\n"
+            "server/高精度：最慢但识别最准，适合离线批处理"
+        )
+        s_layout.addRow("哨兵 OCR 版本:", self._s_ocr_version_combo)
         layout.addWidget(self._s_group)
 
         # ── 常规参数组（包裹在 QWidget 中，整体 hide/show） ──
         self._r_group = QWidget()
         r_layout = QFormLayout(self._r_group); r_layout.setSpacing(4)
         r_layout.setContentsMargins(0, 0, 0, 0)
-        r_sep = QLabel("── 常规参数（基本去重） ──")
-        r_sep.setStyleSheet("color: #888;")
+        r_sep = QLabel(_("── 常规参数（基本去重） ──"))
+        r_sep.setObjectName("sectionSep")
         r_layout.addRow("", r_sep)
 
-        self._r_dedup_check = QCheckBox("启用基本去重（相似文本合并）")
+        self._r_dedup_check = QCheckBox(_("启用基本去重（相似文本合并）"))
         self._r_dedup_check.setChecked(True)
         r_layout.addRow("", self._r_dedup_check)
 
@@ -465,11 +472,11 @@ class ConfigPanel(QWidget):
         r_layout.addRow("输出间隔:", self._r_interval_spin)
         layout.addWidget(self._r_group)
 
-        btn = QPushButton("应用字幕参数")
+        btn = QPushButton(_("应用字幕参数"))
         btn.clicked.connect(self._on_apply_mode)
         layout.addWidget(btn)
         layout.addStretch()
-        self._add_tab_with_scroll(tab, "字幕设置")
+        self._add_tab_with_scroll(tab, _("字幕设置"))
 
         # 初始显示流式组
         self._on_subtitle_mode_changed(self._subtitle_mode_combo.currentText())
@@ -485,7 +492,7 @@ class ConfigPanel(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab); layout.setSpacing(4)
 
-        layout.addWidget(QLabel("排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:"))
+        layout.addWidget(QLabel(_("排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:")))
 
         self._sort_list = QListWidget()
         self._sort_list.setDragDropMode(QAbstractItemView.InternalMove)
@@ -495,10 +502,10 @@ class ConfigPanel(QWidget):
         self._sort_list.model().rowsMoved.connect(lambda *_: self._on_apply_mode())
         layout.addWidget(self._sort_list, 1)
 
-        btn = QPushButton("应用排序规则")
+        btn = QPushButton(_("应用排序规则"))
         btn.clicked.connect(self._on_apply_mode)
         layout.addWidget(btn)
-        self._add_tab_with_scroll(tab, "结果排序")
+        self._add_tab_with_scroll(tab, _("结果排序"))
 
     def _add_sort_row(self, name: str, prefix: str = "", suffix: str = ""):
         """添加一个排序行到 QListWidget。"""
@@ -514,7 +521,7 @@ class ConfigPanel(QWidget):
         row_layout.addWidget(prefix_edit)
 
         chip = QLabel(name)
-        chip.setStyleSheet("background:#3a6a3a;color:white;padding:2px 6px;border-radius:4px;font-weight:bold;")
+        chip.setObjectName("regionChip")
         chip.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         row_layout.addWidget(chip)
 
@@ -524,7 +531,7 @@ class ConfigPanel(QWidget):
         suffix_edit.textChanged.connect(self._on_apply_mode)
         row_layout.addWidget(suffix_edit)
 
-        btn_x = QPushButton("✕")
+        btn_x = QPushButton(_("✕"))
         btn_x.setMaximumWidth(22)
         btn_x.setMaximumHeight(22)
         btn_x.clicked.connect(lambda: self._remove_sort_item(row))
@@ -573,7 +580,7 @@ class ConfigPanel(QWidget):
         layout = QFormLayout(tab); layout.setSpacing(4)
 
         # ── 置信度阈值过滤 ──
-        self._post_conf_check = QCheckBox("启用置信度过滤（仅 PaddleOCR）")
+        self._post_conf_check = QCheckBox(_("启用置信度过滤（仅 PaddleOCR）"))
         self._post_conf_check.setChecked(False)
         layout.addRow("", self._post_conf_check)
 
@@ -592,8 +599,8 @@ class ConfigPanel(QWidget):
         layout.addRow("最小文字长度:", self._post_min_text_len)
 
         # ── 过滤器（后处理子集） ──
-        sep_filter = QLabel("── 关键词过滤 ──")
-        sep_filter.setStyleSheet("color: #888;")
+        sep_filter = QLabel(_("── 关键词过滤 ──"))
+        sep_filter.setObjectName("sectionSep")
         layout.addRow("", sep_filter)
 
         add_row = QHBoxLayout(); add_row.setSpacing(4)
@@ -601,7 +608,7 @@ class ConfigPanel(QWidget):
         self._filter_input.setPlaceholderText("输入要过滤的关键词，回车添加...")
         self._filter_input.returnPressed.connect(self._on_add_filter)
         add_row.addWidget(self._filter_input, 1)
-        self._btn_filter_add = QPushButton("➕ 添加")
+        self._btn_filter_add = QPushButton(_("➕ 添加"))
         self._btn_filter_add.clicked.connect(self._on_add_filter)
         add_row.addWidget(self._btn_filter_add)
         layout.addRow("", add_row)
@@ -613,19 +620,19 @@ class ConfigPanel(QWidget):
         layout.addRow("", self._filter_list)
 
         filter_btn_row = QHBoxLayout(); filter_btn_row.setSpacing(4)
-        self._btn_filter_del = QPushButton("🗑 删除选中")
+        self._btn_filter_del = QPushButton(_("🗑 删除选中"))
         self._btn_filter_del.clicked.connect(self._on_remove_filter)
         filter_btn_row.addWidget(self._btn_filter_del)
-        self._btn_filter_clear = QPushButton("清空全部")
+        self._btn_filter_clear = QPushButton(_("清空全部"))
         self._btn_filter_clear.clicked.connect(self._on_clear_filters)
         filter_btn_row.addWidget(self._btn_filter_clear)
         filter_btn_row.addStretch()
         layout.addRow("", filter_btn_row)
 
-        btn = QPushButton("应用后处理设置")
+        btn = QPushButton(_("应用后处理设置"))
         btn.clicked.connect(self._on_apply_mode)
         layout.addRow("", btn)
-        self._add_tab_with_scroll(tab, "后处理")
+        self._add_tab_with_scroll(tab, _("后处理"))
 
     # ── Tab 5: 提示词模板 ──
     def _init_template_tab(self):
@@ -633,14 +640,14 @@ class ConfigPanel(QWidget):
         layout = QVBoxLayout(tab); layout.setSpacing(4)
 
         sel_row = QHBoxLayout(); sel_row.setSpacing(4)
-        sel_row.addWidget(QLabel("模板:"))
+        sel_row.addWidget(QLabel(_("模板:")))
         self._template_combo = QComboBox()
         self._template_combo.setEditable(False)
         self._template_combo.currentTextChanged.connect(self._on_template_selected)
         sel_row.addWidget(self._template_combo, 1)
         layout.addLayout(sel_row)
 
-        layout.addWidget(QLabel("提示词内容:"))
+        layout.addWidget(QLabel(_("提示词内容:")))
         self._prompt_edit = QTextEdit()
         self._prompt_edit.setPlaceholderText("输入提示词...")
         self._prompt_edit.textChanged.connect(self._on_prompt_changed)
@@ -654,7 +661,7 @@ class ConfigPanel(QWidget):
             b = QPushButton(text); b.clicked.connect(slot); btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
-        self._add_tab_with_scroll(tab, "提示词模板")
+        self._add_tab_with_scroll(tab, _("提示词模板"))
 
     # ── Tab 6: 语音识别 ──
     def _init_asr_tab(self):
@@ -674,7 +681,7 @@ class ConfigPanel(QWidget):
         self._refresh_asr_models()
         layout.addRow("可用模型:", self._asr_model_combo)
 
-        btn_refresh = QPushButton("🔄 刷新模型列表")
+        btn_refresh = QPushButton(_("🔄 刷新模型列表"))
         btn_refresh.clicked.connect(self._refresh_asr_models)
         layout.addRow("", btn_refresh)
 
@@ -694,11 +701,11 @@ class ConfigPanel(QWidget):
         self._asr_beam_spin.setToolTip("Beam size，越大精度越高但越慢")
         gfl.addRow("Beam Size:", self._asr_beam_spin)
 
-        self._asr_word_ts_check = QCheckBox("字级时间戳")
+        self._asr_word_ts_check = QCheckBox(_("字级时间戳"))
         self._asr_word_ts_check.setChecked(True)
         gfl.addRow("", self._asr_word_ts_check)
 
-        self._asr_condition_check = QCheckBox("基于上文条件解码")
+        self._asr_condition_check = QCheckBox(_("基于上文条件解码"))
         self._asr_condition_check.setChecked(True)
         self._asr_condition_check.setToolTip("condition_on_previous_text")
         gfl.addRow("", self._asr_condition_check)
@@ -734,7 +741,7 @@ class ConfigPanel(QWidget):
         vg = QGroupBox("VAD (语音活动检测)")
         vgl = QFormLayout(vg); vgl.setSpacing(4)
 
-        self._asr_vad_check = QCheckBox("启用 VAD（跳过静音段）")
+        self._asr_vad_check = QCheckBox(_("启用 VAD（跳过静音段）"))
         self._asr_vad_check.setChecked(False)
         self._asr_vad_check.setToolTip("自动检测并跳过静音部分，加速处理")
         vgl.addRow("", self._asr_vad_check)
@@ -758,10 +765,10 @@ class ConfigPanel(QWidget):
         self._asr_region_edit.setToolTip("ASR 结果在表格中显示的区域名称")
         layout.addRow("区域名:", self._asr_region_edit)
 
-        btn = QPushButton("应用语音识别设置")
+        btn = QPushButton(_("应用语音识别设置"))
         btn.clicked.connect(self._on_apply_mode)
         layout.addRow("", btn)
-        self._add_tab_with_scroll(tab, "语音识别")
+        self._add_tab_with_scroll(tab, _("语音识别"))
 
     # ── Tab 8: AI 纠错 ──
     def _init_correction_tab(self):
@@ -769,33 +776,33 @@ class ConfigPanel(QWidget):
         layout = QFormLayout(tab); layout.setSpacing(4)
 
         # ── 翻译模式开关 ──
-        self._corr_translate_check = QCheckBox("🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）")
+        self._corr_translate_check = QCheckBox(_("🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"))
         self._corr_translate_check.setChecked(False)
         self._corr_translate_check.setToolTip("开启后 LLM 将把 OCR 结果翻译为中文，用户自定义纠错提示词仅作为风格参考")
         self._corr_translate_check.toggled.connect(self._on_apply_mode)
         layout.addRow("", self._corr_translate_check)
 
         # ── 流式输出模式 ──
-        self._corr_stream_check = QCheckBox("🔴 流式输出模式（实时逐字显示 API 响应）")
+        self._corr_stream_check = QCheckBox(_("🔴 流式输出模式（实时逐字显示 API 响应）"))
         self._corr_stream_check.setChecked(False)
         self._corr_stream_check.setToolTip("开启后 API 纠错结果将实时逐字显示在表格中，关闭后等待完整响应再更新")
         self._corr_stream_check.toggled.connect(self._on_apply_mode)
         layout.addRow("", self._corr_stream_check)
 
         # ── JSON 输出模式 ──
-        self._corr_json_check = QCheckBox("📋 JSON 输出模式（API 返回结构化 JSON 格式）")
+        self._corr_json_check = QCheckBox(_("📋 JSON 输出模式（API 返回结构化 JSON 格式）"))
         self._corr_json_check.setChecked(False)
         self._corr_json_check.setToolTip("开启后 API 将以 JSON 格式返回纠错结果，便于程序化处理")
         self._corr_json_check.toggled.connect(self._on_apply_mode)
         layout.addRow("", self._corr_json_check)
 
-        self._corr_extract_env_check = QCheckBox("提取全文环境（领域/氛围/内容摘要作为纠错参考）")
+        self._corr_extract_env_check = QCheckBox(_("提取全文环境（领域/氛围/内容摘要作为纠错参考）"))
         self._corr_extract_env_check.setChecked(False)
         self._corr_extract_env_check.setToolTip("纠错前先用 AI 分析全文领域、氛围、主题，注入 system prompt 提升纠错准确率")
         layout.addRow("", self._corr_extract_env_check)
 
         # ── 立即提取按钮 ──
-        self._btn_extract_env = QPushButton("🔍 立即提取全文环境")
+        self._btn_extract_env = QPushButton(_("🔍 立即提取全文环境"))
         self._btn_extract_env.setToolTip("立即用当前全文结果和自定义总结提示词提取环境上下文，结果回填到下方提示词栏")
         self._btn_extract_env.clicked.connect(self._on_extract_env_clicked)
         layout.addRow("", self._btn_extract_env)
@@ -804,7 +811,7 @@ class ConfigPanel(QWidget):
         self._corr_summary_prompt_text = QTextEdit()
         self._corr_summary_prompt_text.setPlaceholderText(
             "自定义全文总结/概括提示词，用于提取环境上下文（可选）")
-        self._corr_summary_prompt_text.setMaximumHeight(80)
+        self._corr_summary_prompt_text.setMaximumHeight(100)
         self._corr_summary_prompt_text.setToolTip(
             "此提示词用于对全文进行总结概括，结果将作为纠错的 system prompt 注入。\n"
             "留空则使用默认提示词。")
@@ -814,7 +821,7 @@ class ConfigPanel(QWidget):
         self._corr_system_prompt_text = QTextEdit()
         self._corr_system_prompt_text.setPlaceholderText(
             "自定义纠错系统提示词（system prompt），控制纠错行为（可选）")
-        self._corr_system_prompt_text.setMaximumHeight(80)
+        self._corr_system_prompt_text.setMaximumHeight(100)
         self._corr_system_prompt_text.setToolTip(
             "此 system prompt 会注入到每次纠错请求中。\n"
             "留空则使用默认值。")
@@ -859,13 +866,13 @@ class ConfigPanel(QWidget):
 
         self._corr_prompt_text = QTextEdit()
         self._corr_prompt_text.setPlaceholderText("自定义纠错提示词（可选，覆盖 correction_prompt）")
-        self._corr_prompt_text.setMaximumHeight(80)
+        self._corr_prompt_text.setMaximumHeight(100)
         layout.addRow("纠错用户提示词:", self._corr_prompt_text)
 
-        btn = QPushButton("应用纠错设置")
+        btn = QPushButton(_("应用纠错设置"))
         btn.clicked.connect(self._on_apply_mode)
         layout.addRow("", btn)
-        self._add_tab_with_scroll(tab, "AI 纠错")
+        self._add_tab_with_scroll(tab, _("AI 纠错"))
 
     # ── 折叠/展开（保留兼容，由外部调用） ──
     def _on_collapse_clicked(self):
@@ -905,8 +912,6 @@ class ConfigPanel(QWidget):
         self.prompt_changed.emit(self._prompt_edit.toPlainText())
     def _on_apply_mode(self):
         self.mode_changed.emit(self.get_mode_params())
-    def _on_hw_accel_toggled(self, enabled: bool):
-        self.hw_accel_changed.emit(enabled)
     def _on_extract_env_clicked(self):
         """点击「立即提取全文环境」按钮。"""
         self.extract_env_clicked.emit()
@@ -976,26 +981,8 @@ class ConfigPanel(QWidget):
     def select_template(self, name: str):
         idx = self._template_combo.findText(name)
         if idx >= 0: self._template_combo.setCurrentIndex(idx)
-    def set_hw_accel(self, enabled: bool):
-        try:
-            self._hw_accel_check.blockSignals(True)
-            self._hw_accel_check.setChecked(enabled)
-            self._hw_accel_check.blockSignals(False)
-        except RuntimeError:
-            pass
     def set_filter_keywords(self, keywords: List[str]):
         self._filter_list.clear(); self._filter_list.addItems(keywords)
-    def _make_region_btns(self, names):
-        """创建安全的区域按钮容器。"""
-        w = QWidget(); w.setMaximumHeight(36)
-        ly = QHBoxLayout(w); ly.setContentsMargins(0,0,0,0); ly.setSpacing(2)
-        self._region_btns = []
-        for n in names:
-            b = QPushButton(n); b.setMaximumWidth(100); b.setMaximumHeight(22)
-            b.clicked.connect(lambda checked, nn=n: self._on_region_btn_clicked(nn))
-            ly.addWidget(b); self._region_btns.append(b)
-        ly.addStretch()
-        return w
 
     def set_region_names(self, names: List[str]):
         self._region_names = list(names)

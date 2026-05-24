@@ -111,63 +111,72 @@ case "$DISTRO" in
         ;;
 esac
 
-# [4] Python version ---------------------------------------------------
-info "[4/7] Check Python version..."
+# [4] uv ---------------------------------------------------------------
+info "[4/7] Install uv..."
 
-PYTHON_CMD=""
-for cmd in python3.12 python3.13 python3.11 python3; do
-    if command -v "$cmd" &>/dev/null; then
-        ver=$("$cmd" --version 2>&1 | grep -oP '\d+\.\d+' | head -1)
-        major=$(echo "$ver" | cut -d. -f1)
-        minor=$(echo "$ver" | cut -d. -f2)
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 11 ]; then
-            PYTHON_CMD="$cmd"
-            break
-        fi
-    fi
-done
-
-if [ -z "$PYTHON_CMD" ]; then
-    err "Python >= 3.11 required. Install Python 3.12+ manually."
-    echo "  Ubuntu: sudo apt install python3.12 python3.12-dev python3.12-venv"
-    echo "  Or:     curl https://pyenv.run | bash && pyenv install 3.12"
-    exit 1
-fi
-echo "      $($PYTHON_CMD --version)"
-
-# [5] uv ---------------------------------------------------------------
-info "[5/7] Install uv..."
-
-if ! command -v uv &>/dev/null; then
-    echo "      Installing..."
+if command -v uv &>/dev/null; then
+    echo "      $(uv --version) (already installed)"
+else
+    echo "      Installing (standalone)..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
     export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
     if ! command -v uv &>/dev/null; then
-        pip3 install uv --user
+        warn "Standalone installer failed, trying pip..."
+        pip3 install uv --user 2>/dev/null || true
         export PATH="$HOME/.local/bin:$PATH"
     fi
+    if command -v uv &>/dev/null; then
+        echo "      $(uv --version)"
+    else
+        err "uv install failed. Install manually: https://docs.astral.sh/uv/"
+        exit 1
+    fi
 fi
-echo "      $(uv --version 2>/dev/null || echo 'N/A')"
+
+# [5] Python (uv-managed) ----------------------------------------------
+info "[5/7] Install Python 3.13 (uv-managed)..."
+
+# uv 自行管理 Python，无需系统预装
+echo "3.13" > .python-version
+if uv python install 3.13 2>/dev/null; then
+    echo "      $(uv python find 2>/dev/null || echo '3.13')"
+else
+    warn "Python 3.13 failed, trying 3.12..."
+    echo "3.12" > .python-version
+    uv python install 3.12 2>/dev/null || {
+        err "uv cannot install Python 3.12/3.13. Check: https://docs.astral.sh/uv/guides/install-python/"
+        exit 1
+    }
+    echo "      $(uv python find 2>/dev/null || echo '3.12')"
+fi
 
 # [6] Python dependencies ----------------------------------------------
 info "[6/7] Sync dependencies (uv sync)..."
 
-[ ! -f .python-version ] && echo "3.12" > .python-version
-
+# 选择 PaddlePaddle 索引：GPU → CUDA 12.6，CPU → CPU
 if $USE_GPU; then
-    export PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL:-https://download.paddlepaddle.org/whl/cu118}"
+    EXTRA_URL="--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/"
+    echo "      GPU mode - PaddlePaddle CUDA 12.6 index"
+else
+    EXTRA_URL=""
+    echo "      CPU mode - PaddlePaddle CPU index"
 fi
 
-uv sync || {
+uv sync --index-strategy unsafe-best-match $EXTRA_URL || {
     if $USE_GPU; then
         warn "GPU version failed. Retry CPU..."
         USE_GPU=false
-        uv sync || { err "uv sync failed."; exit 1; }
+        uv sync --index-strategy unsafe-best-match || { err "uv sync failed."; exit 1; }
     else
         err "uv sync failed."
         exit 1
     fi
 }
+
+# GPU 模式下确保 paddlepaddle-gpu 已安装
+if $USE_GPU; then
+    uv pip install paddlepaddle-gpu --reinstall --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ 2>/dev/null || warn "paddlepaddle-gpu not available - CPU OCR works"
+fi
 
 # [7] cuDNN 8 check ----------------------------------------------------
 info "[7/7] Check cuDNN 8 (GPU ASR)..."

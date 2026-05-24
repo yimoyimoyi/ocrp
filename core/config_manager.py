@@ -4,10 +4,11 @@
 import re
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Union
 
-BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent
 CONFIG_DIR = BASE_DIR / "config"
 
 DEFAULT_SETTINGS = {
@@ -52,6 +53,7 @@ MODE_PARAMS_DEFAULTS = {
     "s_sim_threshold": 0.85,
     "s_min_text_len": 2,
     "s_filter_keywords": "",
+    "s_ocr_version": "PP-OCRv4 (最快)",
     "r_dedup": True,
     "r_sim_threshold": 0.9,
     "r_buffer_size": 5,
@@ -116,7 +118,8 @@ class ConfigManager:
                 cfg = _load_json_with_comments(self.settings_path)
                 self._migrate_mode_params(cfg)
                 return self._merge_defaults(cfg)
-            except Exception:
+            except Exception as e:
+                print(f"加载设置失败: {e}", file=sys.stderr)
                 return dict(DEFAULT_SETTINGS)
         else:
             self._save_settings(DEFAULT_SETTINGS)

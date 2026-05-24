@@ -9,22 +9,43 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout, QSizePolicy, QSlider, QPushButton,
     QApplication,
 )
-from PyQt5.QtCore import Qt, QPoint, pyqtSignal, QRect, QRectF
+from PyQt5.QtCore import Qt, QObject, QPoint, pyqtSignal, QRect, QRectF
 from PyQt5.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QFont,
     QDragEnterEvent, QDropEvent, QMouseEvent, QResizeEvent,
     QKeyEvent,
 )
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Optional, Tuple
+
+from core.i18n import _
+from core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def _imread_unicode(path: str) -> Optional[np.ndarray]:
     try:
         buf = np.fromfile(path, dtype=np.uint8)
         return cv2.imdecode(buf, cv2.IMREAD_COLOR) if buf.size > 0 else None
-    except Exception:
+    except Exception as e:
+        logger.warning("加载图片失败: %s", e)
         return None
+
+
+class _ImageLoadBridge(QObject):
+    """跨线程信号桥：daemon 线程通过 pyqtSignal 将加载结果投递到主线程。
+
+    PyQt5 中 QTimer.singleShot 不能从非 GUI 线程调用（无事件循环）。
+    使用 pyqtSignal 发射 → Qt 自动 queued connection 到主线程。
+    """
+    loaded = pyqtSignal(object, str)   # (np.ndarray, path)
+    error = pyqtSignal()
+
+
+class _SeekResultBridge(QObject):
+    """跨线程信号桥：后台 seek 线程将解码帧投递到主线程。"""
+    frame_ready = pyqtSignal(object)   # np.ndarray
 
 
 class _PreviewLabel(QLabel):
@@ -51,7 +72,7 @@ class _PreviewLabel(QLabel):
         self._drawing_ref = lambda: False     # () -> bool
         self._start_point_ref = lambda: QPoint()
         self._end_point_ref = lambda: QPoint()
-        self._placeholder_text = "拖放视频/图片文件到此处\n或 Ctrl+V 粘贴文件路径"
+        self._placeholder_text = "拖放视频/图片文件到此处\n或 Ctrl+V 粘贴文件路径\n\nSpace 播放/暂停 · ← → 快进/退 5s · S 切换速度"
 
     def set_refs(self, pixmap_fn, regions_fn, selected_fn, color_pool_fn,
                  drawing_fn, start_fn, end_fn):
@@ -72,15 +93,31 @@ class _PreviewLabel(QLabel):
         pix = self._pixmap_ref()
         lw, lh = self.width(), self.height()
 
-        # 背景
-        painter.fillRect(0, 0, lw, lh, QColor(30, 30, 30))
+        # 背景（渐变）
+        from PyQt5.QtGui import QLinearGradient
+        grad = QLinearGradient(0, 0, 0, lh)
+        grad.setColorAt(0, QColor(18, 18, 30))
+        grad.setColorAt(1, QColor(8, 8, 16))
+        painter.fillRect(0, 0, lw, lh, grad)
 
         if pix is None or pix.isNull():
-            # 占位文字
-            painter.setPen(QColor(136, 136, 136))
+            # 占位文字 — 主标题 + 副标题（快捷键提示）
+            painter.setPen(self.palette().color(self.foregroundRole()))
             painter.setFont(QFont("Microsoft YaHei", 14))
-            painter.drawText(QRect(0, 0, lw, lh), Qt.AlignCenter,
-                             self._placeholder_text)
+            lines = self._placeholder_text.split("\n")
+            # 主标题（前2行）
+            main_text = "\n".join(lines[:2])
+            painter.drawText(QRect(0, 0, lw, lh - 40), Qt.AlignCenter | Qt.AlignBottom,
+                             main_text)
+            # 副标题（快捷键提示，更小更暗）
+            if len(lines) > 2:
+                painter.setFont(QFont("Microsoft YaHei", 10))
+                hint_color = self.palette().color(self.foregroundRole())
+                hint_color.setAlpha(120)
+                painter.setPen(hint_color)
+                hint_text = "\n".join(lines[2:])
+                painter.drawText(QRect(0, lh - 50, lw, 40), Qt.AlignCenter,
+                                 hint_text)
             painter.end()
             return
 
@@ -112,30 +149,56 @@ class _PreviewLabel(QLabel):
             rh = int(fh * img_h / ph)
 
             color = r.get("color", color_pool[i % len(color_pool)] if color_pool else QColor(0, 200, 100))
-            pen = QPen(color, 2)
+
+            # 半透明填充
+            fill = QColor(color)
+            fill.setAlpha(25 if i == selected else 15)
+            painter.fillRect(rx, ry, rw, rh, fill)
+
+            # 边框
+            pen = QPen(color, 2.5 if i == selected else 1.5)
             if i == selected:
-                pen.setWidth(3)
                 pen.setStyle(Qt.DashLine)
             painter.setPen(pen)
-            painter.drawRect(rx, ry, rw, rh)
+            painter.drawRoundedRect(rx, ry, rw, rh, 3, 3)
 
-            # 区域名标签
+            # 区域名标签（带背景）
             name = r.get("name", "")
             if name:
+                painter.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+                fm = painter.fontMetrics()
+                tw = fm.horizontalAdvance(name) + 10
+                th = fm.height() + 4
+                lx = rx + 1
+                ly = ry - th - 1 if ry > th + 2 else ry + rh + 1
+                # 标签背景
+                lbl_bg = QColor(color)
+                lbl_bg.setAlpha(180)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(lbl_bg)
+                painter.drawRoundedRect(lx, ly, tw, th, 3, 3)
+                # 标签文字
                 painter.setPen(QColor(255, 255, 255))
-                painter.setFont(QFont("Microsoft YaHei", 10))
-                painter.drawText(rx + 2, ry - 4 if ry > 12 else ry + rh + 14, name)
+                painter.setBrush(Qt.NoBrush)
+                painter.drawText(lx + 5, ly + fm.ascent() + 2, name)
 
-        # 拖拽中的矩形预览
+        # 拖拽中的矩形预览（带尺寸提示）
         if self._drawing_ref():
             sp = self._start_point_ref()
             ep = self._end_point_ref()
-            painter.setPen(QPen(QColor(0, 200, 100), 1, Qt.DashLine))
             x = min(sp.x(), ep.x())
             y = min(sp.y(), ep.y())
             w = abs(ep.x() - sp.x())
             h = abs(ep.y() - sp.y())
+            # 半透明预览填充
+            painter.fillRect(x, y, w, h, QColor(0, 200, 100, 30))
+            painter.setPen(QPen(QColor(0, 200, 100), 1.5, Qt.DashLine))
             painter.drawRect(x, y, w, h)
+            # 尺寸提示
+            if w > 20 and h > 10:
+                painter.setPen(QColor(200, 200, 200, 180))
+                painter.setFont(QFont("Consolas", 8))
+                painter.drawText(x + 4, y + h - 4, f"{w}×{h}")
 
         painter.end()
 
@@ -153,6 +216,7 @@ class VideoPreviewWidget(QWidget):
         self.setMinimumSize(320, 240)
         self._video_path: Optional[str] = None
         self._ffmpeg: object = None
+        self._player = None  # FFmpegPlayer 实例（替代 ffplay 子进程）
         self._hw_accel: bool = False
         self._current_frame: Optional[np.ndarray] = None
         self._display_pixmap: Optional[QPixmap] = None
@@ -168,6 +232,8 @@ class VideoPreviewWidget(QWidget):
         self._end_point = QPoint()
         self._moving_region_index = -1
         self._resizing_region_index = -1
+        self._time_start: float = 0.0
+        self._time_end: float = 0.0
         self._resize_handle = ""
         self._drag_offset = QPoint()
         self._color_pool = [
@@ -181,7 +247,7 @@ class VideoPreviewWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         # 使用子类 _PreviewLabel，手动控制 pixmap 绘制 + ROI 叠加
-        self._label = _PreviewLabel()
+        self._label = _PreviewLabel(self)
         self._label.setObjectName("videoLabel")
         # 建立引用桥接（避免 monkey-patching）
         self._label.set_refs(
@@ -201,66 +267,115 @@ class VideoPreviewWidget(QWidget):
         # 时间选择器
         tr = QHBoxLayout()
         tr.setSpacing(4)
-        tr.addWidget(QLabel("开始:"))
+        tr.addWidget(QLabel(_("开始:")))
         self._time_start_label = QLabel("00:00")
         tr.addWidget(self._time_start_label)
         self._timeline_start = QSlider(Qt.Horizontal)
         self._timeline_start.setRange(0, 0)
         self._timeline_start.sliderReleased.connect(self._on_timeline_seek_start)
         tr.addWidget(self._timeline_start, 1)
-        tr.addWidget(QLabel("结束:"))
+        tr.addWidget(QLabel(_("结束:")))
         self._time_end_label = QLabel("00:00")
         tr.addWidget(self._time_end_label)
         self._timeline_end = QSlider(Qt.Horizontal)
         self._timeline_end.setRange(0, 0)
         self._timeline_end.sliderReleased.connect(self._on_timeline_seek_end)
         tr.addWidget(self._timeline_end, 1)
-        self._time_range_widget = QWidget()
+        self._time_range_widget = QWidget(self)
         self._time_range_widget.setLayout(tr)
         self._time_range_widget.hide()
         layout.addWidget(self._time_range_widget)
 
-        # 播放栏（共用：视频/音频）
+        # ── 现代播放控件 ──
         play_bar = QHBoxLayout()
-        play_bar.setSpacing(4)
-        self._preview_time_label = QLabel("00:00 / 00:00")
-        play_bar.addWidget(self._preview_time_label)
+        play_bar.setSpacing(3)
+        play_bar.setContentsMargins(6, 4, 6, 4)
+
+        # 后退 5 秒
+        self._btn_back5 = QPushButton("⏪")
+        self._btn_back5.setToolTip(_("后退 5 秒 (←)"))
+        self._btn_back5.setObjectName("btnPlayerCtrl")
+        self._btn_back5.setFixedWidth(32)
+        self._btn_back5.clicked.connect(lambda: self._skip(-5))
+        play_bar.addWidget(self._btn_back5)
+
+        # 播放/暂停
         self._btn_play = QPushButton("▶")
-        self._btn_play.setToolTip("播放/暂停")
-        self._btn_play.setMaximumWidth(36)
+        self._btn_play.setToolTip(_("播放/暂停 (Space)"))
+        self._btn_play.setObjectName("btnPlay")
+        self._btn_play.setFixedWidth(36)
         self._btn_play.clicked.connect(self._on_play_pause)
         play_bar.addWidget(self._btn_play)
+
+        # 前进 5 秒
+        self._btn_fwd5 = QPushButton("⏩")
+        self._btn_fwd5.setToolTip(_("前进 5 秒 (→)"))
+        self._btn_fwd5.setObjectName("btnPlayerCtrl")
+        self._btn_fwd5.setFixedWidth(32)
+        self._btn_fwd5.clicked.connect(lambda: self._skip(5))
+        play_bar.addWidget(self._btn_fwd5)
+
+        # 停止
         self._btn_stop_play = QPushButton("⏹")
-        self._btn_stop_play.setToolTip("停止")
-        self._btn_stop_play.setMaximumWidth(36)
+        self._btn_stop_play.setToolTip(_("停止播放"))
+        self._btn_stop_play.setObjectName("btnStopPlay")
+        self._btn_stop_play.setFixedWidth(32)
         self._btn_stop_play.clicked.connect(self._on_stop_playback)
         play_bar.addWidget(self._btn_stop_play)
+
+        play_bar.addSpacing(8)
+
+        # 进度条
         self._preview_slider = QSlider(Qt.Horizontal)
+        self._preview_slider.setObjectName("previewSlider")
         self._preview_slider.setRange(0, 0)
         self._preview_slider.setTracking(True)
         self._preview_slider.sliderPressed.connect(self._on_preview_slider_press)
         self._preview_slider.sliderMoved.connect(self._on_preview_slider_move)
         self._preview_slider.sliderReleased.connect(self._on_preview_slider_release)
         play_bar.addWidget(self._preview_slider, 1)
-        self._play_bar_widget = QWidget()
+
+        # 时间标签
+        self._preview_time_label = QLabel("00:00.0 / 00:00")
+        self._preview_time_label.setObjectName("previewTimeLabel")
+        play_bar.addWidget(self._preview_time_label)
+
+        play_bar.addSpacing(4)
+
+        # 速度切换按钮
+        self._btn_speed = QPushButton("1.0x")
+        self._btn_speed.setObjectName("btnSpeed")
+        self._btn_speed.setFixedWidth(42)
+        self._btn_speed.setToolTip(_("播放速度：点击切换"))
+        self._btn_speed.clicked.connect(self._on_cycle_speed)
+        play_bar.addWidget(self._btn_speed)
+
+        self._play_bar_widget = QWidget(self)
+        self._play_bar_widget.setObjectName("playBarWidget")
         self._play_bar_widget.setLayout(play_bar)
         self._play_bar_widget.hide()
         layout.addWidget(self._play_bar_widget)
 
-        # 播放定时器
-        from PyQt5.QtCore import QTimer
-        self._play_timer = QTimer()
-        self._play_timer.setInterval(200)  # 默认 200ms，播放时动态切 40ms
-        self._play_timer.timeout.connect(self._on_play_tick)
+        # 播放状态
         self._is_playing = False
-        self._play_start_real: float = 0.0
-        self._play_start_ts: float = 0.0
-
-        self._video_duration: float = 0.0
-        self._player_proc = None  # ffplay 子进程
-        self._time_start: float = 0.0
-        self._time_end: float = 0.0
         self._current_position: float = 0.0
+        self._video_duration: float = 0.0
+        self._slider_dragging = False
+        self._is_audio: bool = False
+
+        # 拖拽防抖定时器（实时预览帧）
+        from PyQt5.QtCore import QTimer
+        self._drag_seek_timer = QTimer()
+        self._drag_seek_timer.setSingleShot(True)
+        self._drag_seek_timer.setInterval(80)  # 80ms 防抖
+        self._drag_seek_timer.timeout.connect(self._on_drag_seek)
+
+        # 音频播放定时器（无视频帧时模拟播放进度）
+        self._audio_timer = QTimer()
+        self._audio_timer.setInterval(50)
+        self._audio_timer.timeout.connect(self._on_audio_tick)
+        self._audio_speed: float = 1.0
+        self._audio_speed_idx: int = 3  # SPEEDS[3] = 1.0x
 
     # ── 属性 ──
     @property
@@ -296,30 +411,34 @@ class VideoPreviewWidget(QWidget):
         self._hw_accel = enabled
 
     def load_video(self, path: str):
+        """异步加载视频：ffprobe + Popen + 首帧读取在后台线程执行。"""
+        self._is_audio = False
         if self._ffmpeg:
             try:
                 self._ffmpeg.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("FFmpeg 关闭异常: %s", e)
             self._ffmpeg = None
-        from core.ffmpeg_reader import FFmpegReader
-        ff = FFmpegReader(path, hw_accel=self._hw_accel)
-        if not ff.open():
-            print(f"[VIDEO] FFmpeg.open() FAILED for {path}")
-            return
-        frame = ff.read()
-        if frame is None or frame.size == 0:
-            print(f"[VIDEO] first frame read FAILED for {path}")
-            ff.close()
-            return
-        self._video_path = path
+
+        from ui.workers import VideoLoadWorker
+        self._load_worker = VideoLoadWorker(path, self._hw_accel)
+        self._load_worker.loaded.connect(self._on_video_loaded)
+        self._load_worker.error.connect(self._on_video_load_error)
+        self._load_worker.start()
+        # UI 进入加载状态
+        self._label._placeholder_text = "⏳ 加载中..."
+        self._label.update()
+
+    def _on_video_loaded(self, frame, info):
+        """视频加载完成（在主线程执行）。"""
+        self._video_path = self._load_worker._path
         self._is_image = False
-        self._ffmpeg = ff
-        self._video_duration = ff.duration
+        self._ffmpeg = info["reader"]
+        self._video_duration = info["duration"]
         self._current_frame = frame.copy()
         self._display_frame(self._current_frame)
         if self._video_duration > 0:
-            max_t = int(self._video_duration * 10)
+            max_t = int(self._video_duration * 100)
             self._timeline_start.setRange(0, max_t)
             self._timeline_start.setValue(0)
             self._timeline_end.setRange(0, max_t)
@@ -332,35 +451,62 @@ class VideoPreviewWidget(QWidget):
             self._preview_slider.setValue(0)
             self._update_preview_label()
             self._play_bar_widget.show()
+            self._init_player()
+        self._label._placeholder_text = ""
         self._label.update()
-        self.video_loaded.emit(path)
+        self.video_loaded.emit(self._video_path)
+
+    def _on_video_load_error(self, msg):
+        """视频加载失败（在主线程执行）。"""
+        logger.error("视频加载失败: %s", msg)
+        self._label._placeholder_text = f"❌ 加载失败: {msg}\n拖放视频文件到此处"
+        self._label.update()
+        self._load_worker = None
 
     def load_image(self, path: str):
+        """异步加载图片：文件读取和解码在后台线程执行。"""
+        self._is_audio = False
         if self._ffmpeg:
             try:
                 self._ffmpeg.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("FFmpeg 关闭异常: %s", e)
             self._ffmpeg = None
         self._video_path = path
         self._is_image = True
         self._video_duration = 0
         self._time_range_widget.hide()
         self._play_bar_widget.hide()
-        img = _imread_unicode(path)
-        if img is None:
-            self._current_frame = None
-            self._display_pixmap = None
-            self._label.setText("无法打开图片")
-            self._label.update()
-            return
-        self._current_frame = img.copy()
+
+        import threading
+
+        bridge = _ImageLoadBridge()
+        bridge.loaded.connect(self._on_image_loaded)
+        bridge.error.connect(self._on_image_load_error)
+
+        def _load():
+            img = _imread_unicode(path)
+            if img is not None:
+                bridge.loaded.emit(img.copy(), path)
+            else:
+                bridge.error.emit()
+
+        self._label.setText("⏳ 加载中...")
+        threading.Thread(target=_load, daemon=True).start()
+
+    def _on_image_loaded(self, img, path):
+        self._current_frame = img
         self._display_frame(self._current_frame)
         self._label.update()
-        # 清空旧区域，避免上次残留的区域坐标导致全帧 fallback 不生效
         self._regions.clear()
         self._selected_region_index = -1
         self.video_loaded.emit(path)
+
+    def _on_image_load_error(self):
+        self._current_frame = None
+        self._display_pixmap = None
+        self._label.setText("无法打开图片")
+        self._label.update()
 
     def capture_test_frame(self, image: np.ndarray = None):
         if image is not None:
@@ -374,16 +520,9 @@ class VideoPreviewWidget(QWidget):
             self.frame_captured.emit(self._current_frame)
 
     def seek_to(self, position_sec: float):
-        ff = self._ffmpeg
-        if ff and hasattr(ff, 'is_opened') and ff.is_opened():
-            try:
-                frame = ff.seek_sec(position_sec)
-                if frame is not None and frame.size > 0:
-                    self._current_frame = frame.copy()
-                    self._display_frame(self._current_frame)
-            except Exception:
-                pass
-        val = int(position_sec * 10)
+        """异步 seek：立即更新 UI，后台线程解码帧。"""
+        # 立即更新滑块和标签（不等待帧）
+        val = int(position_sec * 100)
         if 0 <= val <= self._preview_slider.maximum():
             self._preview_slider.blockSignals(True)
             self._preview_slider.setValue(val)
@@ -391,145 +530,197 @@ class VideoPreviewWidget(QWidget):
         self._current_position = position_sec
         self._update_preview_label()
 
-    def _on_play_pause(self):
-        """播放/暂停（视频用 -nodisp + QTimer 渲染帧，音频用 -nodisp）。"""
-        if self._is_playing:
-            self._pause_video()
-        else:
-            self._play_video()
+        # 后台线程执行 seek + 解码，不阻塞 UI
+        self._seek_target = position_sec
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(20, self._do_seek)
 
-    def _play_video(self):
-        """开始播放（ffplay -nodisp 播音频 + QTimer 同步预览条和帧渲染）。"""
-        vp = self._video_path
-        if not vp:
+    def _do_seek(self):
+        """执行实际的 seek 操作（由 QTimer 触发，在主线程）。"""
+        target = getattr(self, '_seek_target', None)
+        if target is None:
             return
-        self._stop_player()
-        if self._current_position >= self._video_duration - 0.1:
-            self._current_position = 0.0
-        self._is_playing = True
-        self._btn_play.setText("⏸")
-        import subprocess, os, time, shutil, sys
-        ffplay = shutil.which("ffplay")
-        if not ffplay:
-            ext = ".exe" if sys.platform == "win32" else ""
-            ffplay = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "core", f"ffplay{ext}")
-            if not os.path.isfile(ffplay):
-                ffplay = "ffplay"
-        cmd = [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet",
-               "-ss", str(self._current_position), str(vp)]
-        try:
-            self._player_proc = subprocess.Popen(
-                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-        except Exception:
-            self._pause_video()
+        if abs(self._current_position - target) > 0.05:
             return
-        self._play_start_real = self._current_position
-        self._play_start_ts = time.time()
-        self._play_timer.setInterval(250)  # ~4fps，用 seek_sec 抓帧
-        self._play_timer.start()
+        ff = self._ffmpeg
+        if ff and hasattr(ff, 'is_opened') and ff.is_opened():
+            import threading
 
-    def _pause_video(self):
-        """暂停播放。"""
-        self._is_playing = False
-        self._btn_play.setText("▶")
-        self._play_timer.stop()
-        self._stop_player()
-        self.seek_to(self._current_position)
+            bridge = _SeekResultBridge()
+            bridge.frame_ready.connect(self._apply_seek_frame)
 
-    def _on_stop_playback(self):
-        """停止播放。"""
-        self._pause_video()
-        self._current_position = 0.0
-        self.seek_to(0.0)
-        self._update_preview_label()
-
-    def _stop_player(self):
-        """终止 ffplay 子进程（音频或视频）。"""
-        if self._player_proc:
-            try:
-                self._player_proc.terminate()
-                self._player_proc.wait(timeout=3)
-            except Exception:
+            def _seek_and_update():
                 try:
-                    self._player_proc.kill()
-                except Exception:
-                    pass
-            self._player_proc = None
+                    frame = ff.seek_sec(target)
+                    if frame is not None and frame.size > 0:
+                        bridge.frame_ready.emit(frame.copy())
+                except Exception as e:
+                    logger.warning("后台 seek 失败: %s", e)
 
-    def _on_play_tick(self):
-        """播放定时器回调：检查 ffplay 退出、更新进度条、渲染当前时间轴帧。"""
-        if self._player_proc and self._player_proc.poll() is not None:
+            threading.Thread(target=_seek_and_update, daemon=True).start()
+
+    def _apply_seek_frame(self, frame):
+        """在主线程应用 seek 结果帧。"""
+        self._current_frame = frame
+        self._display_frame(frame)
+
+    def _init_player(self):
+        """初始化 FFmpegPlayer（延迟到 load_video 时调用）。"""
+        if self._player:
+            self._player.stop()
+        from core.ffmpeg_player import FFmpegPlayer
+        info = {"duration": self._video_duration}
+        self._player = FFmpegPlayer(self._video_path, hw_accel=self._hw_accel, video_info=info)
+        self._player.frame_callback = self._on_player_frame
+        self._player.finished_callback = self._on_player_finished
+        self._player.error_callback = self._on_player_error
+
+    def _on_play_pause(self):
+        """播放/暂停切换。"""
+        if not self._video_path:
+            return
+        if self._is_playing:
+            if self._player:
+                self._player.pause()
+            self._audio_timer.stop()
             self._is_playing = False
             self._btn_play.setText("▶")
-            self._play_timer.stop()
-            self._play_timer.setInterval(200)
-            self._current_position = self._video_duration
-            self._stop_player()
-            self._update_preview_label()
-            val = int(self._current_position * 10)
-            if 0 <= val <= self._preview_slider.maximum():
-                self._preview_slider.blockSignals(True)
-                self._preview_slider.setValue(val)
-                self._preview_slider.blockSignals(False)
-            return
+        else:
+            if self._current_position >= self._video_duration - 0.1:
+                self._current_position = 0.0
+            if self._player:
+                self._player.play(self._current_position)
+            elif self._is_audio:
+                self._audio_timer.start()
+            self._is_playing = True
+            self._btn_play.setText("⏸")
 
-        # 播放中：用实际流逝时间计算当前时间轴位置
-        import time
-        elapsed = time.time() - self._play_start_ts
-        self._current_position = min(self._play_start_real + elapsed, self._video_duration)
-        val = int(self._current_position * 10)
+    def _on_audio_tick(self):
+        """音频播放定时器：每 50ms 推进播放位置。"""
+        if not self._is_playing or not self._is_audio:
+            self._audio_timer.stop()
+            return
+        self._current_position += 0.05 * self._audio_speed
+        if self._current_position >= self._video_duration:
+            self._current_position = 0.0
+            self._audio_timer.stop()
+            self._is_playing = False
+            self._btn_play.setText("▶")
+        self._set_slider(self._current_position)
+        self._update_preview_label()
+
+    def _on_stop_playback(self):
+        """停止播放并回到起点。"""
+        if self._player:
+            self._player.stop()
+        self._audio_timer.stop()
+        self._is_playing = False
+        self._btn_play.setText("▶")
+        self._current_position = 0.0
+        self._update_preview_label()
+        self._set_slider(0.0)
+        self.seek_to(0.0)
+
+    def _skip(self, delta_sec: float):
+        """前进/后退指定秒数。"""
+        new_pos = max(0.0, min(self._video_duration, self._current_position + delta_sec))
+        self._current_position = new_pos
+        if self._player and self._is_playing:
+            self._player.seek(new_pos)
+        elif not self._is_audio:
+            self.seek_to(new_pos)
+        self._update_preview_label()
+        self._set_slider(new_pos)
+
+    def _on_cycle_speed(self):
+        """循环切换播放速度。"""
+        if self._player:
+            spd = self._player.cycle_speed()
+        elif self._is_audio:
+            spd = self._cycle_audio_speed()
+        else:
+            return
+        self._btn_speed.setText(f"{spd:g}x")
+
+    def _cycle_audio_speed(self) -> float:
+        AUDIO_SPEEDS = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0]
+        self._audio_speed_idx = (self._audio_speed_idx + 1) % len(AUDIO_SPEEDS)
+        self._audio_speed = AUDIO_SPEEDS[self._audio_speed_idx]
+        return self._audio_speed
+
+    def _on_player_frame(self, frame: np.ndarray, timestamp: float):
+        """播放器帧回调（在主线程执行）。"""
+        if self._slider_dragging:
+            return
+        self._current_frame = frame.copy()
+        self._current_position = timestamp
+        self._display_frame(self._current_frame)
+        self._set_slider(timestamp)
+        self._update_preview_label()
+
+    def _on_player_finished(self):
+        """播放器自然结束。"""
+        self._is_playing = False
+        self._audio_timer.stop()
+        self._btn_play.setText("▶")
+        self._current_position = self._video_duration
+        self._update_preview_label()
+        self._set_slider(self._video_duration)
+
+    def _on_player_error(self, msg: str):
+        logger.error("播放器错误: %s", msg)
+        self._is_playing = False
+        self._btn_play.setText("▶")
+
+    def _set_slider(self, seconds: float):
+        """安全设置滑块位置。"""
+        val = int(seconds * 100)
         if 0 <= val <= self._preview_slider.maximum():
             self._preview_slider.blockSignals(True)
             self._preview_slider.setValue(val)
             self._preview_slider.blockSignals(False)
-        self._update_preview_label()
-
-        # 根据当前时间轴位置抓取并渲染帧（subprocess seek，约 4fps）
-        ff = self._ffmpeg
-        if ff and hasattr(ff, 'is_opened') and ff.is_opened():
-            try:
-                frame = ff.seek_sec(self._current_position)
-                if frame is not None and frame.size > 0:
-                    self._current_frame = frame.copy()
-                    self._display_frame(self._current_frame)
-            except Exception:
-                pass
 
     def _on_preview_slider_press(self):
-        # 仅终止播放，不 seek（位置由 move/release 处理）
-        if self._is_playing:
-            self._is_playing = False
-            self._btn_play.setText("▶")
-            self._play_timer.stop()
-        self._stop_player()
-        if self._video_duration <= 0:
-            return
-        self._current_position = self._preview_slider.value() / 10.0
-        self._update_preview_label()
-        self.seek_to(self._current_position)
+        self._slider_dragging = True
+        if self._player and self._is_playing:
+            self._player.pause()
 
     def _on_preview_slider_move(self, val: int):
         if self._video_duration <= 0:
             return
-        self._current_position = val / 10.0
+        self._current_position = val / 100.0
         self._update_preview_label()
-        # 拖拽过程中只追逐帧，最后 release 时再精确 seek
+        # 防抖：拖拽过程中实时预览帧
+        self._drag_seek_timer.start()
+
+    def _on_drag_seek(self):
+        """防抖回调：拖拽过程中 seek 到当前位置并显示帧。"""
+        if self._slider_dragging:
+            self.seek_to(self._current_position)
 
     def _on_preview_slider_release(self):
+        self._slider_dragging = False
+        self._drag_seek_timer.stop()
         if self._video_duration <= 0:
             return
-        self._current_position = self._preview_slider.value() / 10.0
+        self._current_position = self._preview_slider.value() / 100.0
         self._update_preview_label()
-        self.seek_to(self._current_position)
+        if self._player and self._is_playing:
+            self._player.seek(self._current_position)
+            self._player.resume()
+        else:
+            self.seek_to(self._current_position)
 
     def _update_preview_label(self):
-        m1, s1 = divmod(int(self._current_position), 60)
-        m2, s2 = divmod(int(self._video_duration), 60)
-        self._preview_time_label.setText(f"{m1:02d}:{s1:02d} / {m2:02d}:{s2:02d}")
+        pos = max(0.0, self._current_position)
+        dur = max(0.0, self._video_duration)
+        m1, s1 = divmod(int(pos), 60)
+        m2, s2 = divmod(int(dur), 60)
+        ms1 = int((pos - int(pos)) * 10)
+        self._preview_time_label.setText(f"{m1:02d}:{s1:02d}.{ms1} / {m2:02d}:{s2:02d}")
 
     def _on_timeline_seek_start(self):
-        self._time_start = self._timeline_start.value() / 10.0
+        self._time_start = self._timeline_start.value() / 100.0
         if self._timeline_start.value() > self._timeline_end.value():
             self._timeline_end.setValue(self._timeline_start.value())
             self._time_end = self._time_start
@@ -537,7 +728,7 @@ class VideoPreviewWidget(QWidget):
         self.seek_to(self._time_start)
 
     def _on_timeline_seek_end(self):
-        self._time_end = self._timeline_end.value() / 10.0
+        self._time_end = self._timeline_end.value() / 100.0
         if self._timeline_end.value() < self._timeline_start.value():
             self._timeline_start.setValue(self._timeline_end.value())
             self._time_start = self._time_end
@@ -563,7 +754,7 @@ class VideoPreviewWidget(QWidget):
     def add_region(self, x: int, y: int, w: int, h: int, name: str = "") -> dict:
         if not name:
             self._region_counter += 1
-            name = f"区域{self._region_counter}"
+            name = f"{_("区域")}{self._region_counter}"
         color = self._color_pool[len(self._regions) % len(self._color_pool)]
         r = {"name": name, "x": x, "y": y, "w": w, "h": h, "color": color,
              "engine": self._default_engine, "prompt": self._default_prompt,
@@ -612,17 +803,26 @@ class VideoPreviewWidget(QWidget):
             QImage(rgb.tobytes(), w, h, ch * w, QImage.Format_RGB888))
         self._label.update()
 
-    def _label_to_frame_coords(self, label_x: int, label_y: int) -> QPoint:
+    def _get_image_display_rect(self):
+        """返回 (img_w, img_h, offset_x, offset_y) 或 None（无有效图像时）。"""
         pix = self._display_pixmap
         if pix is None or pix.isNull():
-            return QPoint(-1, -1)
+            return None
         lw, lh = self._label.width(), self._label.height()
         pw, ph = pix.width(), pix.height()
         if pw <= 0 or ph <= 0:
-            return QPoint(-1, -1)
+            return None
         scale = min(lw / pw, lh / ph)
         img_w, img_h = int(pw * scale), int(ph * scale)
         ox, oy = (lw - img_w) // 2, (lh - img_h) // 2
+        return img_w, img_h, ox, oy
+
+    def _label_to_frame_coords(self, label_x: int, label_y: int) -> QPoint:
+        r = self._get_image_display_rect()
+        if r is None:
+            return QPoint(-1, -1)
+        img_w, img_h, ox, oy = r
+        pw, ph = self._display_pixmap.width(), self._display_pixmap.height()
         # 钳制到图片可见区域内
         cx = max(ox, min(ox + img_w - 1, label_x))
         cy = max(oy, min(oy + img_h - 1, label_y))
@@ -632,16 +832,10 @@ class VideoPreviewWidget(QWidget):
 
     def _is_in_image_bounds(self, pos: QPoint) -> bool:
         """检查标签坐标是否在可见图片区域内。"""
-        pix = self._display_pixmap
-        if pix is None or pix.isNull():
+        r = self._get_image_display_rect()
+        if r is None:
             return False
-        lw, lh = self._label.width(), self._label.height()
-        pw, ph = pix.width(), pix.height()
-        if pw <= 0 or ph <= 0:
-            return False
-        scale = min(lw / pw, lh / ph)
-        img_w, img_h = int(pw * scale), int(ph * scale)
-        ox, oy = (lw - img_w) // 2, (lh - img_h) // 2
+        img_w, img_h, ox, oy = r
         return ox <= pos.x() < ox + img_w and oy <= pos.y() < oy + img_h
 
     def _clamp_move_to_frame(self, r: dict):
@@ -657,16 +851,11 @@ class VideoPreviewWidget(QWidget):
         r["y"] = max(0, min(ph - h, r["y"]))
 
     def _get_region_at(self, pos: QPoint, margin: int = 6) -> Tuple[int, str]:
-        pix = self._display_pixmap
-        if pix is None or pix.isNull():
+        r = self._get_image_display_rect()
+        if r is None:
             return -1, ""
-        lw, lh = self._label.width(), self._label.height()
-        pw, ph = pix.width(), pix.height()
-        if pw <= 0 or ph <= 0:
-            return -1, ""
-        scale = min(lw / pw, lh / ph)
-        img_w, img_h = int(pw * scale), int(ph * scale)
-        ox, oy = (lw - img_w) // 2, (lh - img_h) // 2
+        img_w, img_h, ox, oy = r
+        pw, ph = self._display_pixmap.width(), self._display_pixmap.height()
 
         def to_label(fx, fy):
             return QPoint(int(fx * img_w / pw) + ox, int(fy * img_h / ph) + oy)
@@ -676,19 +865,21 @@ class VideoPreviewWidget(QWidget):
             p2 = to_label(r["x"] + r["w"], r["y"] + r["h"])
             x1, y1, x2, y2 = p1.x(), p1.y(), p2.x(), p2.y()
             px, py = pos.x(), pos.y()
-            mx, my = (x1 + x2) // 2, (y1 + y2) // 2
+            # 1) 四角检测优先（6px 以内）
             for corner, cx, cy in [("tl", x1, y1), ("tr", x2, y1),
                                    ("bl", x1, y2), ("br", x2, y2)]:
                 if abs(px - cx) <= margin and abs(py - cy) <= margin:
                     return i, corner
-            if abs(py - y1) <= margin and abs(px - mx) <= margin * 3:
+            # 2) 四条边检测：沿整条边的 full-width 检测（不仅限于中心）
+            if abs(py - y1) <= margin and x1 - margin <= px <= x2 + margin:
                 return i, "top"
-            if abs(py - y2) <= margin and abs(px - mx) <= margin * 3:
+            if abs(py - y2) <= margin and x1 - margin <= px <= x2 + margin:
                 return i, "bottom"
-            if abs(px - x1) <= margin and abs(py - my) <= margin * 3:
+            if abs(px - x1) <= margin and y1 - margin <= py <= y2 + margin:
                 return i, "left"
-            if abs(px - x2) <= margin and abs(py - my) <= margin * 3:
+            if abs(px - x2) <= margin and y1 - margin <= py <= y2 + margin:
                 return i, "right"
+            # 3) 内部 → 移动
             if x1 <= px <= x2 and y1 <= py <= y2:
                 return i, "move"
         return -1, ""
@@ -723,16 +914,18 @@ class VideoPreviewWidget(QWidget):
             elif ext in ('.png', '.jpg', '.jpeg', '.bmp'):
                 self.load_image(path)
 
-    # ── 粘贴（Ctrl+V） ──
+    # ── 粘贴（Ctrl+V）和键盘快捷键 ──
     def keyPressEvent(self, event: QKeyEvent):
-        """捕获 Ctrl+V 粘贴事件，将剪贴板中的文件路径加载到预览区。"""
-        if event.modifiers() == Qt.ControlModifier and event.key() == Qt.Key_V:
+        key = event.key()
+        mods = event.modifiers()
+
+        # Ctrl+V 粘贴文件
+        if mods == Qt.ControlModifier and key == Qt.Key_V:
             clipboard = QApplication.clipboard()
             mime = clipboard.mimeData()
             if mime and mime.hasUrls():
                 paths = [url.toLocalFile() for url in mime.urls() if url.isLocalFile()]
                 if paths:
-                    from core.asr_engine import SUPPORTED_AUDIO_EXTS
                     valid_paths = [p for p in paths if Path(p).suffix.lower() in (
                         '.mp4', '.mkv', '.avi', '.mov', '.webm',
                         '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.opus',
@@ -741,6 +934,34 @@ class VideoPreviewWidget(QWidget):
                     if valid_paths:
                         self._handle_pasted_files(valid_paths)
                     return
+
+        # Space 播放/暂停
+        if key == Qt.Key_Space and mods == Qt.NoModifier:
+            if self._video_path and not self._is_image:
+                self._on_play_pause()
+                return
+
+        # ← → 前进后退 5 秒
+        if key == Qt.Key_Left and mods == Qt.NoModifier:
+            self._skip(-5)
+            return
+        if key == Qt.Key_Right and mods == Qt.NoModifier:
+            self._skip(5)
+            return
+
+        # ↑ ↓ 前进后退 30 秒
+        if key == Qt.Key_Up and mods == Qt.NoModifier:
+            self._skip(-30)
+            return
+        if key == Qt.Key_Down and mods == Qt.NoModifier:
+            self._skip(30)
+            return
+
+        # S 切换速度
+        if key == Qt.Key_S and mods == Qt.NoModifier:
+            self._on_cycle_speed()
+            return
+
         super().keyPressEvent(event)
 
     def _handle_pasted_files(self, paths: list):
@@ -764,9 +985,18 @@ class VideoPreviewWidget(QWidget):
         """拖放/粘贴音频文件时的处理。"""
         self._video_path = path
         self._is_image = False
+        self._is_audio = True
         self._current_frame = None
         self._display_pixmap = None
-        self._video_duration = 0.0
+        self._current_position = 0.0
+        # 获取音频时长
+        try:
+            from core.ffmpeg_reader import _get_video_info
+            info = _get_video_info(path)
+            self._video_duration = info.get("duration", 0.0)
+        except Exception:
+            self._video_duration = 0.0
+        self._preview_slider.setRange(0, max(1, int(self._video_duration * 100)))
         self._label._placeholder_text = "🎵 已加载音频文件\n仅支持语音识别和纠错"
         self._label.update()
         self._time_range_widget.hide()
@@ -792,12 +1022,9 @@ class VideoPreviewWidget(QWidget):
             if handle == "move":
                 self._moving_region_index = idx
                 r = self._regions[idx]
-                pix = self._display_pixmap
-                lw, lh = self._label.width(), self._label.height()
-                pw, ph = pix.width(), pix.height()
-                scale = min(lw / pw, lh / ph)
-                img_w, img_h = int(pw * scale), int(ph * scale)
-                ox, oy = (lw - img_w) // 2, (lh - img_h) // 2
+                rect = self._get_image_display_rect()
+                img_w, img_h, ox, oy = rect
+                pw, ph = self._display_pixmap.width(), self._display_pixmap.height()
                 p1 = QPoint(int(r["x"] * img_w / pw) + ox,
                             int(r["y"] * img_h / ph) + oy)
                 self._drag_offset = event.pos() - p1
@@ -828,13 +1055,25 @@ class VideoPreviewWidget(QWidget):
             fp = self._label_to_frame_coords(event.pos().x(), event.pos().y())
             fx, fy = max(0, min(pw - 1, fp.x())), max(0, min(ph - 1, fp.y()))
             h = self._resize_handle
-            if "l" in h:
-                r["x"] = max(0, min(fx, r["x"] + r["w"] - 5))
-            if "r" in h:
+            is_top = h in ("t", "tl", "tr", "top")
+            is_bottom = h in ("b", "bl", "br", "bottom")
+            is_left = h in ("l", "tl", "bl", "left")
+            is_right = h in ("r", "tr", "br", "right")
+            if is_left:
+                # 左侧拖拽：保持右边界不变
+                _right = r["x"] + r["w"]
+                r["x"] = max(0, min(fx, _right - 5))
+                r["w"] = _right - r["x"]
+            if is_right:
+                # 右侧拖拽：保持左边界不变
                 r["w"] = max(5, min(fx - r["x"], pw - r["x"]))
-            if "t" in h:
-                r["y"] = max(0, min(fy, r["y"] + r["h"] - 5))
-            if "b" in h:
+            if is_top:
+                # 顶部拖拽：保持下边界不变
+                _bottom = r["y"] + r["h"]
+                r["y"] = max(0, min(fy, _bottom - 5))
+                r["h"] = _bottom - r["y"]
+            if is_bottom:
+                # 底部拖拽：保持上边界不变
                 r["h"] = max(5, min(fy - r["y"], ph - r["y"]))
             self._label.update()
             return
@@ -870,41 +1109,34 @@ class VideoPreviewWidget(QWidget):
                 w, h = abs(p2.x() - p1.x()), abs(p2.y() - p1.y())
                 if w > 5 and h > 5:
                     self.add_region(x, y, w, h)
+        was_moved = self._moving_region_index >= 0 or self._resizing_region_index >= 0
         self._moving_region_index = -1
         self._resizing_region_index = -1
         self._resize_handle = ""
         self._label.setCursor(Qt.CrossCursor)
         self._label.update()
+        if was_moved:
+            # 拖拽/调整大小结束后同步更新后的坐标到区域管理器
+            self.regions_changed.emit(self._regions)
 
     def resizeEvent(self, event: QResizeEvent):
         super().resizeEvent(event)
         self._label.update()
 
     def closeEvent(self, event):
-        """关闭预览控件 —— 强制终止所有子进程。"""
-        print(f"[VideoPreview] 🧹 清理播放器/FFmpeg...")
-        self._pause_video()
-        # 强制杀死 ffplay 进程
-        if self._player_proc:
+        """关闭预览控件 —— 清理播放器和 FFmpeg。"""
+        logger.info("清理播放器/FFmpeg...")
+        if self._player:
             try:
-                print(f"[VideoPreview]   ⏹ 杀死 ffplay (PID {self._player_proc.pid})")
-                self._player_proc.kill()
-                self._player_proc.wait(2)
-            except Exception:
-                pass
-            self._player_proc = None
-        # 关闭 FFmpeg 读取器
+                self._player.stop()
+            except Exception as e:
+                logger.warning("播放器停止异常: %s", e)
+            self._player = None
         if self._ffmpeg:
             try:
                 self._ffmpeg.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("FFmpeg 关闭异常: %s", e)
             self._ffmpeg = None
-        # 停止播放定时器
-        if getattr(self, '_play_timer', None):
-            try:
-                self._play_timer.stop()
-            except Exception:
-                pass
-        print(f"[VideoPreview] ✅ 清理完成")
+        logger.info("播放器/FFmpeg 清理完成")
         super().closeEvent(event)

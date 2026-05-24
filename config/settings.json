@@ -5,14 +5,14 @@
   "last_engine": "paddleocr",
   "last_directory": "F:\\Downloads",
   "window_geometry": {
-    "x": 381,
-    "y": 175,
-    "width": 1770,
-    "height": 1102
+    "x": 435,
+    "y": 131,
+    "width": 1910,
+    "height": 1116
   },
   "splitter_sizes": [
-    280,
-    196
+    582,
+    393
   ],
   "recent_videos": [
     "F:/Downloads/116764878_p0_master1200.jpg",
@@ -31,13 +31,14 @@
   "mode_params": {
     "frame_interval": 1.0,
     "process_mode": "仅 OCR",
-    "sentinel_enabled": true,
+    "sentinel_enabled": false,
     "subtitle_mode": "常规字幕（固定间隔）",
     "s_drop_ratio": 0.5,
     "s_buffer_size": 8,
     "s_sim_threshold": 0.85,
     "s_min_text_len": 2,
     "s_filter_keywords": "",
+    "s_ocr_version": "PP-OCRv4 (最快)",
     "r_dedup": true,
     "r_sim_threshold": 0.9,
     "r_buffer_size": 5,
@@ -48,7 +49,7 @@
     "region_order": "区域1",
     "srt_export_mode": "仅纠正结果",
     "post_keep_longest": false,
-    "post_sim_dedup": true,
+    "post_sim_dedup": false,
     "post_conf_enabled": false,
     "post_conf_threshold": 0.6,
     "post_sim_threshold": 0.9,
@@ -64,7 +65,7 @@
     "corr_summary_prompt": "",
     "corr_system_prompt": "",
     "corr_output_format": "",
-    "corr_translate": true,
+    "corr_translate": false,
     "corr_stream": true,
     "corr_json": true,
     "corr_preset": "默认 (llama.cpp)",
@@ -86,7 +87,10 @@
     "asr_vad_threshold": 0.5
   },
   "top_splitter_sizes": [
-    326,
-    310
-  ]
+    1091,
+    803
+  ],
+  "window_maximized": false,
+  "config_panel_tab": 2,
+  "engine_dialog_geometry": "AdnQywADAAAAAAPlAAABpAAABekAAAPSAAAD5gAAAdEAAAXoAAAD0QAAAAAAAAAACgAAAAPmAAAB0QAABegAAAPR"
 }
