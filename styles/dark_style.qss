@@ -175,6 +175,38 @@ QComboBox QAbstractItemView {
     border: 1px solid #2a2a33; border-radius: 6px; padding: 2px;
 }
 
+/* ── 搜索栏 ── */
+QFrame#searchBar {
+    background-color: #101015;
+    border: 1px solid #2a2a33;
+    border-radius: 6px;
+    margin: 0;
+}
+QFrame#searchBar QLineEdit {
+    background-color: #141419;
+    border: 1px solid #3a3a45;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 15px;
+}
+QFrame#searchBar QLineEdit:focus { border-color: #58a6ff; }
+QFrame#searchBar QToolButton {
+    background-color: #1c1c24;
+    border: 1px solid #2a2a33;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    min-height: 20px;
+}
+QFrame#searchBar QToolButton:hover {
+    background-color: #26262f;
+    border-color: #3a3a45;
+}
+QFrame#searchBar QLabel {
+    color: #9aa0a6;
+    font-size: 12px;
+}
+
 /* ── 表格 ── */
 QTableWidget {
     background-color: #101015; color: #e8eaed;

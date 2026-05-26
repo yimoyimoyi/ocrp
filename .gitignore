@@ -84,6 +84,13 @@ orcp_asr_*.wav         # ASR 临时音频
 ASR_ISSUES_ANALYSIS.md # 一次性分析报告
 
 # =============================================================================
-# 用户配置（包含本地路径、窗口状态，不提交）
+# 用户配置（包含本地路径、API密钥、窗口状态，不提交）
+# 首次运行自动从默认模板生成
 # =============================================================================
 config/settings.json
+config/ocr_engines.json
+config/asr_engines.json
+config/ai_correction.json
+config/api_presets.json
+config/prompt_templates.json
+config/filters.json

@@ -28,6 +28,44 @@ _LOG_FILE = _LOG_DIR / "orcp.log"
 _initialized = False
 
 
+# ── ANSI 终端颜色 ──
+_ANSI = {
+    "reset": "\033[0m",
+    "red": "\033[91m",
+    "green": "\033[92m",
+    "yellow": "\033[93m",
+    "blue": "\033[94m",
+    "cyan": "\033[96m",
+    "grey": "\033[90m",
+    "bold": "\033[1m",
+}
+
+_LEVEL_COLORS = {
+    logging.ERROR: _ANSI["red"] + _ANSI["bold"],
+    logging.WARNING: _ANSI["yellow"],
+    logging.INFO: _ANSI["green"],
+    logging.DEBUG: _ANSI["grey"],
+}
+
+
+class _ColoredFormatter(logging.Formatter):
+    """为控制台输出添加 ANSI 颜色的日志格式化器。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        color = _LEVEL_COLORS.get(record.levelno, _ANSI["reset"])
+        reset = _ANSI["reset"]
+        levelname = record.levelname
+        # 级别名着色
+        record.levelname = f"{color}{levelname}{reset}"
+        msg = super().format(record)
+        # 根据级别给整行加色
+        if record.levelno >= logging.ERROR:
+            return f"{_ANSI['red']}{msg}{reset}"
+        elif record.levelno >= logging.WARNING:
+            return f"{_ANSI['yellow']}{msg}{reset}"
+        return msg
+
+
 def _setup_root_logger() -> None:
     """初始化根 logger，仅在首次调用时执行。"""
     global _initialized
@@ -41,12 +79,12 @@ def _setup_root_logger() -> None:
     root = logging.getLogger("orcp")
     root.setLevel(level)
 
-    # ── stderr handler ──
+    # ── stderr handler（带颜色）──
     console_handler = logging.StreamHandler(sys.stderr)
-    console_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
+    console_handler.setFormatter(_ColoredFormatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
     root.addHandler(console_handler)
 
-    # ── 文件 handler（带轮转，10MB×5）──
+    # ── 文件 handler（不带颜色，纯文本）──
     try:
         _LOG_DIR.mkdir(parents=True, exist_ok=True)
         file_handler = logging.handlers.RotatingFileHandler(

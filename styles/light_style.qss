@@ -78,6 +78,38 @@ QLineEdit, QTextEdit, QPlainTextEdit { background-color: #ffffff; color: #1f2328
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus { border-color: #0d9488; }
 QLineEdit:disabled, QTextEdit:disabled { background-color: #f6f8fa; color: #8c959f; }
 
+/* ── Search Bar ── */
+QFrame#searchBar {
+    background-color: #ffffff;
+    border: 1px solid #c0c8d0;
+    border-radius: 6px;
+    margin: 0;
+}
+QFrame#searchBar QLineEdit {
+    background-color: #f6f8fa;
+    border: 1px solid #c0c8d0;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 15px;
+}
+QFrame#searchBar QLineEdit:focus { border-color: #0d9488; }
+QFrame#searchBar QToolButton {
+    background-color: #f6f8fa;
+    border: 1px solid #c0c8d0;
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    min-height: 20px;
+}
+QFrame#searchBar QToolButton:hover {
+    background-color: #eaeef2;
+    border-color: #9098a0;
+}
+QFrame#searchBar QLabel {
+    color: #656d76;
+    font-size: 12px;
+}
+
 /* ── Table ── */
 QTableWidget { background-color: #ffffff; color: #1f2328; gridline-color: #c0c8d0; border: 1px solid #c0c8d0; alternate-background-color: #f6f8fa; border-radius: 0; font-size: 15px; selection-background-color: #0d948818; selection-color: #1f2328; }
 QTableWidget::item { padding: 0px; }

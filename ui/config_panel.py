@@ -5,6 +5,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
@@ -26,6 +27,149 @@ from PyQt5.QtWidgets import (
 )
 
 from core.i18n import _
+from ui.collapsible_group import CollapsibleGroup
+
+
+class TemplateEditorDialog(QDialog):
+    """提示词模板编辑器弹窗 —— 从 ConfigPanel 的模板 Tab 入口打开。"""
+
+    template_saved = pyqtSignal(str, str)    # (name, prompt)
+    template_deleted = pyqtSignal(str)       # (name)
+    prompt_changed = pyqtSignal(str)         # (prompt_text)
+
+    def __init__(self, names: list[str], contents: dict[str, str], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(_("📝 提示词模板编辑器"))
+        self.setMinimumSize(700, 500)
+        self._names = list(names)
+        self._contents = dict(contents)
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self); layout.setSpacing(8)
+
+        sel_row = QHBoxLayout(); sel_row.setSpacing(4)
+        sel_row.addWidget(QLabel(_("模板:")))
+        self._combo = QComboBox()
+        self._combo.setEditable(False)
+        self._combo.addItems(self._names)
+        self._combo.currentTextChanged.connect(self._on_selected)
+        sel_row.addWidget(self._combo, 1)
+        layout.addLayout(sel_row)
+
+        layout.addWidget(QLabel(_("提示词内容（点击下方按钮插入占位符）:")))
+        self._prompt_edit = QTextEdit()
+        self._prompt_edit.setPlaceholderText("输入提示词...")
+        self._prompt_edit.textChanged.connect(
+            lambda: self.prompt_changed.emit(self._prompt_edit.toPlainText()))
+        layout.addWidget(self._prompt_edit, 1)
+
+        # ── 占位符按钮 ──
+        ph_row = QHBoxLayout(); ph_row.setSpacing(4)
+        ph_row.addWidget(QLabel(_("插入:")))
+        for ph_text, ph_label in [
+            ("{原始结果}", "原始结果"),
+            ("{上下文}", "上下文"),
+            ("{环境信息}", "环境信息"),
+        ]:
+            b = QPushButton(ph_label)
+            b.setToolTip(f"在光标位置插入 {ph_text}")
+            b.clicked.connect(lambda checked, t=ph_text: self._insert_at_cursor(t))
+            ph_row.addWidget(b)
+        btn_def = QPushButton(_("默认结构"))
+        btn_def.setToolTip("填入默认提示词结构示例（含所有可用占位符）")
+        btn_def.clicked.connect(self._load_default_structure)
+        ph_row.addWidget(btn_def)
+        ph_row.addStretch()
+        layout.addLayout(ph_row)
+
+        # ── CRUD 按钮 ──
+        btn_row = QHBoxLayout(); btn_row.setSpacing(4)
+        for text, slot in [
+            ("➕ 新建", self._on_new),
+            ("💾 保存", self._on_save),
+            ("✏ 重命名", self._on_rename),
+            ("🗑 删除", self._on_delete),
+        ]:
+            b = QPushButton(text); b.clicked.connect(slot); btn_row.addWidget(b)
+        btn_row.addStretch()
+        btn = QPushButton(_("关闭"))
+        btn.clicked.connect(self.accept)
+        btn_row.addWidget(btn)
+        layout.addLayout(btn_row)
+
+        # 初始选择第一个模板
+        if self._names:
+            self._combo.setCurrentIndex(0)
+
+    def _on_selected(self, name: str):
+        if name and name in self._contents:
+            self._prompt_edit.setPlainText(self._contents[name])
+
+    def _insert_at_cursor(self, text: str):
+        cursor = self._prompt_edit.textCursor()
+        cursor.insertText(text)
+        self._prompt_edit.setFocus()
+
+    def _load_default_structure(self):
+        """填入默认提示词结构示例。"""
+        default = (
+            "你是一个专业的字幕校对助手。\n"
+            "请根据上下文纠正OCR识别结果中的明显错误，保留原格式。\n\n"
+            "上下文信息：\n{上下文}\n\n"
+            "环境摘要：\n{环境信息}\n\n"
+            "时间戳：{时间戳} | 区域：{区域} | 引擎：{引擎} | 语言：{语言}\n\n"
+            "待处理的文本：\n{原始结果}"
+        )
+        self._prompt_edit.setPlainText(default)
+
+    def _on_new(self):
+        name, ok = QInputDialog.getText(self, "新建模板", "模板名称:")
+        if ok and name.strip():
+            if name not in self._names:
+                self._names.append(name)
+                self._combo.addItem(name)
+            self._combo.setCurrentText(name)
+            self._prompt_edit.clear()
+            self._contents[name] = ""
+            self.template_saved.emit(name, "")
+
+    def _on_save(self):
+        name = self._combo.currentText()
+        if name:
+            content = self._prompt_edit.toPlainText()
+            self._contents[name] = content
+            self.template_saved.emit(name, content)
+
+    def _on_rename(self):
+        old = self._combo.currentText()
+        if not old:
+            return
+        new, ok = QInputDialog.getText(self, "重命名模板", "新名称:", text=old)
+        if ok and new.strip() and new != old:
+            if new in self._names:
+                QMessageBox.warning(self, "重命名失败", f"模板名称 '{new}' 已存在。")
+                return
+            idx = self._names.index(old)
+            self._names[idx] = new
+            self._combo.setItemText(self._combo.currentIndex(), new)
+            self._contents[new] = self._contents.pop(old, "")
+            self.template_deleted.emit(old)
+            self.template_saved.emit(new, self._contents[new])
+
+    def _on_delete(self):
+        name = self._combo.currentText()
+        if not name:
+            return
+        if QMessageBox.question(self, "确认删除",
+                                f"确定要删除模板 '{name}' 吗？",
+                                QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.No) == QMessageBox.Yes:
+            idx = self._combo.currentIndex()
+            self._combo.removeItem(idx)
+            self._names.remove(name)
+            self._contents.pop(name, None)
+            self.template_deleted.emit(name)
 
 
 class ConfigPanel(QWidget):
@@ -39,16 +183,20 @@ class ConfigPanel(QWidget):
     filter_remove_requested = pyqtSignal(str)
     extract_env_clicked = pyqtSignal()  # 提取全文环境按钮
     collapse_requested = pyqtSignal()   # 折叠/展开配置面板
+    template_edit_requested = pyqtSignal()  # 请求打开模板编辑器
+    template_selected_for_correction = pyqtSignal(str)  # (template_content) 模板选中
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._template_names: list[str] = ["通用OCR"]
+        self._template_contents: dict[str, str] = {}
         self._region_names: list[str] = []
         self._collapsed = False
         self._init_ui()
 
     @property
-    def prompt_text(self): return self._prompt_edit.toPlainText()
+    def prompt_text(self):
+        return self._corr_prompt_text.toPlainText()
 
     def get_mode_params(self) -> dict:
         """收集所有模式参数，返回字典。"""
@@ -101,15 +249,11 @@ class ConfigPanel(QWidget):
             "subtitle_duration": self._subtitle_duration_spin.value(),
             "region_order": order_text,
             "srt_export_mode": _w("_srt_export_combo", "仅纠正结果"),
-            "post_keep_longest": self._post_keep_longest.isChecked(),
             "post_sim_dedup": self._post_sim_dedup.isChecked(),
             "post_conf_enabled": self._post_conf_check.isChecked(),
             "post_conf_threshold": self._post_conf_threshold.value(),
             "post_sim_threshold": self._post_sim_threshold.value(),
             "post_min_text_len": self._post_min_text_len.value(),
-            # ── OCR 重试参数 ──
-            "ocr_retry": _w("_ocr_retry_spin", 2),
-            "ocr_timeout": _w("_ocr_timeout_spin", 60),
             # ── AI 纠错参数 ──
             "corr_enabled": _w("_corr_enabled_check", False),
             "corr_batch_size": _w("_corr_batch_spin", 5),
@@ -123,11 +267,14 @@ class ConfigPanel(QWidget):
             "corr_translate": _w("_corr_translate_check", False),
             "corr_stream": _w("_corr_stream_check", False),
             "corr_json": _w("_corr_json_check", False),
+            "corr_segmentation": _w("_corr_segmentation_check", False),
             "corr_preset": _w("_corr_preset_combo", ""),
+            "corr_proofread": getattr(self, '_proofread_enabled', False),
+            "corr_use_template": _w("_corr_use_template_check", False),
             # ── ASR 参数 ──
-            "asr_enabled": _w("_asr_enabled_check", False),
             "asr_model_size": _w("_asr_model_combo", "large-v3"),
             "asr_model_path": self._asr_model_combo.currentData() or "",
+            "asr_model_dir": self._asr_model_dir_edit.text().strip() or "models/asr",
             "asr_language": _w("_asr_lang_combo", "zh"),
             "asr_vad": _w("_asr_vad_check", False),
             "asr_word_ts": _w("_asr_word_ts_check", True),
@@ -158,18 +305,12 @@ class ConfigPanel(QWidget):
             self._subtitle_mode_combo.setCurrentText(params["subtitle_mode"])
         if "post_sim_dedup" in params:
             self._post_sim_dedup.setChecked(params["post_sim_dedup"])
-        if "post_keep_longest" in params:
-            self._post_keep_longest.setChecked(params["post_keep_longest"])
         if "corr_enabled" in params:
             self._corr_enabled_check.setChecked(params["corr_enabled"])
         if "subtitle_duration" in params:
             self._subtitle_duration_spin.setValue(params["subtitle_duration"])
         if "srt_export_mode" in params:
             self._srt_export_combo.setCurrentText(params["srt_export_mode"])
-        if "ocr_retry" in params:
-            self._ocr_retry_spin.setValue(params["ocr_retry"])
-        if "ocr_timeout" in params:
-            self._ocr_timeout_spin.setValue(params["ocr_timeout"])
 
         # ── Tab 2: 字幕设置 ──
         if "s_drop_ratio" in params:
@@ -230,6 +371,8 @@ class ConfigPanel(QWidget):
             self._corr_stream_check.setChecked(params["corr_stream"])
         if "corr_json" in params:
             self._corr_json_check.setChecked(params["corr_json"])
+        if "corr_segmentation" in params:
+            self._corr_segmentation_check.setChecked(params["corr_segmentation"])
         if "corr_preset" in params:
             self._corr_preset_combo.setCurrentText(params["corr_preset"])
 
@@ -331,13 +474,10 @@ class ConfigPanel(QWidget):
         self._post_sim_dedup.setChecked(True)
         layout.addRow("", self._post_sim_dedup)
 
-        self._post_keep_longest = QCheckBox(_("保留最长文本"))
-        self._post_keep_longest.setChecked(False)
-        layout.addRow("", self._post_keep_longest)
-
         # ── AI 纠错开关 ──
         self._corr_enabled_check = QCheckBox(_("启用 AI 纠错"))
         self._corr_enabled_check.setChecked(False)
+        self._corr_enabled_check.toggled.connect(self._on_corr_enabled_toggled)
         layout.addRow("", self._corr_enabled_check)
 
         self._subtitle_duration_spin = QDoubleSpinBox()
@@ -358,24 +498,6 @@ class ConfigPanel(QWidget):
             "双语对照 = 原文在上，纠正在下\n"
             "原文 换行 纠正 = 原文在上，换行后显示纠正文本")
         layout.addRow("SRT 导出:", self._srt_export_combo)
-
-        # ── 失败重试参数 ──
-        sep_retry = QLabel(_("── 流程失败重试 ──"))
-        sep_retry.setObjectName("sectionSep")
-        layout.addRow("", sep_retry)
-
-        self._ocr_retry_spin = QSpinBox()
-        self._ocr_retry_spin.setRange(0, 10)
-        self._ocr_retry_spin.setValue(2)
-        self._ocr_retry_spin.setToolTip("API OCR 引擎识别失败时的最大重试次数")
-        layout.addRow("OCR 重试次数:", self._ocr_retry_spin)
-
-        self._ocr_timeout_spin = QSpinBox()
-        self._ocr_timeout_spin.setRange(5, 300)
-        self._ocr_timeout_spin.setValue(60)
-        self._ocr_timeout_spin.setSuffix(" 秒")
-        self._ocr_timeout_spin.setToolTip("API OCR 引擎请求超时时间")
-        layout.addRow("OCR 超时:", self._ocr_timeout_spin)
 
         btn = QPushButton(_("应用处理参数"))
         btn.clicked.connect(self._on_apply_mode)
@@ -407,6 +529,7 @@ class ConfigPanel(QWidget):
 
         self._s_sentinel_check = QCheckBox(_("启用哨兵去重（骤降/缓冲区/相似度）"))
         self._s_sentinel_check.setChecked(True)
+        self._s_sentinel_check.toggled.connect(self._on_sentinel_toggled)
         s_layout.addRow("", self._s_sentinel_check)
 
         self._s_drop_ratio_spin = QDoubleSpinBox()
@@ -501,21 +624,74 @@ class ConfigPanel(QWidget):
         self._s_group.setVisible(is_streaming)
         self._r_group.setVisible(not is_streaming)
 
-    # ── Tab 3: 结果排序 ──
+    def _on_sentinel_toggled(self, checked: bool):
+        """哨兵开关控制子控件启用/禁用。"""
+        for w in self._s_group.children():
+            if isinstance(w, (QDoubleSpinBox, QSpinBox, QLineEdit, QComboBox)):
+                w.setEnabled(checked)
+
+    def _on_corr_enabled_toggled(self, checked: bool):
+        """AI 纠错开关控制纠错标签页启用/禁用。"""
+        if hasattr(self, '_corr_tab'):
+            self._corr_tab.setEnabled(checked)
+
+    def _on_test_connection(self):
+        """测试当前选中预设的 API 连接。"""
+        from core.llm_utils import test_connection
+        from core.api_preset_manager import APIPresetManager
+
+        preset_name = self._corr_preset_combo.currentText()
+        if not preset_name:
+            self._conn_status_label.setText("⚠ 未选择预设")
+            return
+
+        preset = APIPresetManager().get_preset(preset_name)
+        if not preset:
+            self._conn_status_label.setText("⚠ 预设不存在")
+            return
+
+        api_key = preset.get("api_key", "").strip()
+        base_url = preset.get("base_url", "").strip()
+        model = preset.get("model", "").strip()
+        timeout = preset.get("timeout", 30)
+
+        if not base_url:
+            self._conn_status_label.setText("⚠ Base URL 为空")
+            return
+
+        self._btn_test_conn.setEnabled(False)
+        self._conn_status_label.setText("⏳ 测试中...")
+
+        ok, msg = test_connection(api_key, base_url, model, timeout=min(timeout, 10))
+        self._btn_test_conn.setEnabled(True)
+        if ok:
+            self._conn_status_label.setText(f"✓ {msg}")
+            self._conn_status_label.setStyleSheet("color: #4caf50;")
+        else:
+            self._conn_status_label.setText(f"✗ {msg}")
+            self._conn_status_label.setStyleSheet("color: #f44336;")
+    def set_proofread_enabled(self, val: bool):
+        """供 SettingsDialog 设置校对开关状态。"""
+        self._proofread_enabled = val
+
     def _init_sort_tab(self):
         from PyQt5.QtWidgets import QAbstractItemView
         tab = QWidget()
         layout = QVBoxLayout(tab); layout.setSpacing(4)
 
-        layout.addWidget(QLabel(_("排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:")))
-
+        self._sort_group = CollapsibleGroup(_("区域排序"), collapsed=False)
+        sort_content = QVBoxLayout()
+        sort_content.setSpacing(4)
+        sort_content.addWidget(QLabel(_("拖动调整顺序，编辑前缀/后缀，点✕删除行")))
         self._sort_list = QListWidget()
         self._sort_list.setDragDropMode(QAbstractItemView.InternalMove)
         self._sort_list.setDefaultDropAction(Qt.MoveAction)
         self._sort_list.setSelectionMode(QAbstractItemView.SingleSelection)
         self._sort_list.setMinimumHeight(150)
         self._sort_list.model().rowsMoved.connect(lambda *_: self._on_apply_mode())
-        layout.addWidget(self._sort_list, 1)
+        sort_content.addWidget(self._sort_list, 1)
+        self._sort_group.addLayout(sort_content)
+        layout.addWidget(self._sort_group)
 
         btn = QPushButton(_("应用排序规则"))
         btn.clicked.connect(self._on_apply_mode)
@@ -652,30 +828,26 @@ class ConfigPanel(QWidget):
     # ── Tab 5: 提示词模板 ──
     def _init_template_tab(self):
         tab = QWidget()
-        layout = QVBoxLayout(tab); layout.setSpacing(4)
+        layout = QVBoxLayout(tab); layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
 
-        sel_row = QHBoxLayout(); sel_row.setSpacing(4)
-        sel_row.addWidget(QLabel(_("模板:")))
+        hint = QLabel(_("管理 OCR / AI 纠错的提示词模板，支持占位符快速插入。"))
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
         self._template_combo = QComboBox()
         self._template_combo.setEditable(False)
+        self._template_combo.addItem("通用OCR")
         self._template_combo.currentTextChanged.connect(self._on_template_selected)
-        sel_row.addWidget(self._template_combo, 1)
-        layout.addLayout(sel_row)
+        layout.addWidget(QLabel("当前模板:"))
+        layout.addWidget(self._template_combo)
 
-        layout.addWidget(QLabel(_("提示词内容:")))
-        self._prompt_edit = QTextEdit()
-        self._prompt_edit.setPlaceholderText("输入提示词...")
-        self._prompt_edit.textChanged.connect(self._on_prompt_changed)
-        layout.addWidget(self._prompt_edit, 1)
+        self._btn_edit_templates = QPushButton(_("📝 编辑模板..."))
+        self._btn_edit_templates.setToolTip("打开模板编辑器，支持新建 / 保存 / 重命名 / 删除")
+        self._btn_edit_templates.clicked.connect(self._open_template_editor)
+        layout.addWidget(self._btn_edit_templates)
 
-        btn_row = QHBoxLayout(); btn_row.setSpacing(4)
-        for text, slot in [("➕ 新建", self._on_new_template),
-                           ("💾 保存", self._on_save_template),
-                           ("✏ 重命名", self._on_rename_template),
-                           ("🗑 删除", self._on_delete_template)]:
-            b = QPushButton(text); b.clicked.connect(slot); btn_row.addWidget(b)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
+        layout.addStretch()
         self._add_tab_with_scroll(tab, _("提示词模板"))
 
     # ── Tab 6: 语音识别 ──
@@ -707,72 +879,74 @@ class ConfigPanel(QWidget):
         self._asr_lang_combo.setToolTip("auto = 自动检测语言")
         layout.addRow("语言:", self._asr_lang_combo)
 
-        # ── 解码参数 ──
-        gf = QGroupBox("解码参数")
-        gfl = QFormLayout(gf); gfl.setSpacing(4)
+        # ── 解码参数（可折叠）──
+        decode_group = CollapsibleGroup(_("解码参数"), collapsed=True)
+        dfl = QFormLayout(); dfl.setSpacing(4)
 
         self._asr_beam_spin = QSpinBox(); self._asr_beam_spin.setRange(1, 20)
         self._asr_beam_spin.setValue(5)
         self._asr_beam_spin.setToolTip("Beam size，越大精度越高但越慢")
-        gfl.addRow("Beam Size:", self._asr_beam_spin)
+        dfl.addRow("Beam Size:", self._asr_beam_spin)
 
         self._asr_word_ts_check = QCheckBox(_("字级时间戳"))
         self._asr_word_ts_check.setChecked(True)
-        gfl.addRow("", self._asr_word_ts_check)
+        dfl.addRow("", self._asr_word_ts_check)
 
         self._asr_condition_check = QCheckBox(_("基于上文条件解码"))
         self._asr_condition_check.setChecked(True)
         self._asr_condition_check.setToolTip("condition_on_previous_text")
-        gfl.addRow("", self._asr_condition_check)
+        dfl.addRow("", self._asr_condition_check)
 
         self._asr_no_speech_spin = QDoubleSpinBox()
         self._asr_no_speech_spin.setRange(0.0, 1.0); self._asr_no_speech_spin.setSingleStep(0.1)
         self._asr_no_speech_spin.setValue(0.6)
         self._asr_no_speech_spin.setToolTip("无语音段阈值，越高越容易跳过无声音片段")
-        gfl.addRow("无语音阈值:", self._asr_no_speech_spin)
+        dfl.addRow("无语音阈值:", self._asr_no_speech_spin)
 
         self._asr_comp_ratio_spin = QDoubleSpinBox()
         self._asr_comp_ratio_spin.setRange(0.0, 10.0); self._asr_comp_ratio_spin.setSingleStep(0.1)
         self._asr_comp_ratio_spin.setValue(2.4)
         self._asr_comp_ratio_spin.setToolTip("压缩比阈值，控制重复文本过滤")
-        gfl.addRow("压缩比阈值:", self._asr_comp_ratio_spin)
+        dfl.addRow("压缩比阈值:", self._asr_comp_ratio_spin)
 
         self._asr_temp_edit = QLineEdit("0.0,0.2,0.4,0.6,0.8,1.0")
         self._asr_temp_edit.setToolTip("温度参数（逗号分隔），越低越确定")
-        gfl.addRow("温度:", self._asr_temp_edit)
+        dfl.addRow("温度:", self._asr_temp_edit)
 
         self._asr_hotwords_edit = QLineEdit()
         self._asr_hotwords_edit.setPlaceholderText("热词，逗号分隔")
         self._asr_hotwords_edit.setToolTip("热词列表，提升特定词汇的识别率")
-        gfl.addRow("热词:", self._asr_hotwords_edit)
+        dfl.addRow("热词:", self._asr_hotwords_edit)
 
         self._asr_prompt_edit = QLineEdit()
         self._asr_prompt_edit.setPlaceholderText("初始提示词，如: 以下是普通话的转录")
         self._asr_prompt_edit.setToolTip("initial_prompt，用于引导输出风格")
-        gfl.addRow("初始提示:", self._asr_prompt_edit)
-        layout.addRow(gf)
+        dfl.addRow("初始提示:", self._asr_prompt_edit)
+        decode_group.addLayout(dfl)
+        layout.addRow(decode_group)
 
-        # ── VAD 参数 ──
-        vg = QGroupBox("VAD (语音活动检测)")
-        vgl = QFormLayout(vg); vgl.setSpacing(4)
+        # ── VAD 参数（可折叠）──
+        vad_group = CollapsibleGroup(_("VAD 语音活动检测"), collapsed=True)
+        vfl = QFormLayout(); vfl.setSpacing(4)
 
         self._asr_vad_check = QCheckBox(_("启用 VAD（跳过静音段）"))
         self._asr_vad_check.setChecked(False)
         self._asr_vad_check.setToolTip("自动检测并跳过静音部分，加速处理")
-        vgl.addRow("", self._asr_vad_check)
+        vfl.addRow("", self._asr_vad_check)
 
         self._asr_vad_silence_spin = QSpinBox()
         self._asr_vad_silence_spin.setRange(100, 5000); self._asr_vad_silence_spin.setSingleStep(100)
         self._asr_vad_silence_spin.setValue(500); self._asr_vad_silence_spin.setSuffix(" ms")
         self._asr_vad_silence_spin.setToolTip("最小静音时长，超过该时长切断段落")
-        vgl.addRow("最小静音:", self._asr_vad_silence_spin)
+        vfl.addRow("最小静音:", self._asr_vad_silence_spin)
 
         self._asr_vad_thresh_spin = QDoubleSpinBox()
         self._asr_vad_thresh_spin.setRange(0.0, 1.0); self._asr_vad_thresh_spin.setSingleStep(0.05)
         self._asr_vad_thresh_spin.setValue(0.5)
         self._asr_vad_thresh_spin.setToolTip("VAD 阈值，越高对语音越敏感")
-        vgl.addRow("VAD 阈值:", self._asr_vad_thresh_spin)
-        layout.addRow(vg)
+        vfl.addRow("VAD 阈值:", self._asr_vad_thresh_spin)
+        vad_group.addLayout(vfl)
+        layout.addRow(vad_group)
 
         # ── 输出 ──
         self._asr_region_edit = QLineEdit("语音")
@@ -788,6 +962,7 @@ class ConfigPanel(QWidget):
     # ── Tab 8: AI 纠错 ──
     def _init_correction_tab(self):
         tab = QWidget()
+        self._corr_tab = tab
         layout = QFormLayout(tab); layout.setSpacing(4)
 
         # ── 翻译模式开关 ──
@@ -797,16 +972,20 @@ class ConfigPanel(QWidget):
         self._corr_translate_check.toggled.connect(self._on_apply_mode)
         layout.addRow("", self._corr_translate_check)
 
+        # ── 从配置文件读取默认值 ──
+        from core.ai_correction import load_correction_config as _lcc
+        _cc = _lcc()
+
         # ── 流式输出模式 ──
         self._corr_stream_check = QCheckBox(_("🔴 流式输出模式（实时逐字显示 API 响应）"))
-        self._corr_stream_check.setChecked(False)
+        self._corr_stream_check.setChecked(_cc.get("stream_mode", True))
         self._corr_stream_check.setToolTip("开启后 API 纠错结果将实时逐字显示在表格中，关闭后等待完整响应再更新")
         self._corr_stream_check.toggled.connect(self._on_apply_mode)
         layout.addRow("", self._corr_stream_check)
 
         # ── JSON 输出模式 ──
         self._corr_json_check = QCheckBox(_("📋 JSON 输出模式（API 返回结构化 JSON 格式）"))
-        self._corr_json_check.setChecked(False)
+        self._corr_json_check.setChecked(_cc.get("json_mode", True))
         self._corr_json_check.setToolTip("开启后 API 将以 JSON 格式返回纠错结果，便于程序化处理")
         self._corr_json_check.toggled.connect(self._on_apply_mode)
         layout.addRow("", self._corr_json_check)
@@ -821,6 +1000,47 @@ class ConfigPanel(QWidget):
         self._btn_extract_env.setToolTip("立即用当前全文结果和自定义总结提示词提取环境上下文，结果回填到下方提示词栏")
         self._btn_extract_env.clicked.connect(self._on_extract_env_clicked)
         layout.addRow("", self._btn_extract_env)
+
+        # ── 提示词模板选择器 + 占位符 ──
+        tmpl_row = QHBoxLayout(); tmpl_row.setSpacing(4)
+        self._corr_use_template_check = QCheckBox(_("使用模板覆盖默认"))
+        self._corr_use_template_check.setToolTip(
+            "勾选后，选中的模板内容将替换下方默认提示词；\n"
+            "不勾选则下方输入框的内容仅作为补充参考")
+        self._corr_use_template_check.setChecked(False)
+        tmpl_row.addWidget(self._corr_use_template_check)
+        self._corr_template_combo = QComboBox()
+        self._corr_template_combo.setToolTip("选择提示词模板，选中后自动填入下方编辑器")
+        self._corr_template_combo.addItem("（选择模板）")
+        self._corr_template_combo.currentTextChanged.connect(self._on_corr_template_selected)
+        tmpl_row.addWidget(self._corr_template_combo, 1)
+        layout.addRow("", tmpl_row)
+
+        # 占位符插入按钮（第二行）
+        ph_row = QHBoxLayout(); ph_row.setSpacing(4)
+        ph_row.addWidget(QLabel(_("插入:")))
+        for ph_text, ph_label in [
+            ("{原始结果}", "原始"),
+            ("{上下文}", "上下文"),
+            ("{环境信息}", "环境"),
+            ("{时间戳}", "时间"),
+            ("{区域}", "区域"),
+            ("{引擎}", "引擎"),
+            ("{语言}", "语言"),
+        ]:
+            b = QPushButton(ph_label)
+            b.setFixedWidth(44)
+            b.setToolTip(f"插入 {ph_text}")
+            b.clicked.connect(lambda checked, t=ph_text: self._insert_placeholder_corr(t))
+            ph_row.addWidget(b)
+        # 默认提示词按钮
+        btn_default = QPushButton(_("默认"))
+        btn_default.setFixedWidth(44)
+        btn_default.setToolTip("将当前编辑器的默认提示词结构填入（原内容将被覆盖）")
+        btn_default.clicked.connect(self._load_default_prompt)
+        ph_row.addWidget(btn_default)
+        ph_row.addStretch()
+        layout.addRow("", ph_row)
 
         # ── 全文总结提示词（可自定义） ──
         self._corr_summary_prompt_text = QTextEdit()
@@ -858,13 +1078,31 @@ class ConfigPanel(QWidget):
         default_preset = APIPresetManager().get_default_name()
         if default_preset:
             self._corr_preset_combo.setCurrentText(default_preset)
+        self._corr_preset_combo.currentTextChanged.connect(self._on_apply_mode)
         layout.addRow("API 预设:", self._corr_preset_combo)
+
+        # ── 连接测试 ──
+        test_layout = QHBoxLayout()
+        self._btn_test_conn = QPushButton(_("测试连接"))
+        self._btn_test_conn.setToolTip("发送一条简短请求验证 API 连通性")
+        self._btn_test_conn.clicked.connect(self._on_test_connection)
+        test_layout.addWidget(self._btn_test_conn)
+        self._conn_status_label = QLabel("")
+        test_layout.addWidget(self._conn_status_label)
+        test_layout.addStretch()
+        layout.addRow("", test_layout)
+
+        # ── 分句模式 ──
+        self._corr_segmentation_check = QCheckBox("启用 LLM 分句（处理完成后自动合并碎片）")
+        self._corr_segmentation_check.setToolTip("OCR/ASR 完成后自动调用 LLM 将碎片文本合并为完整字幕条目")
+        self._corr_segmentation_check.toggled.connect(self._on_apply_mode)
+        layout.addRow("", self._corr_segmentation_check)
 
         self._corr_batch_spin = QSpinBox()
         self._corr_batch_spin.setRange(1, 50)
         self._corr_batch_spin.setValue(5)
         self._corr_batch_spin.setSuffix(" 条/次")
-        self._corr_batch_spin.setToolTip("每次纠错批处理的文本条目数")
+        self._corr_batch_spin.setToolTip("每次纠错/分句批处理的文本条目数")
         layout.addRow("批量条数:", self._corr_batch_spin)
 
         self._corr_context_spin = QSpinBox()
@@ -924,6 +1162,82 @@ class ConfigPanel(QWidget):
         self._asr_model_combo.blockSignals(False)
 
     # ── 事件 ──
+    def _open_template_editor(self):
+        """打开模板编辑器弹窗。"""
+        contents = getattr(self, '_template_contents', {})
+        dlg = TemplateEditorDialog(self._template_names, contents, self)
+        dlg.template_saved.connect(self.template_saved.emit)
+        dlg.template_deleted.connect(self.template_deleted.emit)
+        dlg.prompt_changed.connect(self.prompt_changed.emit)
+        dlg.exec_()
+
+    def _on_corr_template_selected(self, name: str):
+        """AI 纠错 Tab 模板选择：将选中模板内容填入编辑器并注入到 corrector。"""
+        if not name or name == "（选择模板）":
+            self.template_selected_for_correction.emit("")
+            return
+        contents = getattr(self, '_template_contents', {})
+        content = contents.get(name, "")
+        if not content:
+            return
+        # 找到当前有焦点的 QTextEdit，或默认用纠错提示词
+        focused = None
+        for w in (self._corr_prompt_text, self._corr_summary_prompt_text,
+                  self._corr_system_prompt_text):
+            if w.hasFocus():
+                focused = w
+                break
+        if focused is None:
+            focused = self._corr_prompt_text
+        focused.setPlainText(content)
+        self.template_selected_for_correction.emit(content)
+
+    def _load_default_prompt(self):
+        """将当前焦点编辑器的默认提示词结构填入。"""
+        from core.ai_correction import load_correction_config as _lcc
+        _cc = _lcc()
+        defaults = {
+            self._corr_prompt_text: _cc.get("correction_prompt",
+                "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。"),
+            self._corr_summary_prompt_text: _cc.get("summary_prompt",
+                "请根据以下OCR识别文本，总结出这段内容的：\n"
+                "1. 领域/类型（如：小说、新闻、游戏对话、学术论文等）\n"
+                "2. 整体氛围/语气（如：严肃、欢快、悲伤、紧张等）\n"
+                "3. 主要内容/主题（一句话概括）\n\n"
+                "请用简洁的中文回答。"),
+            self._corr_system_prompt_text: _cc.get("correction_system_prompt",
+                "你是一个专业的字幕校对助手。接收带有时间轴的OCR识别文本列表，"
+                "输出时保留原始行号前缀，可根据语义合并或拆分条目。"
+                "只返回修正后的结果。"),
+        }
+        for w, text in defaults.items():
+            if w.hasFocus():
+                w.setPlainText(text)
+                return
+        # 默认填入纠错提示词
+        self._corr_prompt_text.setPlainText(
+            defaults[self._corr_prompt_text])
+
+    def _insert_placeholder_corr(self, text: str):
+        """在 AI 纠错 Tab 当前焦点提示词编辑器中插入占位符。"""
+        for w in (self._corr_prompt_text, self._corr_summary_prompt_text,
+                  self._corr_system_prompt_text):
+            if w.hasFocus():
+                cursor = w.textCursor()
+                cursor.insertText(text)
+                w.setFocus()
+                return
+        # 默认插入到纠错提示词
+        cursor = self._corr_prompt_text.textCursor()
+        cursor.insertText(text)
+        self._corr_prompt_text.setFocus()
+
+    def _insert_placeholder(self, text: str):
+        """在提示词编辑器的光标位置插入占位符文本。"""
+        cursor = self._prompt_edit.textCursor()
+        cursor.insertText(text)
+        self._prompt_edit.setFocus()
+
     def _on_prompt_changed(self):
         self.prompt_changed.emit(self._prompt_edit.toPlainText())
     def _on_apply_mode(self):
@@ -976,24 +1290,46 @@ class ConfigPanel(QWidget):
         kw = self._filter_input.text().strip()
         if kw: self.filter_add_requested.emit(kw); self._filter_input.clear()
     def _on_remove_filter(self):
+        import sys as _sys
+        print("[FILTER DEBUG] _on_remove_filter called", file=_sys.stderr, flush=True)
         item = self._filter_list.currentItem()
-        if item: self.filter_remove_requested.emit(item.text())
+        print(f"[FILTER DEBUG] item={item} count={self._filter_list.count()}", file=_sys.stderr, flush=True)
+        if item:
+            text = item.text()
+            print(f"[FILTER DEBUG] emitting remove: '{text}'", file=_sys.stderr, flush=True)
+            self.filter_remove_requested.emit(text)
+        else:
+            count = self._filter_list.count()
+            QMessageBox.information(self, "提示",
+                f"请先在列表中选中要删除的关键词。\n(列表中有 {count} 个关键词)" if count else "列表中没有关键词，无需删除。")
     def _on_clear_filters(self):
         if QMessageBox.question(self, "确认清空", "确定要清空所有过滤关键词吗？",
                                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
-            for i in range(self._filter_list.count()):
-                self.filter_remove_requested.emit(self._filter_list.item(i).text())
+            # 一次性收集所有关键词，避免逐条发射信号导致列表重建错乱
+            keywords = [self._filter_list.item(i).text() for i in range(self._filter_list.count())]
+            for kw in keywords:
+                self.filter_remove_requested.emit(kw)
 
     # ── 公共接口 ──
     def set_template_prompt(self, text):
         self._prompt_edit.setPlainText(text)
     def set_template_names(self, names: list[str]):
         self._template_names = list(names)
-        cur = self._template_combo.currentText()
-        self._template_combo.blockSignals(True); self._template_combo.clear()
-        self._template_combo.addItems(names)
-        if cur in names: self._template_combo.setCurrentText(cur)
-        self._template_combo.blockSignals(False)
+        # 同步更新 AI 纠错 Tab 中的模板下拉框
+        if hasattr(self, '_corr_template_combo'):
+            self._corr_template_combo.blockSignals(True)
+            current = self._corr_template_combo.currentText()
+            self._corr_template_combo.clear()
+            self._corr_template_combo.addItem("（选择模板）")
+            self._corr_template_combo.addItems(names)
+            if current and current in names:
+                self._corr_template_combo.setCurrentText(current)
+            self._corr_template_combo.blockSignals(False)
+
+    def set_template_contents(self, contents: dict[str, str]):
+        """供 main_window 注入模板名→内容的映射，用于 AI 纠错模板快速填入。"""
+        self._template_contents = dict(contents)
+
     def select_template(self, name: str):
         idx = self._template_combo.findText(name)
         if idx >= 0: self._template_combo.setCurrentIndex(idx)

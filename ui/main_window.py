@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtGui import QColor, QTextDocument
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QAction,
@@ -63,6 +64,39 @@ from ui.video_preview import VideoPreviewWidget
 WIN_TITLE = _("ORCP - OCR 处理工具")
 
 
+# ── 状态栏颜色映射 ──
+_STATUS_COLORS: dict[str, str] = {
+    "✅": "#4caf50",       # 绿
+    "❌": "#f44336",       # 红
+    "⚠": "#ff9800",       # 橙
+    "⏳": "#2196f3",       # 蓝
+    "🔲": "#78909c",       # 灰
+    "🗑": "#78909c",       # 灰
+    "▸": "#ffffff",        # 白
+    "默认": "#b0bec5",     # 淡灰
+}
+
+
+def _detect_status_color(text: str) -> str:
+    """根据消息前缀返回对应颜色。"""
+    for prefix, color in _STATUS_COLORS.items():
+        if text.startswith(prefix):
+            return color
+    return "#b0bec5"
+
+
+class ColoredStatusLabel(QLabel):
+    """自动根据消息前缀着色的状态标签。"""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setTextFormat(Qt.RichText)
+
+    def setText(self, text: str):
+        color = _detect_status_color(text)
+        super().setText(f'<span style="color:{color}">{text}</span>')
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -93,6 +127,7 @@ class MainWindow(QMainWindow):
         self._current_engine: str = "paddleocr"
         self._current_template: str = ""
         self._batch_files: list[str] = []
+        self._asr_params_changed: bool = False
 
         self._theme = self._config_mgr.get_theme()
 
@@ -100,7 +135,7 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self._status_bar)
         self._status_bar.setContentsMargins(6, 2, 6, 2)
 
-        self._status_label = QLabel(_("就绪"))
+        self._status_label = ColoredStatusLabel(_("就绪"))
         self._status_label.setMinimumWidth(120)
         self._engine_label = QLabel(_("  |  引擎: paddleocr"))
         self._time_label = QLabel("")
@@ -197,6 +232,49 @@ class MainWindow(QMainWindow):
         eng = self._engine_mgr.get_current_engine(warm_up=True)
         if eng:
             logger.info("OCR 引擎延迟预热完成: %s", eng.engine_name)
+
+    def _warm_up_for_mode(self, mode: str):
+        """根据处理模式预热相应引擎（后台线程，不阻塞 UI）。"""
+        import threading
+        from core.utils import MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
+
+        def _warm():
+            if mode in (MODE_OCR_ONLY, MODE_OCR_ASR_FULL):
+                eng = self._engine_mgr.get_current_engine(warm_up=True)
+                if eng:
+                    logger.info("OCR 引擎预热完成 (%s): %s", mode, eng.engine_name)
+            if mode in (MODE_ASR_ONLY, MODE_OCR_ASR_FULL):
+                if self._asr_mgr:
+                    asr = self._asr_mgr.get_engine()
+                    if asr:
+                        logger.info("ASR 引擎预热完成 (%s)", mode)
+
+        threading.Thread(target=_warm, daemon=True).start()
+
+    def _restart_ocr_engine(self):
+        """OCR 设置变更后重建引擎实例（后台线程）。"""
+        import threading
+
+        def _restart():
+            self._engine_mgr.reload_config()
+            eng = self._engine_mgr.get_current_engine(warm_up=True)
+            if eng:
+                logger.info("OCR 引擎已重建: %s", eng.engine_name)
+
+        threading.Thread(target=_restart, daemon=True).start()
+
+    def _restart_asr_engine(self):
+        """ASR 设置变更后重建引擎实例（后台线程）。"""
+        import threading
+
+        def _restart():
+            if self._asr_mgr:
+                self._asr_mgr.reload_config()
+                asr = self._asr_mgr.get_engine()
+                if asr:
+                    logger.info("ASR 引擎已重建")
+
+        threading.Thread(target=_restart, daemon=True).start()
 
     # ── 顶端快速开关工具栏 ──
     def _build_quick_toolbar(self):
@@ -383,6 +461,10 @@ class MainWindow(QMainWindow):
         self._template_action_group = QActionGroup(self)
         self._template_action_group.setExclusive(True)
         self._template_menu.addSeparator()
+        self._template_edit_action = QAction("📝 编辑模板...", self)
+        self._template_edit_action.triggered.connect(self._on_template_edit)
+        self._template_menu.addAction(self._template_edit_action)
+        self._template_menu.addSeparator()
         self._template_import_action = QAction("📥 导入模板...", self)
         self._template_import_action.triggered.connect(self._on_template_import)
         self._template_menu.addAction(self._template_import_action)
@@ -544,6 +626,11 @@ class MainWindow(QMainWindow):
         self._btn_correction_all.setObjectName("btnCorrectionAll")
         self._btn_correction_all.clicked.connect(self._on_correction_all)
         bbl.addWidget(self._btn_correction_all)
+        self._btn_segmentation = QPushButton(_("📝 分句"))
+        self._btn_segmentation.setObjectName("btnSegmentation")
+        self._btn_segmentation.setToolTip(_("使用 LLM 对 OCR 碎片进行语义分句合并"))
+        self._btn_segmentation.clicked.connect(self._on_segmentation)
+        bbl.addWidget(self._btn_segmentation)
 
         bbl.addStretch()
         bl.addWidget(bar)
@@ -561,6 +648,8 @@ class MainWindow(QMainWindow):
         self._config_panel.template_created.connect(self._on_config_template_selected)
         self._config_panel.template_saved.connect(self._on_config_template_saved)
         self._config_panel.template_deleted.connect(self._on_config_template_deleted)
+        self._config_panel.template_selected_for_correction.connect(
+            lambda c: self._corrector.set_template_content(c) if self._corrector else None)
         self._config_panel.hw_accel_changed.connect(self._on_hw_accel_changed)
         self._config_panel.filter_add_requested.connect(self._on_filter_add)
         self._config_panel.filter_remove_requested.connect(self._on_filter_remove)
@@ -621,6 +710,7 @@ class MainWindow(QMainWindow):
             api_cfg = dlg.get_corr_api_config()
             preset_name = self._config_panel._corr_preset_combo.currentText() if hasattr(self._config_panel, '_corr_preset_combo') else ""
             self._corrector = AICorrector(api_cfg, engine_manager=self._engine_mgr, preset_name=preset_name)
+            self._workflow._corrector = self._corrector  # 同步到工作流
             corr_file_cfg = load_correction_config()
             corr_file_cfg.update(api_cfg)
             config_path = BASE_DIR / "config" / "ai_correction.json"
@@ -737,6 +827,14 @@ class MainWindow(QMainWindow):
             self._custom_prompt = saved.get("corr_prompt", "")
             # 回填所有 UI 控件
             self._config_panel.apply_mode_params(saved)
+            # 显式应用 API 预设：apply_mode_params 中 blockSignals(True) 阻止了
+            # _corr_preset_combo.currentTextChanged 信号，导致 apply_preset 未被调用
+            saved_preset = saved.get("corr_preset", "")
+            if saved_preset and self._corrector:
+                self._corrector.apply_preset(saved_preset)
+            # 恢复校对开关
+            if "corr_proofread" in saved and self._corrector:
+                self._corrector.proofread_enabled = saved["corr_proofread"]
         # 同步区域默认值（引擎/模板/提示词），确保新创建的区域使用当前提示词
         self._sync_region_defaults()
 
@@ -755,9 +853,10 @@ class MainWindow(QMainWindow):
         """保存当前 UI 配置参数到 settings.json。"""
         params = dict(self._mode_params)
         self._config_mgr.set("mode_params", params)
-        # 同步 ASR 配置
-        if any(k.startswith("asr_") for k in params):
+        # 仅当 ASR 参数实际变更时才同步（避免每次保存都阻塞 UI）
+        if getattr(self, '_asr_params_changed', False):
             self._sync_asr_config(params)
+            self._asr_params_changed = False
         # 同步纠错配置
         if any(k.startswith("corr_") for k in params):
             self._sync_correction_config(params)
@@ -866,6 +965,13 @@ class MainWindow(QMainWindow):
         names = self._prompt_mgr.get_template_names()
         self._region_manager.set_template_names(names)
         self._config_panel.set_template_names(names)
+        # 注入模板内容供 AI 纠错 Tab 快速填入
+        contents = {}
+        for name in names:
+            t = self._prompt_mgr.get_template_by_name(name)
+            if t and t.get("prompt"):
+                contents[name] = t["prompt"]
+        self._config_panel.set_template_contents(contents)
 
         # 更新快速模板下拉框
         self._template_combo.blockSignals(True)
@@ -885,7 +991,8 @@ class MainWindow(QMainWindow):
         for a in menu.actions():
             if a.isSeparator():
                 continue
-            if a in (self._template_import_action, self._template_export_action):
+            if a in (self._template_import_action, self._template_export_action,
+                      self._template_edit_action):
                 continue
             menu.removeAction(a)
 
@@ -1060,9 +1167,14 @@ class MainWindow(QMainWindow):
             self._status_label.setText(f"✅ 已添加过滤器: {keyword}")
 
     def _on_filter_remove(self, keyword: str):
+        import sys as _sys
+        print(f"[FILTER DEBUG] MainWindow._on_filter_remove: '{keyword[:40]}'", file=_sys.stderr, flush=True)
+        logger.info("收到删除过滤关键词请求: '%s'", keyword[:40])
         if self._filter_mgr.remove_keyword(keyword):
             self._config_panel.set_filter_keywords(self._filter_mgr.get_keywords())
             self._status_label.setText(f"🗑 已移除过滤器: {keyword}")
+        else:
+            self._status_label.setText(f"⚠ 移除失败: 关键词 '{keyword[:30]}' 不存在")
 
     def _on_result_filter(self, raw_text: str):
         """表格行'加入过滤器'按钮 → 将整条 raw 文本加入过滤。"""
@@ -1222,8 +1334,6 @@ class MainWindow(QMainWindow):
         if env:
             if hasattr(self._config_panel, '_corr_summary_prompt_text'):
                 self._config_panel._corr_summary_prompt_text.setPlainText(env)
-            if hasattr(self._config_panel, '_prompt_edit'):
-                self._config_panel._prompt_edit.setPlainText(env)
             self._config_panel._on_apply_mode()
             self._status_label.setText("✅ 全文环境已提取并回填")
         else:
@@ -1314,15 +1424,34 @@ class MainWindow(QMainWindow):
         # 仅当预设名确实变化时才切换
         if "corr_preset" in p and p["corr_preset"] != old_params.get("corr_preset", ""):
             self._corrector.apply_preset(p["corr_preset"])
+        # 校对开关 + 模板模式
+        if "corr_proofread" in p:
+            self._corrector.proofread_enabled = p["corr_proofread"]
+        if "corr_use_template" in p:
+            self._corrector.use_template = p["corr_use_template"]
+        # 标记是否有 ASR 参数实际变更
+        asr_keys = {k: p.get(k) for k in p if k.startswith("asr_")}
+        old_asr_keys = {k: old_params.get(k) for k in old_params if k.startswith("asr_")}
+        self._asr_params_changed = (asr_keys != old_asr_keys)
+        # 处理模式切换 → 预热对应引擎
+        new_mode = p.get("process_mode", "")
+        old_mode = old_params.get("process_mode", "")
+        if new_mode and new_mode != old_mode:
+            self._warm_up_for_mode(new_mode)
+        # OCR 版本变更 → 重建 OCR 引擎
+        if p.get("s_ocr_version") != old_params.get("s_ocr_version"):
+            self._restart_ocr_engine()
+        # ASR 参数变更 → 重建 ASR 引擎
+        if self._asr_params_changed:
+            self._restart_asr_engine()
         self._last_mode_params = dict(p)
-        # 延迟写盘合并多次连续变更，减少 UI 卡顿
+        # 延迟写盘合并多次连续变更
         self._schedule_mode_save()
 
     def _sync_asr_config(self, params: dict):
         """将 UI 中的 ASR 参数同步写入 asr_engines.json。"""
         config_path = BASE_DIR / "config" / "asr_engines.json"
         cfg = self._asr_mgr._config
-        cfg["enabled"] = params.get("asr_enabled", cfg.get("enabled", False))
         cfg["model_size"] = params.get("asr_model_size", cfg.get("model_size", "large-v3"))
         cfg["language"] = params.get("asr_language", cfg.get("language", "zh"))
         cfg["vad_enabled"] = params.get("asr_vad", cfg.get("vad_enabled", False))
@@ -1338,16 +1467,22 @@ class MainWindow(QMainWindow):
         cfg["compression_ratio_threshold"] = params.get("asr_comp_ratio_thresh", cfg.get("compression_ratio_threshold", 2.4))
         cfg["temperature"] = params.get("asr_temperature", cfg.get("temperature", "0.0,0.2,0.4,0.6,0.8,1.0"))
         cfg["hotwords"] = params.get("asr_hotwords", cfg.get("hotwords", ""))
-        self._asr_mgr.reload_config()
-        # 同步到活动中引擎（不重启子进程）
-        eng = self._asr_mgr.get_engine()
-        if eng and hasattr(eng, 'sync_params_from_config'):
-            eng.sync_params_from_config(cfg)
+        # 1. 先写文件（主线程，快）
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning("保存 ASR 配置失败: %s", e)
+        # 2. reload + 同步引擎参数放后台线程（避免子进程启停阻塞 UI）
+        cfg_copy = dict(cfg)
+        asr_mgr = self._asr_mgr
+        def _apply_asr():
+            asr_mgr.reload_config()
+            eng = asr_mgr.get_engine()
+            if eng and hasattr(eng, 'sync_params_from_config'):
+                eng.sync_params_from_config(cfg_copy)
+        import threading
+        threading.Thread(target=_apply_asr, daemon=True).start()
 
     def _sync_correction_config(self, params: dict):
         """将 UI 中的纠错参数同步写入 ai_correction.json。"""
@@ -1367,7 +1502,7 @@ class MainWindow(QMainWindow):
         if "corr_retry" in params:
             cfg["retry"] = params["corr_retry"]
         if "corr_prompt" in params:
-            cfg.setdefault("prompts", {})["default"] = params["corr_prompt"]
+            cfg["correction_prompt"] = params["corr_prompt"]
         if params.get("corr_summary_prompt"):
             cfg["summary_prompt"] = params["corr_summary_prompt"]
         if params.get("corr_system_prompt"):
@@ -1378,12 +1513,23 @@ class MainWindow(QMainWindow):
             cfg["stream_mode"] = params["corr_stream"]
         if "corr_json" in params:
             cfg["json_mode"] = params["corr_json"]
+        if "corr_segmentation" in params:
+            cfg["enable_sentence_segmentation"] = params["corr_segmentation"]
+        if "corr_proofread" in params:
+            cfg["enable_proofread"] = params["corr_proofread"]
+        if "corr_use_template" in params:
+            cfg["use_template"] = params["corr_use_template"]
         try:
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning("保存纠错配置失败: %s", e)
         self._corrector.reload_config()
+
+    # ── 模板 ──
+    def _on_template_edit(self):
+        """打开模板编辑器弹窗。"""
+        self._config_panel._open_template_editor()
 
     # ── 模板导入/导出 ──
     def _on_template_import(self):
@@ -1575,8 +1721,8 @@ class MainWindow(QMainWindow):
         wf._clear_results_by_type = lambda rgn, eng: self._result_table.clear_by_type(rgn, eng)
         wf._asr_region_name = lambda: self._mode_params.get("asr_region_name", "语音")
         wf._sort_results_table = lambda order: self._result_table.sort_by_order(order)
-        wf._get_polished_results = lambda sim, ml: self._result_table.get_polished_results(
-            post_sim_threshold=sim, post_min_text_len=ml)
+        wf._get_polished_results = lambda sim, ml, dedup=True: self._result_table.get_polished_results(
+            post_sim_threshold=sim, post_min_text_len=ml, post_sim_dedup=dedup)
         wf._get_table_row_count = lambda: self._result_table._table.rowCount()
 
         # ── 信号连接 ──
@@ -1589,6 +1735,7 @@ class MainWindow(QMainWindow):
         wf.result_row.connect(self._on_process_result)
         wf.correction_updated.connect(self._on_correction_ready)
         wf.correction_stream_updated.connect(self._on_correction_stream)
+        wf.segmentation_updated.connect(self._on_segmentation_updated)
         wf.batch_progress.connect(self._on_batch_progress_file)
         wf.batch_file_done.connect(self._on_batch_finished_one)
         wf.batch_all_done.connect(lambda: self._update_batch_label())
@@ -1604,6 +1751,7 @@ class MainWindow(QMainWindow):
             self._btn_correction.setEnabled(states["correction"])
         if "correction_all" in states:
             self._btn_correction_all.setEnabled(states["correction_all"])
+            self._btn_segmentation.setEnabled(states["correction_all"])
         if "pause" in states:
             self._btn_pause.setEnabled(states["pause"])
 
@@ -1621,6 +1769,14 @@ class MainWindow(QMainWindow):
     def _on_correction_all(self):
         """对全部结果行进行 AI 纠错（委托 WorkflowManager）。"""
         self._workflow.correct_all()
+
+    def _on_segmentation(self):
+        """对全部结果进行 LLM 语义分句。"""
+        self._workflow.segment_sentences()
+
+    def _on_segmentation_updated(self, row: int, segmented_text: str):
+        """分句结果逐行更新到表格。"""
+        self._result_table.update_segmentation(row, segmented_text)
 
     def _on_batch_correction_finished(self):
         """批量纠错全部完成。"""

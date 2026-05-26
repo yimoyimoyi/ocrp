@@ -196,6 +196,8 @@ def _check_sync():
 def main():
     """应用入口。"""
     _check_sync()
+    from core.config_manager import ensure_config_files
+    ensure_config_files()
     logger.info("ORCP 启动中...")
     logger.info("Python %s | 平台 %s", sys.version.split()[0], sys.platform)
 

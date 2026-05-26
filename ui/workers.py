@@ -12,6 +12,17 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# [DEBUG] 临时调试日志
+import datetime as _dt
+from pathlib import Path as _Path
+_DEBUG_LOG = _Path(__file__).resolve().parent.parent / "logs" / "debug_seg.log"
+_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _debug_log(msg: str):
+    with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+        f.write(f"{_dt.datetime.now().strftime('%H:%M:%S.%f')[:-3]} {msg}\n")
+
 
 def _recognize_roi(engine, roi, prompt: str = "") -> str:
     """根据引擎类型调用 OCR 识别 ROI 图片。"""
@@ -134,19 +145,21 @@ class BatchCorrectionWorker(QThread):
     batch_error = pyqtSignal(str)                   # 错误信息
 
     def __init__(self, corrector, texts: list, context_window: int = 3,
-                 max_retries: int = 3):
+                 max_retries: int = 3, raw_reference: list[str] | None = None):
         """
         Args:
             corrector: AICorrector 实例
             texts: list of (row_index, raw_text)
             context_window: 上下文窗口
             max_retries: 最大重试次数
+            raw_reference: 原始结果全文（分句后纠错的原文参考）
         """
         super().__init__()
         self._corrector = corrector
         self._texts = list(texts)
         self._context_window = context_window
         self._max_retries = max_retries
+        self._raw_reference = raw_reference
         self._stop_flag = threading.Event()
 
     def stop(self):
@@ -170,12 +183,13 @@ class BatchCorrectionWorker(QThread):
                 context_window=self._context_window,
                 max_retries=self._max_retries,
                 stream_callback=stream_cb,
+                raw_reference=self._raw_reference,
             )
 
             if self._stop_flag.is_set():
                 return
 
-            # 发射每条结果（兼容 (row, raw) 和 (row, raw, ts, te) 两种格式）
+            # 发射每条结果
             for item in self._texts:
                 row_idx = item[0]
                 raw_text = item[1]
@@ -675,4 +689,61 @@ class EnvExtractWorker(QThread):
             env = self._corrector.extract_environment(self._texts)
             self.finished.emit(env or "")
         except Exception as e:
+            self.error.emit(str(e))
+
+
+class SegmentationWorker(QThread):
+    """LLM 分句线程 —— 对全部结果进行语义合并分句，逐行发射分句文本。"""
+
+    segmentation_ready = pyqtSignal(int, str)  # row, segmented_text
+    finished_all = pyqtSignal(object)           # range_map: {segmented_text: (start_batch_idx, end_batch_idx)}
+    error = pyqtSignal(str)
+
+    def __init__(self, corrector, texts: list, max_retries: int = 3):
+        super().__init__()
+        self._corrector = corrector
+        self._texts = list(texts)
+        self._max_retries = max_retries
+        self.range_map: dict[str, tuple[int, int]] = {}
+        self._stop_flag = threading.Event()
+
+    def stop(self):
+        self._stop_flag.set()
+
+    def run(self):
+        try:
+            if not self._texts or self._stop_flag.is_set():
+                self.finished_all.emit({})
+                return
+
+            # [DEBUG] 记录分句输入映射
+            _debug_log("=== 分句输入 ===")
+            for i, t in enumerate(self._texts):
+                _debug_log(f"  batch[{i}] → row[{t[0]}] raw={t[1][:40]} ts={t[2]:.3f}-{t[3]:.3f}")
+
+            text_map, self.range_map = self._corrector.segment_sentences(
+                self._texts, max_retries=self._max_retries,
+            )
+
+            if self._stop_flag.is_set():
+                return
+
+            # [DEBUG] 记录分句输出映射
+            _debug_log("=== 分句输出 ===")
+            _debug_log(f"  text_map: {dict(text_map)}")
+            _debug_log(f"  range_map: {dict(self.range_map)}")
+
+            # 逐行发射分句结果
+            for batch_idx, segmented_text in text_map.items():
+                if self._stop_flag.is_set():
+                    return
+                if 0 <= batch_idx < len(self._texts):
+                    row_idx = self._texts[batch_idx][0]
+                    _debug_log(f"  emit row[{row_idx}] = {segmented_text[:40]}")
+                    self.segmentation_ready.emit(row_idx, segmented_text)
+
+            self.finished_all.emit(self.range_map)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.error.emit(str(e))

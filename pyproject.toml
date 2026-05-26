@@ -34,6 +34,8 @@ dependencies = [
     # HTTP / API 调用
     "requests>=2.32",
     "httpx>=0.27",
+    "openai>=1.0",
+    "json-repair>=0.30.0",
     # 数据处理
     "pandas>=2.0",
     "RapidFuzz>=3.0",
@@ -166,6 +168,7 @@ ignore = [
     "TC003",  # 同上
     "B007",   # 未使用的循环变量（`for _x, _y, z in ...` 惯用写法）
     "RUF013", # 隐式 Optional（typing.Optional 显式写法，风格偏好）
+    "B027",   # 空方法在抽象基类中（warm_up 为可选优化，非必需接口）
 ]
 
 [tool.ruff.lint.isort]

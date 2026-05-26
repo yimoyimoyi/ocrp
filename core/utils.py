@@ -79,7 +79,7 @@ def fetch_models_from_url(base_url: str, api_key: str = "", timeout: int = 10) -
         "timeout": timeout,
     }
     try:
-        engine = engine_cls(cfg)
+        engine = engine_cls({"config": cfg})
         return engine.get_model_list()
     except Exception:
         return []

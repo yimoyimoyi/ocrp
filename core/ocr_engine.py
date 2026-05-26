@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 import numpy as np
-import requests
+from openai import OpenAI
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
@@ -42,6 +42,98 @@ def load_engines_config() -> dict:
         except Exception as e:
             logger.warning("加载 OCR 引擎配置失败: %s", e)
     return {"engines": {}, "default_engine": "paddleocr"}
+
+
+# ── Vision API 公共辅助 ────────────────────────────────────────────
+
+def _encode_image_b64(image: np.ndarray) -> str:
+    """将 numpy 图像编码为 JPEG base64 字符串。"""
+    import cv2
+    _, buf = cv2.imencode(".jpg", image)
+    return base64.b64encode(buf).decode("utf-8")
+
+
+def _call_vision_api(
+    image: np.ndarray,
+    prompt_text: str,
+    api_key: str,
+    base_url: str,
+    model: str,
+    timeout: int = 60,
+    temperature: float = 0.0,
+    max_tokens: int = 512,
+) -> str:
+    """调用 OpenAI 兼容 Vision API 进行图片 OCR 识别。
+
+    Args:
+        image: 输入图片 (numpy array)
+        prompt_text: 识别 prompt
+        api_key: API 密钥
+        base_url: API 端点 URL
+        model: 模型名称
+        timeout: 超时秒数
+        temperature: 采样温度
+        max_tokens: 最大输出 token 数
+
+    Returns:
+        识别的文字内容，失败返回空字符串
+
+    Raises:
+        openai.APITimeoutError: 请求超时
+        openai.APIConnectionError: 连接失败
+        openai.APIError: 其他 API 错误
+    """
+    from core.llm_utils import _normalize_base_url
+
+    b64 = _encode_image_b64(image)
+    url = _normalize_base_url(base_url)
+
+    logger.debug("Vision API | model=%s | image=%dx%d | timeout=%ds",
+                 model, image.shape[1], image.shape[0], timeout)
+
+    client = OpenAI(api_key=api_key, base_url=url)
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt_text},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ],
+        }],
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=timeout,
+    )
+
+    return resp.choices[0].message.content.strip()
+
+
+def _check_v1_availability(base_url: str, api_key: str = "", timeout: int = 10) -> bool:
+    """检测 OpenAI 兼容 /v1 端点是否可达。"""
+    url = base_url.rstrip("/")
+    if not url.endswith("/v1"):
+        url += "/v1"
+    try:
+        client = OpenAI(api_key=api_key or "not-needed", base_url=url)
+        client.models.list(timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def _get_v1_model_list(base_url: str, api_key: str = "", timeout: int = 15) -> list[str]:
+    """从 OpenAI 兼容 /v1/models 端点获取模型列表。"""
+    url = base_url.rstrip("/")
+    if not url.endswith("/v1"):
+        url += "/v1"
+    try:
+        client = OpenAI(api_key=api_key or "not-needed", base_url=url)
+        models = client.models.list(timeout=timeout)
+        return [m.id for m in models.data] if models.data else []
+    except Exception:
+        return []
 
 
 # ── DLL 预加载 ──
@@ -230,9 +322,8 @@ class BaseOCREngine(ABC):
     def get_model_list(self) -> list[str]:
         return []
 
-    @abstractmethod
     def warm_up(self):
-        ...
+        pass
 
 
 # ═══════════════ PaddleOCR 本地引擎 ═══════════════
@@ -514,7 +605,8 @@ class PaddleOCREngine(BaseOCREngine):
         if self._use_subprocess:
             threading.Thread(target=self._start_server, daemon=True).start()
         else:
-            pass
+            # 进程内模式：后台加载 PaddleOCR 模型，避免首次识别时的延迟
+            threading.Thread(target=self._ensure_ocr, daemon=True).start()
 
     def __del__(self):
         if self._use_subprocess:
@@ -530,7 +622,7 @@ class OpenAIVisionEngine(BaseOCREngine):
         super().__init__(config)
         self.engine_name = "openai_vision"
         cfg = config.get("config", {})
-        self._api_key = cfg.get("api_key", "")
+        self._api_key = cfg.get("api_key", "").strip()
         self._base_url = cfg.get("base_url", "https://api.openai.com/v1")
         self._model = cfg.get("model", "gpt-4o")
         self._prompt_template = cfg.get("prompt_template", "请识别图片中的文字，只返回文字内容")
@@ -538,135 +630,89 @@ class OpenAIVisionEngine(BaseOCREngine):
         self._retry = cfg.get("retry", 2)
 
     def check_availability(self) -> bool:
-        try:
-            url = self._base_url.rstrip("/") + "/models"
-            headers = {"Authorization": f"Bearer {self._api_key}"}
-            resp = requests.get(url, headers=headers, timeout=10)
-            return resp.status_code == 200
-        except Exception as e:
-            logger.warning("API ping 失败: %s", e)
-            return False
+        return _check_v1_availability(self._base_url, self._api_key)
 
     def get_model_list(self) -> list[str]:
-        try:
-            url = self._base_url.rstrip("/") + "/models"
-            headers = {"Authorization": f"Bearer {self._api_key}"}
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code == 200:
-                return [m["id"] for m in resp.json().get("data", [])]
-        except Exception as e:
-            logger.warning("获取模型列表失败: %s", e)
+        models = _get_v1_model_list(self._base_url, self._api_key)
+        if models:
+            return models
+        # 回退：根据 URL 特征返回已知模型
+        host = self._base_url.lower()
+        if "deepseek" in host:
+            return ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"]
+        if "openai" in host:
+            return ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o3-mini"]
         return []
 
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         max_retries = getattr(self, '_retry', 2)
-        t_start = time.time()
         prompt_text = prompt or self._prompt_template
         logger.info("OpenAI Vision 请求 | model=%s | image=%dx%d",
                      self._model, image.shape[1], image.shape[0])
         logger.debug("Prompt: %s", prompt_text[:120])
         for attempt in range(max_retries + 1):
             try:
-                import cv2
-                _, buf = cv2.imencode(".jpg", image)
-                b64 = base64.b64encode(buf).decode("utf-8")
-                headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
-                payload = {
-                    "model": self._model,
-                    "messages": [{"role": "user", "content": [{"type": "text", "text": prompt_text}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}],
-                    "max_tokens": 512
-                }
-                url = self._base_url.rstrip("/") + "/chat/completions"
-                resp = requests.post(url, json=payload, headers=headers, timeout=self._timeout)
-                elapsed = time.time() - t_start
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"].strip()
-                    logger.info("OpenAI Vision 响应: %.1fs, %d chars", elapsed, len(content))
-                    return content
-                logger.warning("OpenAI Vision HTTP %d (第%d次) | %.1fs", resp.status_code, attempt + 1, elapsed)
-                if attempt < max_retries:
-                    logger.info("重试第 %d 次...", attempt + 2)
-            except requests.exceptions.Timeout:
-                elapsed = time.time() - t_start
-                logger.warning("OpenAI Vision 超时 (%ds, 第%d次) | %.1fs", self._timeout, attempt + 1, elapsed)
-                if attempt < max_retries:
-                    continue
+                content = _call_vision_api(
+                    image=image,
+                    prompt_text=prompt_text,
+                    api_key=self._api_key,
+                    base_url=self._base_url,
+                    model=self._model,
+                    timeout=self._timeout,
+                )
+                logger.info("OpenAI Vision 响应: %d chars", len(content))
+                return content
             except Exception as e:
-                elapsed = time.time() - t_start
-                logger.error("OpenAI Vision 请求异常: %s (第%d次) | %.1fs", e, attempt + 1, elapsed)
+                logger.warning("OpenAI Vision 请求异常 (第%d次): %s", attempt + 1, e)
                 if attempt < max_retries:
                     continue
                 return ""
-        logger.error("OpenAI Vision 最终失败 (已重试 %d 次)", max_retries)
         return ""
 
 
 # ═══════════════ Ollama Vision ═══════════════
 class OllamaVisionEngine(BaseOCREngine):
+    """Ollama Vision API —— 使用 OpenAI 兼容 /v1 端点（Ollama >= 0.5.0）。"""
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.engine_name = "ollama_vision"
         cfg = config.get("config", {})
-        self._base_url = cfg.get("base_url", "http://localhost:11434")
+        self._base_url = cfg.get("base_url", "http://localhost:11434/v1")
         self._model = cfg.get("model", "llama3.2-vision:11b")
         self._prompt_template = cfg.get("prompt_template", "请识别图片中的文字，只返回文字内容")
         self._timeout = cfg.get("timeout", 60)
         self._retry = cfg.get("retry", 2)
 
     def check_availability(self) -> bool:
-        try:
-            url = self._base_url.rstrip("/")
-            resp = requests.get(url, timeout=10)
-            return resp.status_code == 200
-        except Exception as e:
-            logger.warning("API ping 失败: %s", e)
-            return False
+        return _check_v1_availability(self._base_url)
 
     def get_model_list(self) -> list[str]:
-        try:
-            url = self._base_url.rstrip("/") + "/api/tags"
-            resp = requests.get(url, timeout=15)
-            if resp.status_code == 200:
-                return [m["name"] for m in resp.json().get("models", [])]
-        except Exception as e:
-            logger.warning("获取模型列表失败: %s", e)
-        return []
+        return _get_v1_model_list(self._base_url)
 
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         max_retries = getattr(self, '_retry', 2)
-        t_start = time.time()
         prompt_text = prompt or self._prompt_template
         logger.info("Ollama Vision 请求 | model=%s | image=%dx%d",
                      self._model, image.shape[1], image.shape[0])
         logger.debug("Prompt: %s", prompt_text[:120])
         for attempt in range(max_retries + 1):
             try:
-                import cv2
-                _, buf = cv2.imencode(".jpg", image)
-                b64 = base64.b64encode(buf).decode("utf-8")
-                payload = {"model": self._model, "prompt": prompt_text, "images": [b64], "stream": False}
-                url = self._base_url.rstrip("/") + "/api/generate"
-                resp = requests.post(url, json=payload, timeout=self._timeout)
-                elapsed = time.time() - t_start
-                if resp.status_code == 200:
-                    content = resp.json().get("response", "").strip()
-                    logger.info("Ollama Vision 响应: %.1fs, %d chars", elapsed, len(content))
-                    return content
-                logger.warning("Ollama Vision HTTP %d (第%d次) | %.1fs", resp.status_code, attempt + 1, elapsed)
-                if attempt < max_retries:
-                    logger.info("重试第 %d 次...", attempt + 2)
-            except requests.exceptions.Timeout:
-                elapsed = time.time() - t_start
-                logger.warning("Ollama Vision 超时 (%ds, 第%d次) | %.1fs", self._timeout, attempt + 1, elapsed)
-                if attempt < max_retries:
-                    continue
+                content = _call_vision_api(
+                    image=image,
+                    prompt_text=prompt_text,
+                    api_key="ollama",
+                    base_url=self._base_url,
+                    model=self._model,
+                    timeout=self._timeout,
+                )
+                logger.info("Ollama Vision 响应: %d chars", len(content))
+                return content
             except Exception as e:
-                elapsed = time.time() - t_start
-                logger.error("Ollama Vision 请求异常: %s (第%d次) | %.1fs", e, attempt + 1, elapsed)
+                logger.warning("Ollama Vision 请求异常 (第%d次): %s", attempt + 1, e)
                 if attempt < max_retries:
                     continue
                 return ""
-        logger.error("Ollama Vision 最终失败 (已重试 %d 次)", max_retries)
         return ""
 
 
@@ -684,61 +730,34 @@ class LlamaCppEngine(BaseOCREngine):
         self._retry = cfg.get("retry", 2)
 
     def check_availability(self) -> bool:
-        try:
-            url = self._base_url.rstrip("/") + "/v1/models"
-            resp = requests.get(url, timeout=10)
-            return resp.status_code == 200
-        except Exception as e:
-            logger.warning("API ping 失败: %s", e)
-            return False
+        return _check_v1_availability(self._base_url, self._api_key)
 
     def get_model_list(self) -> list[str]:
-        try:
-            url = self._base_url.rstrip("/") + "/v1/models"
-            resp = requests.get(url, timeout=15)
-            if resp.status_code == 200:
-                return [m["id"] for m in resp.json().get("data", [])]
-        except Exception as e:
-            logger.warning("获取模型列表失败: %s", e)
-        return []
+        return _get_v1_model_list(self._base_url, self._api_key)
 
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         max_retries = getattr(self, '_retry', 2)
-        t_start = time.time()
         prompt_text = prompt or self._prompt_template
         logger.info("[llama.cpp] API 请求: %s 模型=%s 图片=%dx%d prompt=%.80s",
                      self._base_url, self._model or "(default)",
                      image.shape[1], image.shape[0], prompt_text)
         for attempt in range(max_retries + 1):
             try:
-                import cv2
-                _, buf = cv2.imencode(".jpg", image)
-                b64 = base64.b64encode(buf).decode("utf-8")
-                headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
-                payload = {"model": self._model, "messages": [{"role": "user", "content": [{"type": "text", "text": prompt_text}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]}], "max_tokens": 512, "temperature": 0}
-                url = self._base_url.rstrip("/") + "/v1/chat/completions"
-                resp = requests.post(url, json=payload, headers=headers, timeout=self._timeout)
-                elapsed = time.time() - t_start
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"].strip()
-                    logger.info("[llama.cpp] ✅ 响应 %d chars | 耗时 %.1fs", len(content), elapsed)
-                    return content
-                logger.warning("[llama.cpp] HTTP %d (第%d次) 耗时 %.1fs", resp.status_code, attempt + 1, elapsed)
-                if attempt >= max_retries:
-                    continue
-            except requests.exceptions.Timeout:
-                elapsed = time.time() - t_start
-                logger.warning("[llama.cpp] 超时 %ds (第%d次) 耗时 %.1fs", self._timeout, attempt + 1, elapsed)
+                content = _call_vision_api(
+                    image=image,
+                    prompt_text=prompt_text,
+                    api_key=self._api_key,
+                    base_url=self._base_url,
+                    model=self._model,
+                    timeout=self._timeout,
+                )
+                logger.info("[llama.cpp] 响应 %d chars", len(content))
+                return content
+            except Exception as e:
+                logger.warning("[llama.cpp] 请求异常 (第%d次): %s", attempt + 1, e)
                 if attempt < max_retries:
                     continue
-            except Exception as e:
-                elapsed = time.time() - t_start
-                logger.warning("[llama.cpp] 请求异常: %s (第%d次) 耗时 %.1fs", e, attempt + 1, elapsed)
-                if attempt >= max_retries:
-                    break
-                continue
-            return ""
-        logger.error("[llama.cpp] 最终失败 (已重试 %d 次)", max_retries)
+                return ""
         return ""
 
 

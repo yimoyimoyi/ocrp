@@ -157,8 +157,8 @@ class ResultTableWidget(QWidget):
     delete_filtered_requested = pyqtSignal()
     cell_edit_activated = pyqtSignal(int)
 
-    COLUMNS = ["时间戳", "区域", "引擎", "原始结果", "纠错结果", "置信度", ""]
-    COL_WIDTHS = [70, 70, 70, 200, 200, 55, 44]
+    COLUMNS = ["时间戳", "区域", "引擎", "原始结果", "分句结果", "纠错结果", "置信度", ""]
+    COL_WIDTHS = [70, 70, 70, 160, 160, 160, 50, 44]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -268,7 +268,6 @@ class ResultTableWidget(QWidget):
         sbl.setContentsMargins(4, 2, 4, 2); sbl.setSpacing(4)
         self._search_edit = QLineEdit()
         self._search_edit.setPlaceholderText(_("搜索..."))
-        self._search_edit.setMaximumHeight(22)
         self._search_edit.setMinimumWidth(120)
         self._search_edit.textChanged.connect(self._on_search_text_changed)
         sbl.addWidget(self._search_edit)
@@ -282,7 +281,6 @@ class ResultTableWidget(QWidget):
         sbl.addSpacing(8)
         self._replace_edit = QLineEdit()
         self._replace_edit.setPlaceholderText(_("替换为..."))
-        self._replace_edit.setMaximumHeight(22)
         self._replace_edit.setMinimumWidth(100)
         sbl.addWidget(self._replace_edit)
         for label, slot in [("替换", self._on_replace_current),
@@ -331,6 +329,8 @@ class ResultTableWidget(QWidget):
                         if c == 3:
                             self._results[r]["raw"] = text
                         elif c == 4:
+                            self._results[r]["segmented"] = text
+                        elif c == 5:
                             self._results[r]["corrected"] = text
                     self.cell_edit_activated.emit(r)
                     return
@@ -343,7 +343,7 @@ class ResultTableWidget(QWidget):
         self._results.append({
             "time_sec": time_sec, "end_sec": end_sec,
             "time": time_str, "region": region, "engine": engine,
-            "raw": raw_text, "corrected": "", "confidence": confidence,
+            "raw": raw_text, "segmented": "", "corrected": "", "confidence": confidence,
         })
         row = self._table.rowCount()
         self._table.insertRow(row)
@@ -353,6 +353,7 @@ class ResultTableWidget(QWidget):
             (region, False),
             (engine, False),
             (raw_text, True),
+            ("", True),
             ("", True),
             (f"{confidence:.0%}" if confidence else "-", False),
         ]
@@ -375,14 +376,22 @@ class ResultTableWidget(QWidget):
     def update_correction(self, row: int, corrected_text: str):
         if 0 <= row < len(self._results):
             self._results[row]["corrected"] = corrected_text
-            editor = self._table.cellWidget(row, 4)
+            editor = self._table.cellWidget(row, 5)
             if isinstance(editor, _CellEditor):
                 editor.set_text(corrected_text)
+
+    def update_segmentation(self, row: int, segmented_text: str):
+        """更新分句结果列。"""
+        if 0 <= row < len(self._results):
+            self._results[row]["segmented"] = segmented_text
+            editor = self._table.cellWidget(row, 4)
+            if isinstance(editor, _CellEditor):
+                editor.set_text(segmented_text)
 
     def update_confidence(self, row: int, confidence: float):
         if 0 <= row < len(self._results):
             self._results[row]["confidence"] = confidence
-            editor = self._table.cellWidget(row, 5)
+            editor = self._table.cellWidget(row, 6)
             if isinstance(editor, _CellEditor):
                 editor.set_text(f"{confidence:.0%}")
 
@@ -415,6 +424,7 @@ class ResultTableWidget(QWidget):
             conf_val = item.get("confidence", 0.0) or 0.0
             conf_text = f"{conf_val:.0%}" if conf_val else "-"
             raw = item.get("raw", "")
+            segmented = item.get("segmented", "")
             corrected = item.get("corrected", "")
             row = self._table.rowCount()
             self._table.insertRow(row)
@@ -424,6 +434,7 @@ class ResultTableWidget(QWidget):
                 (item.get("region", ""), False),
                 (item.get("engine", ""), False),
                 (raw, True),
+                (segmented, True),
                 (corrected, True),
                 (conf_text, False),
             ]
@@ -493,7 +504,7 @@ class ResultTableWidget(QWidget):
                         "time_sec": ts, "end_sec": src.get("end_sec", ts + 3.0) if src else ts + 3.0,
                         "time": time_str, "region": output_line,
                         "engine": src.get("engine", "") if src else "",
-                        "raw": output_line, "corrected": "",
+                        "raw": output_line, "segmented": "", "corrected": "",
                         "confidence": src.get("confidence", 0.0) if src else 0.0,
                     })
         self._rebuild_table_rows(new_results)
@@ -501,14 +512,15 @@ class ResultTableWidget(QWidget):
     def get_results(self) -> list:
         return list(self._results)
 
-    def get_polished_results(self, post_sim_threshold: float = 0.9,
+    def get_polished_results(self, post_sim_dedup: bool = True,
+                              post_sim_threshold: float = 0.9,
                               post_min_text_len: int = 2) -> list:
         if getattr(self, '_is_templated', False):
             return list(self._results)
         from core.result_processor import polish_results
         raw_list = [(r["time_sec"], r["time"], r["region"], r["engine"], r["raw"])
                     for r in self._results]
-        return polish_results(raw_list, post_sim_dedup=True,
+        return polish_results(raw_list, post_sim_dedup=post_sim_dedup,
                               post_sim_threshold=post_sim_threshold,
                               post_min_text_len=post_min_text_len)
 
@@ -558,7 +570,7 @@ class ResultTableWidget(QWidget):
             return []
         kw = keyword.lower()
         return [i for i, r in enumerate(self._results)
-                if kw in r.get("raw", "").lower() or kw in r.get("corrected", "").lower()]
+                if kw in r.get("raw", "").lower() or kw in r.get("segmented", "").lower() or kw in r.get("corrected", "").lower()]
 
     def _highlight_rows(self, matches: list[int], current: int = -1):
         from PyQt5.QtGui import QPalette
@@ -621,7 +633,7 @@ class ResultTableWidget(QWidget):
 
     def _do_replace(self, row: int, search: str, replace: str):
         if row < 0 or row >= len(self._results): return
-        for col, key in [(3, "raw"), (4, "corrected")]:
+        for col, key in [(3, "raw"), (4, "segmented"), (5, "corrected")]:
             val = self._results[row].get(key, "")
             if search in val:
                 new_val = val.replace(search, replace)

@@ -336,28 +336,27 @@ class WhisperXEngine(BaseASREngine):
         if not self._start_server():
             return {"status": "error", "message": "ASR server not available"}
 
+        # 捕获本地引用，防止 _stop_server() 在另一个线程中置 _proc=None 导致 NPE
+        proc = self._proc
+        if proc is None:
+            return {"status": "error", "message": "ASR server not available"}
+
         try:
             from threading import Thread
-
-            err = self._check_process_alive()
-            if err:
-                return {"status": "error", "message": err}
-
-            import time
 
             _result = [None]
             _exception = [None]
 
             def _read_response():
                 try:
-                    line = self._proc.stdout.readline()
+                    line = proc.stdout.readline()
                     _result[0] = json.loads(line) if line else None
                 except Exception as e:
                     _exception[0] = e
 
             # 1. 启动 stderr 收集线程 + 2. 发送请求
             stderr_reader, stderr_lines = self._start_stderr_reader()
-            _send_json(self._proc.stdin, req)
+            _send_json(proc.stdin, req)
 
             # 3. 启动 stdout 读取线程
             reader = Thread(target=_read_response, daemon=True)
@@ -367,13 +366,12 @@ class WhisperXEngine(BaseASREngine):
             deadline = time.time() + timeout
             while reader.is_alive() and time.time() < deadline:
                 reader.join(timeout=0.5)
-                if self._proc.poll() is not None:
+                if proc.poll() is not None:
                     break  # 进程退出，跳出循环统一处理
 
             # ── 进程已退出（崩溃）──
-            if self._proc is not None and self._proc.poll() is not None:
-                exit_code = self._proc.poll()
-                # 等待 stderr 线程收集完
+            if proc.poll() is not None:
+                exit_code = proc.poll()
                 if stderr_reader.is_alive():
                     stderr_reader.join(timeout=2)
                 stderr_text = "\n".join(stderr_lines[-30:]) if stderr_lines else "(no stderr)"
@@ -387,17 +385,16 @@ class WhisperXEngine(BaseASREngine):
             if reader.is_alive():
                 logger.warning("ASR 请求超时 (%ds)，强制终止", timeout)
 
-                # 收集已有 stderr 用于诊断
                 if stderr_reader.is_alive():
                     stderr_reader.join(timeout=1)
                 stderr_text = "\n".join(stderr_lines[-20:]) if stderr_lines else "(no stderr)"
                 logger.debug("超时时 stderr: %s", stderr_text[:500])
 
                 try:
-                    self._proc.kill()
-                    self._proc.wait(2)
+                    proc.kill()
+                    proc.wait(2)
                 except Exception as e:
-                    logger.debug("读取 ASR stderr 失败: %s", e)
+                    logger.debug("ASR 超时 kill 失败: %s", e)
                 self._proc = None
                 self._ready = False
                 return {"status": "error",
@@ -482,19 +479,26 @@ class WhisperXEngine(BaseASREngine):
                     error_holder[0] = err
                 return
 
+            # 捕获本地引用，防止 _stop_server() 在另一个线程中置 _proc=None 导致 NPE
+            proc = self._proc
+            if proc is None:
+                if error_holder is not None:
+                    error_holder[0] = "ASR server not available"
+                return
+
             import time
 
             stderr_reader, stderr_lines = self._start_stderr_reader()
 
-            _send_json(self._proc.stdin, req)
+            _send_json(proc.stdin, req)
             logger.info("ASR 流式请求已发送: audio=%s", Path(audio_path).name)
 
             # 逐行读取 segment / done / error
             deadline = time.time() + 300  # 5 分钟总超时
-            while time.time() < deadline:
+            while time.time() < deadline and proc is not None:
                 # 检查进程存活
-                if self._proc.poll() is not None:
-                    exit_code = self._proc.poll()
+                if proc.poll() is not None:
+                    exit_code = proc.poll()
                     if stderr_reader.is_alive():
                         stderr_reader.join(timeout=1)
                     stderr_text = "\n".join(stderr_lines[-20:]) if stderr_lines else "(no stderr)"
@@ -505,10 +509,10 @@ class WhisperXEngine(BaseASREngine):
                         error_holder[0] = f"Server crashed: {stderr_text[:200]}"
                     return
 
-                line = self._proc.stdout.readline()
+                line = proc.stdout.readline()
                 if not line:
                     # EOF — 服务器静默退出
-                    if self._proc.poll() is not None:
+                    if proc.poll() is not None:
                         # 进程已死，上面已经处理过
                         continue
                     # 进程还活着但 stdout 关闭了？异常情况
@@ -548,8 +552,8 @@ class WhisperXEngine(BaseASREngine):
             # 超时
             logger.warning("ASR 流式超时 (300s)")
             try:
-                self._proc.kill()
-                self._proc.wait(2)
+                proc.kill()
+                proc.wait(2)
             except Exception as e:
                 logger.debug("ASR 超时 kill 失败: %s", e)
             self._proc = None

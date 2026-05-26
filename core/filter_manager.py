@@ -54,16 +54,19 @@ class FilterManager:
         if not kw or kw in self._keywords:
             return False
         self._keywords.append(kw)
-        self._save()
-        return True
+        ok = self._save()
+        logger.info("添加过滤关键词 '%s' (保存:%s)", kw[:40], "成功" if ok else "失败")
+        return ok
 
     def remove_keyword(self, keyword: str) -> bool:
         """按文本删除过滤关键词。"""
         kw = keyword.strip()
         if kw in self._keywords:
             self._keywords.remove(kw)
-            self._save()
-            return True
+            ok = self._save()
+            logger.info("删除过滤关键词 '%s' (保存:%s)", kw[:40], "成功" if ok else "失败")
+            return ok
+        logger.info("删除过滤关键词 '%s' 失败: 不在列表中 (列表:%s)", kw[:40], self._keywords[:5])
         return False
 
     def matches(self, text: str) -> bool:
@@ -72,11 +75,13 @@ class FilterManager:
             return False
         return any(kw in text for kw in self._keywords)
 
-    def _save(self):
-        """保存关键词到配置文件。"""
+    def _save(self) -> bool:
+        """保存关键词到配置文件。返回是否成功。"""
         try:
             FILTERS_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(FILTERS_PATH, "w", encoding="utf-8") as f:
                 json.dump({"keywords": self._keywords, "garbage_patterns": self._garbage_patterns}, f, ensure_ascii=False, indent=2)
+            return True
         except Exception as e:
             logger.warning("保存过滤配置失败: %s", e)
+            return False

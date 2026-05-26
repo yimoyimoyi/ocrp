@@ -41,6 +41,27 @@ def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
     return json.loads('\n'.join(lines))
 
 
+def load_key(key: str) -> Any:
+    """支持点号分隔的多级键访问 settings.json。
+
+    示例: load_key("api.key") → settings["api"]["key"]
+          load_key("mode_params.corr_enabled") → settings["mode_params"]["corr_enabled"]
+
+    注意：该函数每次调用都会重新读取文件，适合低频调用场景
+    （UI 初始化、预设管理器、WorkflowManager 初始化）。
+    高频调用应使用 ConfigManager 实例的 get() 方法。
+    """
+    keys = key.split(".")
+    data = _load_json_with_comments(CONFIG_DIR / "settings.json")
+    value = data
+    for k in keys:
+        if isinstance(value, dict) and k in value:
+            value = value[k]
+        else:
+            raise KeyError(f"配置键 '{key}' 不存在（中断于 '{k}'）")
+    return value
+
+
 # mode_params 默认值，新增或改名时在此维护
 MODE_PARAMS_DEFAULTS = {
     "frame_interval": 0.1,
@@ -61,12 +82,9 @@ MODE_PARAMS_DEFAULTS = {
     "r_interval": 2.0,
     "subtitle_duration": 3.0,
     "region_order": "",
-    "post_keep_longest": False,
     "post_sim_dedup": True,
     "post_sim_threshold": 0.9,
     "post_min_text_len": 2,
-    "ocr_retry": 2,
-    "ocr_timeout": 60,
     "corr_enabled": False,
     "corr_batch_size": 5,
     "corr_context_window": 3,
@@ -103,6 +121,82 @@ _MODE_PARAMS_RENAME_MAP = {
     "sentinel_filter_keywords": "s_filter_keywords",
     "regular_interval": "r_interval",
 }
+
+# ── 各配置文件的默认模板（首次运行时自动生成）──
+_CONFIG_TEMPLATES: dict[str, dict] = {
+    "ocr_engines.json": {
+        "engines": {
+            "paddleocr": {"type": "local", "enabled": True, "config": {
+                "lang": "ch", "use_angle_cls": False, "use_gpu": False,
+                "show_log": False, "fast_mode": True, "rec_batch_num": 6,
+                "api_key": "", "base_url": "", "model": "", "timeout": 30,
+                "device": "gpu", "ocr_version": "PP-OCRv4",
+            }},
+            "openai_vision": {"type": "api", "enabled": True, "config": {
+                "api_key": "sk-xxx", "base_url": "https://api.deepseek.com/v1",
+                "model": "gpt-4o", "prompt_template": "请识别图片中的文字，只返回文字内容",
+                "timeout": 30, "retry": 2, "device": "cpu", "ocr_version": None, "use_angle_cls": True,
+            }},
+            "ollama_vision": {"type": "api", "enabled": True, "config": {
+                "base_url": "http://localhost:11434", "model": "llama3.2-vision:11b",
+                "prompt_template": "请识别图片中的文字，只返回文字内容", "timeout": 60, "retry": 2,
+            }},
+            "llamacpp": {"type": "api", "enabled": True, "config": {
+                "base_url": "http://127.0.0.1:8080", "api_key": "not-needed", "model": "",
+                "prompt_template": "请识别图片中的文字，只返回文字内容", "timeout": 60, "retry": 2,
+            }},
+        },
+        "default_engine": "llamacpp",
+    },
+    "asr_engines.json": {
+        "engine": "whisperx", "enabled": False, "model_size": "large-v3",
+        "language": "zh", "vad_enabled": False, "vad_min_silence_ms": 500,
+        "vad_threshold": 0.5, "word_timestamps": True, "asr_region_name": "语音",
+        "model_dir": "", "beam_size": 5, "initial_prompt": "",
+        "condition_on_previous_text": True, "no_speech_threshold": 0.6,
+        "compression_ratio_threshold": 2.4, "temperature": "0.0,0.2,0.4,0.6,0.8,1.0", "hotwords": "",
+    },
+    "ai_correction.json": {
+        "enabled": False, "engine": "llamacpp",
+        "correction_prompt": "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。",
+        "retry_on_failure": 2, "api_key": "", "base_url": "http://127.0.0.1:8080",
+        "model": "", "timeout": 30, "batch_size": 10, "context_window": 3, "retry": 2,
+        "summary_prompt": "", "correction_system_prompt": "", "output_format": "",
+        "prompts": {"default": ""}, "stream_mode": True, "json_mode": True,
+        "enable_sentence_segmentation": False,
+        "sentence_segmentation_prompt": "你是一个字幕分句专家。请将碎片化的文本合并为字幕条目。",
+        "sentence_segmentation_system_prompt": "你是一个字幕分句助手。只输出JSON结果。",
+        "enable_proofread": False,
+        "proofread_prompt": "你是一个专业的字幕校对审核员。请检查以下已翻译/纠错后的字幕文本...",
+    },
+    "api_presets.json": {
+        "presets": [],
+        "default": "",
+    },
+    "prompt_templates.json": {
+        "templates": [],
+    },
+    "filters.json": {
+        "keywords": [],
+        "garbage_patterns": [],
+    },
+}
+
+
+def ensure_config_files() -> None:
+    """检查并自动生成缺失的配置文件（从默认模板）。"""
+    import shutil as _shutil
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    for filename, template in _CONFIG_TEMPLATES.items():
+        path = CONFIG_DIR / filename
+        if not path.exists():
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(template, f, ensure_ascii=False, indent=2)
+                print(f"[config] 已创建默认配置: {filename}", file=sys.stderr)
+            except OSError as e:
+                print(f"[config] 创建配置失败 {filename}: {e}", file=sys.stderr)
+
 
 class ConfigManager:
     """管理应用配置的读写，自动合并默认值。"""
@@ -153,6 +247,10 @@ class ConfigManager:
 
     def save_settings(self):
         self._save_settings(self.settings)
+
+    def reload(self):
+        """从文件重新加载配置。"""
+        self.settings = self._load_settings()
 
     def _merge_defaults(self, cfg: dict) -> dict:
         result = dict(DEFAULT_SETTINGS)

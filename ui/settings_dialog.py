@@ -91,10 +91,7 @@ class SettingsDialog(QDialog):
         _safe_set(self._process_mode, _safe_val(cp._process_mode_combo, "OCR + ASR（完整流程）"))
         _safe_set(self._subtitle_duration, _safe_val(cp._subtitle_duration_spin, 3.0))
         _safe_set(self._srt_export, _safe_val(cp._srt_export_combo, "仅纠正结果"))
-        _safe_set(self._ocr_retry, _safe_val(cp._ocr_retry_spin, 2))
-        _safe_set(self._ocr_timeout, _safe_val(cp._ocr_timeout_spin, 60))
         _safe_set(self._post_sim_dedup, _safe_val(cp._post_sim_dedup, True))
-        _safe_set(self._post_keep_longest, _safe_val(cp._post_keep_longest, False))
         _safe_set(self._corr_enabled, _safe_val(cp._corr_enabled_check, False))
 
         # ── 字幕模式 ──
@@ -127,12 +124,14 @@ class SettingsDialog(QDialog):
         # ── 过滤器 ──
         self._filter_items.clear()
         self._filter_list.clear()
+        self._filter_original = []  # 用于计算增删差异
         try:
             for i in range(cp._filter_list.count()):
                 item = cp._filter_list.item(i)
                 if item:
                     self._filter_items.append(item.text())
                     self._filter_list.addItem(item.text())
+            self._filter_original = list(self._filter_items)
         except RuntimeError:
             pass
 
@@ -141,6 +140,8 @@ class SettingsDialog(QDialog):
         _safe_set(self._corr_stream, _safe_val(cp._corr_stream_check, False))
         _safe_set(self._corr_json, _safe_val(cp._corr_json_check, False))
         _safe_set(self._corr_extract_env, _safe_val(cp._corr_extract_env_check, False))
+        # proofread 开关不在 config_panel，从 ai_correction.json 读取
+        _safe_set(self._corr_proofread, self._corr_cfg.get("enable_proofread", False))
         _safe_set(self._corr_summary_prompt, _safe_val(cp._corr_summary_prompt_text, ""))
         _safe_set(self._corr_system_prompt, _safe_val(cp._corr_system_prompt_text, ""))
         _safe_set(self._corr_output_format, _safe_val(cp._corr_output_format_edit, ""))
@@ -195,10 +196,7 @@ class SettingsDialog(QDialog):
         _safe_set(cp._process_mode_combo, _safe_val(self._process_mode, "OCR + ASR（完整流程）"))
         _safe_set(cp._subtitle_duration_spin, _safe_val(self._subtitle_duration, 3.0))
         _safe_set(cp._srt_export_combo, _safe_val(self._srt_export, "仅纠正结果"))
-        _safe_set(cp._ocr_retry_spin, _safe_val(self._ocr_retry, 2))
-        _safe_set(cp._ocr_timeout_spin, _safe_val(self._ocr_timeout, 60))
         _safe_set(cp._post_sim_dedup, _safe_val(self._post_sim_dedup, True))
-        _safe_set(cp._post_keep_longest, _safe_val(self._post_keep_longest, False))
         _safe_set(cp._corr_enabled_check, _safe_val(self._corr_enabled, False))
 
         _safe_set(cp._subtitle_mode_combo, _safe_val(self._subtitle_mode, "流式字幕（去重）"))
@@ -225,6 +223,15 @@ class SettingsDialog(QDialog):
             cp._filter_list.clear()
             for kw in self._filter_items:
                 cp._filter_list.addItem(kw)
+            # 同步差异到 FilterManager（发射 ConfigPanel 信号）
+            original = getattr(self, '_filter_original', [])
+            current = list(self._filter_items)
+            removed = set(original) - set(current)
+            added = set(current) - set(original)
+            for kw in removed:
+                cp.filter_remove_requested.emit(kw)
+            for kw in added:
+                cp.filter_add_requested.emit(kw)
         except RuntimeError:
             pass
 
@@ -319,7 +326,7 @@ class SettingsDialog(QDialog):
         self._subtitle_duration.setSuffix(" 秒")
         of.addRow("字幕时长:", self._subtitle_duration)
         self._srt_export = QComboBox()
-        self._srt_export.addItems(["仅纠正结果", "仅原文", "双语对照（原文+纠正）"])
+        self._srt_export.addItems(["仅纠正结果", "仅原文", "双语对照（原文+纠正）", "原文 换行 纠正"])
         self._srt_export.setToolTip("SRT 导出时的字幕内容模式")
         of.addRow("SRT 导出:", self._srt_export)
         out_group.addLayout(of)
@@ -332,31 +339,13 @@ class SettingsDialog(QDialog):
         self._post_sim_dedup = QCheckBox("后处理相似度去重")
         self._post_sim_dedup.setChecked(True)
         pf.addRow("", self._post_sim_dedup)
-        self._post_keep_longest = QCheckBox("保留最长文本")
-        self._post_keep_longest.setChecked(False)
-        pf.addRow("", self._post_keep_longest)
         self._corr_enabled = QCheckBox("启用 AI 纠错")
         self._corr_enabled.setChecked(False)
         pf.addRow("", self._corr_enabled)
         post_group.addLayout(pf)
         layout.addWidget(post_group)
 
-        # ── 容错重试组 ──
-        retry_group = CollapsibleGroup(_("容错重试"))
-        rf = QFormLayout()
-        rf.setSpacing(6)
-        self._ocr_retry = QSpinBox()
-        self._ocr_retry.setRange(0, 10)
-        self._ocr_retry.setValue(2)
-        self._ocr_retry.setToolTip("API OCR 引擎识别失败时的最大重试次数")
-        rf.addRow("OCR 重试次数:", self._ocr_retry)
-        self._ocr_timeout = QSpinBox()
-        self._ocr_timeout.setRange(5, 300)
-        self._ocr_timeout.setValue(60)
-        self._ocr_timeout.setSuffix(" 秒")
-        rf.addRow("OCR 超时:", self._ocr_timeout)
-        retry_group.addLayout(rf)
-        layout.addWidget(retry_group)
+
 
         layout.addStretch()
         return tab
@@ -672,6 +661,9 @@ class SettingsDialog(QDialog):
         mf.addWidget(self._corr_json)
         self._corr_extract_env = QCheckBox("提取全文环境（领域/氛围/内容摘要作为参考）")
         mf.addWidget(self._corr_extract_env)
+        self._corr_proofread = QCheckBox("🔍 校对模式（纠错/翻译后二次检查质量）")
+        self._corr_proofread.setToolTip("开启后 LLM 将对纠错/翻译结果进行二次校对，修正语法和术语问题")
+        mf.addWidget(self._corr_proofread)
         self._btn_extract_env = QPushButton("🔍 立即提取全文环境")
         self._btn_extract_env.clicked.connect(lambda: self._cp.extract_env_clicked.emit())
         mf.addWidget(self._btn_extract_env)
@@ -714,6 +706,7 @@ class SettingsDialog(QDialog):
         default_name = APIPresetManager().get_default_name()
         if default_name:
             self._corr_preset.setCurrentText(default_name)
+        self._corr_preset.currentTextChanged.connect(self._on_preset_changed)
         bf.addRow("API 预设:", self._corr_preset)
         self._corr_batch = QSpinBox()
         self._corr_batch.setRange(1, 50)
@@ -861,7 +854,30 @@ class SettingsDialog(QDialog):
                     self._sort_items.append(info)
 
     # ── API ──
+    def _on_preset_changed(self, name: str):
+        """预设切换时回填 API 连接字段。"""
+        if not name:
+            return
+        from core.api_preset_manager import APIPresetManager
+        preset = APIPresetManager().get_preset(name)
+        if not preset:
+            return
+        self._corr_api_key.setText(preset.get("api_key", ""))
+        self._corr_api_url.setText(preset.get("base_url", "http://127.0.0.1:8080"))
+        self._corr_api_model.setEditText(preset.get("model", ""))
+        self._corr_api_timeout.setValue(preset.get("timeout", 30))
+
     def get_corr_api_config(self) -> dict:
+        """获取 API 连接配置，同时回写到当前选中预设。"""
+        from core.api_preset_manager import APIPresetManager
+        preset_name = self._corr_preset.currentText()
+        if preset_name:
+            APIPresetManager().update_preset(preset_name, {
+                "api_key": self._corr_api_key.text(),
+                "base_url": self._corr_api_url.text(),
+                "model": self._corr_api_model.currentText(),
+                "timeout": self._corr_api_timeout.value(),
+            })
         return {
             "enabled": self._corr_enabled.isChecked(),
             "api_key": self._corr_api_key.text(),
@@ -917,5 +933,6 @@ class SettingsDialog(QDialog):
         """确认时：同步数据到 ConfigPanel 并触发应用。"""
         self._collect_sort_items()
         self._sync_values_to_cp()
+        self._cp.set_proofread_enabled(self._corr_proofread.isChecked())
         self._cp._on_apply_mode()
         self.accept()

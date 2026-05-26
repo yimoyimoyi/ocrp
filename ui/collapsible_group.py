@@ -68,7 +68,7 @@ class CollapsibleGroup(QWidget):
 
     def _build(self, title: str):
         self.setObjectName("collapsibleGroup")
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -120,8 +120,15 @@ class CollapsibleGroup(QWidget):
         content = self.findChild(QWidget, "collapsibleContent")
         if content:
             content.setVisible(not coll)
-            # 更新父级布局
-            self.updateGeometry()
         # 箭头切换
         self._toggle_btn.setArrowType(Qt.RightArrow if coll else Qt.DownArrow)
+        # 逐级向上通知布局更新（QScrollArea / QTabWidget 等）
+        self.updateGeometry()
+        p = self.parent()
+        while p:
+            if p.layout():
+                p.layout().invalidate()
+                p.layout().activate()
+            p.updateGeometry()
+            p = p.parent()
         self.toggled.emit(coll)
