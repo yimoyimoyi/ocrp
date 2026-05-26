@@ -228,6 +228,8 @@ class TestImportChain:
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows DLL 检查")
     def test_ocr_engine_imports_on_windows(self):
         """PaddleOCR 引擎模块应能导入（DLL 搜索路径已设置）。"""
+        from core.config_manager import ensure_config_files
         from core.ocr_engine import OCREngineManager
+        ensure_config_files()
         mgr = OCREngineManager()
         assert "paddleocr" in mgr.get_engine_names()
