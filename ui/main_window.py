@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 from PyQt5.QtCore import QEvent, Qt
-from PyQt5.QtGui import QColor, QTextDocument
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QAction,
@@ -236,6 +235,7 @@ class MainWindow(QMainWindow):
     def _warm_up_for_mode(self, mode: str):
         """根据处理模式预热相应引擎（后台线程，不阻塞 UI）。"""
         import threading
+
         from core.utils import MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
 
         def _warm():

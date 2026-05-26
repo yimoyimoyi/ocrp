@@ -16,8 +16,8 @@ from pathlib import Path
 import numpy as np
 
 from core.config_manager import _load_json_with_comments
-from core.logger import get_logger
 from core.llm_utils import ask_llm
+from core.logger import get_logger
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
@@ -26,6 +26,7 @@ logger = get_logger(__name__)
 
 # [DEBUG] 临时调试日志 —— LLM 输入输出
 import datetime as _adt
+
 _ALOG = BASE_DIR / "logs" / "debug_seg.log"
 _ALOG.parent.mkdir(parents=True, exist_ok=True)
 
@@ -470,7 +471,7 @@ class AICorrector:
             stream_callback=stream_callback,
             resp_type=resp_type,
             log_title="correction",
-            _tag=f"row",
+            _tag="row",
         )
 
         if result is None:
@@ -811,8 +812,7 @@ class AICorrector:
                     last_error = "API 返回空"
                     continue
 
-                content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
-                # 传递原始行文本用于对齐校验；直接传 result 避免 json.dumps → json.loads 往返
+                # 直接传 result 避免 json.dumps → json.loads 往返
                 original_texts = [t[1].replace("\n", " ").strip() for t in texts]
                 parsed = self._parse_segmentation_result(result, n, original_texts)
                 if parsed is not None:
@@ -909,7 +909,8 @@ class AICorrector:
                 joiner = " "
 
         # 文本归一化函数：去标点空格、转小写
-        _normalize = lambda s: re.sub(r'[^\w]', '', s).lower()
+        def _normalize(s: str) -> str:
+            return re.sub(r'[^\w]', '', s).lower()
 
         for seg in segments:
             if not isinstance(seg, dict):

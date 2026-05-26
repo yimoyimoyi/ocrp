@@ -9,8 +9,8 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -637,8 +637,8 @@ class ConfigPanel(QWidget):
 
     def _on_test_connection(self):
         """测试当前选中预设的 API 连接。"""
-        from core.llm_utils import test_connection
         from core.api_preset_manager import APIPresetManager
+        from core.llm_utils import test_connection
 
         preset_name = self._corr_preset_combo.currentText()
         if not preset_name:
@@ -1283,7 +1283,6 @@ class ConfigPanel(QWidget):
 
     @staticmethod
     def _get_text_dialog(title, label, default=""):
-        from PyQt5.QtWidgets import QInputDialog, QLineEdit
         return QInputDialog.getText(None, title, label, QLineEdit.Normal, default)
 
     def _on_add_filter(self):

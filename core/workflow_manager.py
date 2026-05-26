@@ -4,22 +4,22 @@
 保持业务逻辑与 UI 的分离。
 """
 
+# [DEBUG] 临时调试日志
+import datetime as _wdt
 import json
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from pathlib import Path as _WPath
 from typing import Any
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from core.frame_processor import FrameProcessor
 from core.logger import get_logger
-from core.result_processor import export_results, parse_srt_time
+from core.result_processor import export_results
 from core.utils import ENGINE_WHISPERX, MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
 
-# [DEBUG] 临时调试日志
-import datetime as _wdt
-from pathlib import Path as _WPath
 _WDEBUG = _WPath(__file__).resolve().parent.parent / "logs" / "debug_seg.log"
 _WDEBUG.parent.mkdir(parents=True, exist_ok=True)
 
@@ -865,7 +865,7 @@ class WorkflowManager(QObject):
         # ── P4: 断点续跑 ──
         if self._seg_cache_path.exists():
             try:
-                with open(self._seg_cache_path, "r", encoding="utf-8") as f:
+                with open(self._seg_cache_path, encoding="utf-8") as f:
                     cache = json.load(f)
                 cached_offset = cache.get("offset", 0)
                 cached_map = cache.get("range_map", {})

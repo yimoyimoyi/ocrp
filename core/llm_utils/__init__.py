@@ -3,4 +3,4 @@
 from .llm_client import _normalize_base_url, ask_llm, test_connection
 from .retry import except_handler
 
-__all__ = ["ask_llm", "except_handler", "_normalize_base_url", "test_connection"]
+__all__ = ["_normalize_base_url", "ask_llm", "except_handler", "test_connection"]

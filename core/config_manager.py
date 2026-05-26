@@ -185,7 +185,6 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
 
 def ensure_config_files() -> None:
     """检查并自动生成缺失的配置文件（从默认模板）。"""
-    import shutil as _shutil
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     for filename, template in _CONFIG_TEMPLATES.items():
         path = CONFIG_DIR / filename

@@ -21,8 +21,8 @@ from pathlib import Path
 import json_repair
 from openai import OpenAI
 
-from core.logger import get_logger
 from core.llm_utils.retry import except_handler
+from core.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -45,7 +45,7 @@ def _load_cache(cache_key: str, log_title: str):
         cache_file = LLM_LOG_DIR / f"{log_title}.json"
         if cache_file.exists():
             try:
-                with open(cache_file, "r", encoding="utf-8") as f:
+                with open(cache_file, encoding="utf-8") as f:
                     entries = json.load(f)
                 for entry in entries:
                     if entry.get("cache_key") == cache_key:
@@ -64,7 +64,7 @@ def _save_cache(cache_key: str, response, log_title: str):
         entries = []
         if cache_file.exists():
             try:
-                with open(cache_file, "r", encoding="utf-8") as f:
+                with open(cache_file, encoding="utf-8") as f:
                     entries = json.load(f)
             except (json.JSONDecodeError, OSError):
                 entries = []
