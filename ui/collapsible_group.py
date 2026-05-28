@@ -14,7 +14,9 @@ from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QMainWindow,
     QSizePolicy,
+    QSplitter,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -78,6 +80,7 @@ class CollapsibleGroup(QWidget):
         header = QWidget()
         header.setObjectName("collapsibleHeader")
         header.setCursor(Qt.PointingHandCursor)
+        header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         header.mousePressEvent = lambda e: self._collapse(not self._collapsed)
         hl = QHBoxLayout(header)
         hl.setContentsMargins(8, 5, 8, 5)
@@ -103,6 +106,7 @@ class CollapsibleGroup(QWidget):
         # ── 内容区域 ──
         content = QWidget()
         content.setObjectName("collapsibleContent")
+        content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._content_layout = QVBoxLayout(content)
         self._content_layout.setContentsMargins(8, 4, 8, 8)
         self._content_layout.setSpacing(4)
@@ -111,6 +115,7 @@ class CollapsibleGroup(QWidget):
         if self._collapsed:
             content.setVisible(False)
             self._toggle_btn.setArrowType(Qt.RightArrow)
+            header.setStyleSheet("#collapsibleHeader { border-radius: 6px; }")
 
     def _collapse(self, coll: bool):
         if self._collapsed == coll:
@@ -122,10 +127,24 @@ class CollapsibleGroup(QWidget):
             content.setVisible(not coll)
         # 箭头切换
         self._toggle_btn.setArrowType(Qt.RightArrow if coll else Qt.DownArrow)
-        # 逐级向上通知布局更新（QScrollArea / QTabWidget 等）
+        # 动态圆角：折叠时四角全圆，展开时仅顶部圆角
+        header = self.findChild(QWidget, "collapsibleHeader")
+        if header:
+            if coll:
+                header.setStyleSheet(
+                    "#collapsibleHeader { border-radius: 6px; }"
+                )
+            else:
+                header.setStyleSheet(
+                    "#collapsibleHeader { border-radius: 6px 6px 0 0; }"
+                )
+        # 逐级向上通知布局更新（QScrollArea / QTabWidget 等），
+        # 但遇到 QSplitter / QMainWindow 立即停止，避免级联重分配
         self.updateGeometry()
         p = self.parent()
         while p:
+            if isinstance(p, (QSplitter, QMainWindow)):
+                break
             if p.layout():
                 p.layout().invalidate()
                 p.layout().activate()

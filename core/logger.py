@@ -79,22 +79,27 @@ def _setup_root_logger() -> None:
     root = logging.getLogger("orcp")
     root.setLevel(level)
 
+    # 防止重复添加 handler（例如模块重载或子进程继承时）
+    existing_types = {type(h) for h in root.handlers}
+
     # ── stderr handler（带颜色）──
-    console_handler = logging.StreamHandler(sys.stderr)
-    console_handler.setFormatter(_ColoredFormatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
-    root.addHandler(console_handler)
+    if logging.StreamHandler not in existing_types:
+        console_handler = logging.StreamHandler(sys.stderr)
+        console_handler.setFormatter(_ColoredFormatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
+        root.addHandler(console_handler)
 
     # ── 文件 handler（不带颜色，纯文本）──
-    try:
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.handlers.RotatingFileHandler(
-            _LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5,
-            encoding="utf-8",
-        )
-        file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
-        root.addHandler(file_handler)
-    except OSError:
-        pass  # 文件日志不可用时降级到仅控制台
+    if logging.handlers.RotatingFileHandler not in existing_types:
+        try:
+            _LOG_DIR.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.handlers.RotatingFileHandler(
+                _LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))
+            root.addHandler(file_handler)
+        except OSError:
+            pass  # 文件日志不可用时降级到仅控制台
 
     # 防止日志向上传播到 Python 根 logger（避免重复输出）
     root.propagate = False

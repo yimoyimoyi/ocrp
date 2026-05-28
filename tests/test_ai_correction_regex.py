@@ -2,22 +2,8 @@
 
 import re
 
-# 直接定义从 ai_correction.py 提取的正则和函数，避免触发 torch DLL 导入链
-# 这些正则与 core/ai_correction.py 中的定义保持同步
-
-# 兼容 AI 输出变体：[ID:0]、[ID：0]、[ID 0]、id:0、[id:0]
-ID_PATTERN = re.compile(
-    r'\[\s*ID\s*[:：]\s*(\d+)\s*\](.*?)(?=\n\[\s*ID\s*[:：]\s*\d+\s*\]|\Z)',
-    re.DOTALL | re.IGNORECASE,
-)
-# 匹配时间标记 [hh:mm:ss.ms -> hh:mm:ss.ms] 或 [hh:mm:ss] 或 (hh:mm:ss)
-TIME_MARKER = re.compile(
-    r'\s*[(\[]\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*(?:->|→|-{1,2}>|,)\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*[)\]]\s*'
-    r'|\s*\[\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*\]\s*',
-)
-ID_TAG = re.compile(r'\[\s*ID\s*[:：]?\s*\d+\s*\]\s*', re.IGNORECASE)
-# AI 可能输出的 markdown 代码块包裹
-_MD_FENCE = re.compile(r'^```(?:json|text)?\s*\n?|\n?```\s*$', re.MULTILINE)
+# 从 ai_correction.py 导入正则模式，保持与生产代码同步
+from core.ai_correction import _MD_FENCE, ID_PATTERN, ID_TAG, TIME_MARKER
 
 # 宽松模式回退：匹配 "数字. 文本" 或 "数字) 文本"
 _LOOSE = re.compile(r'^(\d+)\s*[.)\:：]\s*(.+)', re.MULTILINE)
@@ -164,3 +150,92 @@ class TestTimeMarkerRegex:
         text = "[00:01:23 -> 00:01:25] 实际文本"
         result = TIME_MARKER.sub("", text).strip()
         assert "实际文本" in result
+
+
+class TestSegmentationTimeGap:
+    """分句时间轴约束测试。"""
+
+    @staticmethod
+    def _make_corrector(seg_time_gap: float = 3.0):
+        from core.ai_correction import AICorrector
+        config = {"enabled": False, "engine": "llamacpp", "api_key": "test",
+                  "base_url": "http://localhost", "model": "test", "timeout": 30}
+        c = AICorrector(config=config)
+        c._seg_time_gap = seg_time_gap
+        return c
+
+    @staticmethod
+    def _make_texts(*items: tuple[int, str, float, float]):
+        """构造 texts 列表: (row_idx, raw_text, time_start, time_end)"""
+        return [list(item) for item in items]
+
+    def test_gap_within_threshold_allows_merge(self):
+        """时间间隔 ≤ 阈值时，短碎片词正常合并。"""
+        c = self._make_corrector(seg_time_gap=3.0)
+        texts = self._make_texts(
+            (0, "ok", 0.0, 1.0),
+            (1, "lets go", 1.5, 3.0),
+        )
+        text_map, range_map = c.segment_sentences(texts)
+        # gap = 1.5 - 1.0 = 0.5 ≤ 3.0，碎片词应合并
+        assert text_map[0] == "ok lets go"
+        assert range_map["ok lets go"] == (0, 1)
+
+    def test_gap_exceeds_threshold_forces_split(self):
+        """时间间隔 > 阈值时强制拆分，即使碎片词也不合并。"""
+        c = self._make_corrector(seg_time_gap=3.0)
+        texts = self._make_texts(
+            (0, "hello", 0.0, 1.0),
+            (1, "world", 5.0, 6.0),
+        )
+        text_map, range_map = c.segment_sentences(texts)
+        # gap = 5.0 - 1.0 = 4.0 > 3.0，强制拆分
+        assert text_map[0] == "hello"
+        assert text_map[1] == "world"
+
+    def test_gap_equals_threshold_allows_merge(self):
+        """时间间隔 == 阈值时允许合并（仅 > 阈值才拆分）。"""
+        c = self._make_corrector(seg_time_gap=3.0)
+        texts = self._make_texts(
+            (0, "a", 0.0, 1.0),
+            (1, "b", 4.0, 5.0),
+        )
+        text_map, range_map = c.segment_sentences(texts)
+        # gap = 4.0 - 1.0 = 3.0 == threshold，不拆分
+        assert text_map[0] == "a b"
+
+    def test_mixed_gaps_respect_threshold(self):
+        """混合场景：gaps [0.2, 3.5, 0.2]，阈值 2.0s → 第 2 个 gap 超时强制拆分。"""
+        c = self._make_corrector(seg_time_gap=2.0)
+        texts = self._make_texts(
+            (0, "line one", 0.0, 1.0),
+            (1, "line two", 1.2, 2.5),   # gap 0.2 → 可合并
+            (2, "line three", 6.0, 7.0), # gap 3.5 → 强制拆分
+            (3, "line four", 7.2, 8.5),  # gap 0.2 → 可合并（碎片词）
+        )
+        text_map, range_map = c.segment_sentences(texts)
+        # 0,1 合并；2,3 合并（gap 0.2s + 碎片词）
+        assert text_map[0] == "line one line two"
+        assert text_map[2] == "line three line four"
+
+    def test_custom_threshold_configured(self):
+        """自定义阈值生效：设 1.0s，gap 1.5s > 1.0s 应拆分。"""
+        c = self._make_corrector(seg_time_gap=1.0)
+        texts = self._make_texts(
+            (0, "first", 0.0, 0.5),
+            (1, "second", 2.0, 3.0),
+        )
+        text_map, range_map = c.segment_sentences(texts)
+        # gap = 2.0 - 0.5 = 1.5 > 1.0，拆分
+        assert text_map[0] == "first"
+        assert text_map[1] == "second"
+
+    def test_long_sentence_within_gap_merges(self):
+        """长句在阈值内且满足短词条件时合并。"""
+        c = self._make_corrector(seg_time_gap=3.0)
+        texts = self._make_texts(
+            (0, "ok, lets start", 0.0, 1.0),
+            (1, "the game", 1.2, 2.5),
+        )
+        text_map, range_map = c.segment_sentences(texts)
+        assert text_map[0] == "ok, lets start the game"

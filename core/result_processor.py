@@ -6,11 +6,6 @@ import json
 import re
 from typing import Any
 
-# ── 默认过滤规则（可由 filters.json 的 garbage_patterns 覆盖） ──
-_DEFAULT_GARBAGE: list[str] = []
-
-GARBAGE_PATTERN = re.compile(r"^(\d+|剩余回合|剩餘回合|回合|[\.\-0-9]+)$")
-
 
 def get_similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio() if a and b else 0.0
@@ -19,12 +14,9 @@ def get_similarity(a: str, b: str) -> float:
 def polish_results(raw_results: list, post_keep_longest: bool = False,
                    post_sim_dedup: bool = True,
                    post_sim_threshold: float = 0.9,
-                   post_min_text_len: int = 2,
-                   garbage_patterns: list[str] | None = None) -> list:
+                   post_min_text_len: int = 2) -> list:
     if not raw_results:
         return []
-
-    garbage = garbage_patterns if garbage_patterns is not None else _DEFAULT_GARBAGE
 
     parsed = []
     for item in raw_results:
@@ -32,9 +24,7 @@ def polish_results(raw_results: list, post_keep_longest: bool = False,
         clean_content = raw_text.replace("『", "").replace("』", "")\
             .replace("「", "").replace("」", "").strip()
 
-        if not clean_content or clean_content in garbage:
-            continue
-        if GARBAGE_PATTERN.search(clean_content):
+        if not clean_content:
             continue
 
         speaker = clean_content.split("：", 1)[0] if "：" in clean_content else "NONE"
@@ -150,6 +140,8 @@ def sort_results_by_order(results: list, order_text: str) -> list:
 
 def _fmt_srt_time(total_seconds: float) -> str:
     """将秒数转换为 SRT 时间戳格式 HH:MM:SS,mmm。"""
+    if total_seconds < 0:
+        total_seconds = 0
     hours = int(total_seconds // 3600)
     minutes = int((total_seconds % 3600) // 60)
     seconds = int(total_seconds % 60)
@@ -163,11 +155,13 @@ def parse_srt_time(time_str: str) -> float:
     m = re.match(r"(\d+):(\d{2}):(\d{2})\.?(\d{1,3})?", time_str)
     if m:
         h, mi, s, ms = m.groups()
-        return int(h) * 3600 + int(mi) * 60 + int(s) + int(ms or "0") / (10 ** len(ms or "0"))
+        ms_val = int(ms) / (10 ** len(ms)) if ms else 0.0
+        return int(h) * 3600 + int(mi) * 60 + int(s) + ms_val
     m = re.match(r"(\d+):(\d{2})\.?(\d{1,3})?", time_str)
     if m:
         mi, s, ms = m.groups()
-        return int(mi) * 60 + int(s) + int(ms or "0") / (10 ** len(ms or "0"))
+        ms_val = int(ms) / (10 ** len(ms)) if ms else 0.0
+        return int(mi) * 60 + int(s) + ms_val
     try:
         return float(time_str)
     except ValueError:
@@ -176,8 +170,7 @@ def parse_srt_time(time_str: str) -> float:
 
 def _export_srt(results: list, output_path: str, include_corrected: bool,
                 corrected_map: dict[int, str], keep_original: bool = False,
-                srt_mode: str = "corrected", segmented_map: dict[int, str] | None = None,
-                seg_time_map: dict[str, tuple[float, float]] | None = None):
+                srt_mode: str = "corrected", segmented_map: dict[int, str] | None = None):
     """导出为 SRT 字幕格式。
 
     srt_mode:
@@ -185,10 +178,8 @@ def _export_srt(results: list, output_path: str, include_corrected: bool,
         "corrected"  — 仅输出纠错文本（默认）
         "dual"       — 双语对照：原文在上，纠错在下
     segmented_map: {行号: 分句文本} 启用时按分句去重合并
-    seg_time_map: {分句文本: (start_sec, end_sec)} LLM 确定的精确时间轴
     """
     segmented_map = segmented_map or {}
-    seg_time_map = seg_time_map or {}
 
     # ── 分句去重：按分句文本分组，优先使用 seg_time_map 精确时间轴 ──
     if segmented_map:
@@ -200,36 +191,28 @@ def _export_srt(results: list, output_path: str, include_corrected: bool,
                 continue
             seg_text = segmented_map.get(i, "").strip()
             corrected = _clean_id_markers(corrected_map.get(i, "")) if include_corrected else ""
-            has_correction = bool(corrected and corrected != seg_text)
+            has_correction = bool(corrected and corrected != raw)
 
             start = item.get("time_sec", 0.0) or 0.0
             end = item.get("end_sec", 0.0) or 0.0
-            if end <= start:
-                end = start + 3.0
 
             if seg_text and seg_text in seg_groups:
                 g = seg_groups[seg_text]
-                if seg_text in seg_time_map:
-                    g["start"], g["end"] = seg_time_map[seg_text]
-                else:
-                    g["start"] = min(g["start"], start)
-                    g["end"] = max(g["end"], end)
-                # 收集该分句组内的纠错文本
+                g["start"] = min(g["start"], start)
+                g["end"] = max(g["end"], end)
+                # 收集该分句组内所有行的纠错文本，取最长的
                 if has_correction:
-                    g["corrected"] = corrected
+                    old_corr = g.get("_corrections", [])
+                    old_corr.append(corrected)
+                    g["_corrections"] = old_corr
                     g["has_correction"] = True
             elif seg_text:
-                if seg_text in seg_time_map:
-                    ts, te = seg_time_map[seg_text]
-                    seg_groups[seg_text] = {
-                        "start": ts, "end": te, "text": seg_text,
-                        "corrected": corrected, "has_correction": has_correction,
-                    }
-                else:
-                    seg_groups[seg_text] = {
-                        "start": start, "end": end, "text": seg_text,
-                        "corrected": corrected, "has_correction": has_correction,
-                    }
+                corrections = [corrected] if has_correction else []
+                seg_groups[seg_text] = {
+                    "start": start, "end": end, "text": seg_text,
+                    "corrected": corrected, "has_correction": has_correction,
+                    "_corrections": corrections,
+                }
                 seg_order.append(seg_text)
             else:
                 key = f"__raw_{i}"
@@ -239,6 +222,14 @@ def _export_srt(results: list, output_path: str, include_corrected: bool,
                     "corrected": "", "has_correction": False,
                 }
                 seg_order.append(key)
+
+        # 从收集的纠错列表中选最优（最长的非空纠错）
+        for g in seg_groups.values():
+            corrections = g.pop("_corrections", [])
+            if corrections:
+                best = max(corrections, key=len)
+                g["corrected"] = best
+                g["has_correction"] = True
 
         with open(output_path, "w", encoding="utf-8") as f:
             idx = 1
@@ -268,8 +259,6 @@ def _export_srt(results: list, output_path: str, include_corrected: bool,
                 continue
             start = item.get("time_sec", 0.0) or 0.0
             end = item.get("end_sec", 0.0) or 0.0
-            if end <= start:
-                end = start + 3.0  # 默认 3 秒时长
 
             if include_corrected and i in corrected_map:
                 corrected = _clean_id_markers(corrected_map[i])
@@ -303,7 +292,6 @@ def export_results(
     keep_original: bool = False,
     srt_mode: str = "corrected",
     segmented_map: dict[int, str] | None = None,
-    seg_time_map: dict[str, tuple[float, float]] | None = None,
 ):
     """导出结果。
 
@@ -316,7 +304,6 @@ def export_results(
         keep_original: True=保留原文(忽略纠错), False=纠错文本替换原文
         srt_mode: SRT 导出模式 "original"/"corrected"/"dual"
         segmented_map: {行号: 分句文本} 分句去重后导出
-        seg_time_map: {分句文本: (start_sec, end_sec)} LLM 确定的精确时间轴
     """
     corrected_map = corrected_map or {}
     segmented_map = segmented_map or {}
@@ -328,7 +315,7 @@ def export_results(
     elif fmt == "csv":
         _export_csv(results, output_path, include_corrected, corrected_map, keep_original, segmented_map)
     elif fmt == "srt":
-        _export_srt(results, output_path, include_corrected, corrected_map, keep_original, srt_mode, segmented_map, seg_time_map)
+        _export_srt(results, output_path, include_corrected, corrected_map, keep_original, srt_mode, segmented_map)
 
 
 from core.ai_correction import ID_TAG
@@ -343,7 +330,7 @@ def _export_txt(results: list, output_path: str, include_corrected: bool,
                 corrected_map: dict[int, str], keep_original: bool = False,
                 segmented_map: dict[int, str] | None = None):
     segmented_map = segmented_map or {}
-    seen = set()
+    seen_text = set()  # 按文本内容去重（分句合并后同一文本可能对应多行）
     with open(output_path, "w", encoding="utf-8") as f:
         for i, item in enumerate(results):
             raw = item.get('raw', '').strip()
@@ -353,19 +340,16 @@ def _export_txt(results: list, output_path: str, include_corrected: bool,
             # 优先级：分句 > 纠错 > 原始
             seg_text = segmented_map.get(i, "").strip()
             if seg_text:
-                output_line = f"[{item['time']}] {seg_text}"
+                text = seg_text
             elif not keep_original and include_corrected and i in corrected_map:
                 corrected = _clean_id_markers(corrected_map[i])
-                if corrected and corrected != raw:
-                    output_line = f"[{item['time']}] {corrected}"
-                else:
-                    output_line = f"[{item['time']}] {raw}"
+                text = corrected if (corrected and corrected != raw) else raw
             else:
-                output_line = f"[{item['time']}] {raw}"
+                text = raw
 
-            if output_line not in seen:
-                f.write(output_line + "\n")
-                seen.add(output_line)
+            if text not in seen_text:
+                f.write(f"[{item['time']}] {text}\n")
+                seen_text.add(text)
 
 
 def _export_json(results: list, output_path: str, include_corrected: bool,
@@ -373,8 +357,13 @@ def _export_json(results: list, output_path: str, include_corrected: bool,
                  segmented_map: dict[int, str] | None = None):
     segmented_map = segmented_map or {}
     data = []
+    seen_seg = set()  # 分句去重
     for i, item in enumerate(results):
         raw = item.get("raw", "").strip()
+        seg_text = segmented_map.get(i, "").strip()
+        # 分句去重：同一分句文本只输出一次
+        if seg_text and seg_text in seen_seg:
+            continue
         entry = {
             "timestamp": item["time"],
             "timestamp_seconds": round(item["time_sec"], 1),
@@ -385,10 +374,10 @@ def _export_json(results: list, output_path: str, include_corrected: bool,
             "raw": raw
         }
         # 优先级：分句 > 纠错 > 原始
-        seg_text = segmented_map.get(i, "").strip()
         if seg_text:
             entry["content"] = seg_text
             entry["segmented"] = seg_text
+            seen_seg.add(seg_text)
         elif include_corrected and i in corrected_map:
             corrected = _clean_id_markers(corrected_map[i])
             if corrected and corrected != raw:
@@ -414,8 +403,13 @@ def _export_csv(results: list, output_path: str, include_corrected: bool,
     with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
+        seen_seg = set()  # 分句去重
         for i, item in enumerate(results):
             raw = item.get("raw", "").strip()
+            seg_text = segmented_map.get(i, "").strip()
+            # 分句去重：同一分句文本只输出一次
+            if seg_text and seg_text in seen_seg:
+                continue
             row = {
                 "timestamp": item["time"],
                 "region": item["region"],
@@ -425,10 +419,10 @@ def _export_csv(results: list, output_path: str, include_corrected: bool,
                 "raw": raw
             }
             # 优先级：分句 > 纠错 > 原始
-            seg_text = segmented_map.get(i, "").strip()
             if seg_text:
                 row["content"] = seg_text
                 row["segmented"] = seg_text
+                seen_seg.add(seg_text)
             elif include_corrected and i in corrected_map:
                 corrected = _clean_id_markers(corrected_map[i])
                 if corrected and corrected != raw:

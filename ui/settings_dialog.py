@@ -1,4 +1,4 @@
-"""参数设置对话框 —— 自身创建所有控件，与 ConfigPanel 通过数据同步。"""
+"""参数设置对话框 —— 唯一的设置 UI 入口，通过 ConfigPanel 公共 API 同步数据。"""
 
 import os
 from pathlib import Path
@@ -34,16 +34,11 @@ BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.i18n import _
 from core.utils import fetch_models_from_url, populate_model_combo
 from ui.collapsible_group import CollapsibleGroup
-from ui.widget_helpers import safe_read_widget, safe_set_widget
-
-
-def _safe_val(widget, default=None):
-    """安全读取 widget 值（widget 可能已销毁）。"""
-    return safe_read_widget(widget, default)
+from ui.widget_helpers import safe_set_widget
 
 
 def _safe_set(widget, value, setter=None):
-    """安全设置 widget 值（保留 setter 参数兼容性）。"""
+    """安全设置 widget 值。"""
     if setter:
         try:
             setter(value)
@@ -56,7 +51,7 @@ def _safe_set(widget, value, setter=None):
 class SettingsDialog(QDialog):
     """参数设置对话框，集中管理处理参数 + 纠错 API 配置。"""
 
-    def __init__(self, config_panel, correction_config: dict = None, parent=None):
+    def __init__(self, config_panel, correction_config: dict = None, parent=None, filter_keywords: list[str] | None = None):
         super().__init__(parent)
         self.setWindowTitle(_("⚙ 参数设置"))
         self.setMinimumSize(760, 620)
@@ -65,6 +60,7 @@ class SettingsDialog(QDialog):
         self._corr_cfg = correction_config or {}
         self._sort_items: list = []
         self._filter_items: list = []
+        self._initial_filter_keywords = filter_keywords or []
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -84,193 +80,183 @@ class SettingsDialog(QDialog):
         layout.addWidget(btns)
 
     def _load_initial_values(self):
-        """从 ConfigPanel 读取所有参数初始值。"""
+        """从 ConfigPanel 的公共属性读取所有参数初始值。"""
         cp = self._cp
+        mp = cp.get_mode_params()
+
         # ── 基础设置 ──
-        _safe_set(self._frame_interval, _safe_val(cp._frame_interval_spin, 0.1))
-        _safe_set(self._process_mode, _safe_val(cp._process_mode_combo, "OCR + ASR（完整流程）"))
-        _safe_set(self._subtitle_duration, _safe_val(cp._subtitle_duration_spin, 3.0))
-        _safe_set(self._srt_export, _safe_val(cp._srt_export_combo, "仅纠正结果"))
-        _safe_set(self._post_sim_dedup, _safe_val(cp._post_sim_dedup, True))
-        _safe_set(self._corr_enabled, _safe_val(cp._corr_enabled_check, False))
+        _safe_set(self._frame_interval, mp.get("frame_interval", 0.1))
+        _safe_set(self._process_mode, mp.get("process_mode", "OCR + ASR（完整流程）"))
+        _safe_set(self._subtitle_duration, mp.get("subtitle_duration", 3.0))
+        _safe_set(self._srt_export, mp.get("srt_export_mode", "仅纠正结果"))
+        _safe_set(self._post_sim_dedup, mp.get("post_sim_dedup", True))
+        _safe_set(self._corr_enabled, mp.get("corr_enabled", False))
 
         # ── 字幕模式 ──
-        subtitle_mode = _safe_val(cp._subtitle_mode_combo, "流式字幕（去重）")
+        subtitle_mode = mp.get("subtitle_mode", "流式字幕（去重）")
         _safe_set(self._subtitle_mode, subtitle_mode)
         self._on_subtitle_mode_changed(subtitle_mode)
 
         # ── 流式参数 ──
-        _safe_set(self._s_sentinel, _safe_val(cp._s_sentinel_check, True))
-        _safe_set(self._s_drop_ratio, _safe_val(cp._s_drop_ratio_spin, 0.5))
-        _safe_set(self._s_buffer, _safe_val(cp._s_buffer_spin, 8))
-        _safe_set(self._s_sim, _safe_val(cp._s_sim_spin, 0.85))
-        _safe_set(self._s_min_text, _safe_val(cp._s_min_text_spin, 2))
-        _safe_set(self._s_filter, _safe_val(cp._s_filter_edit, ""))
+        _safe_set(self._s_sentinel, mp.get("sentinel_enabled", True))
+        _safe_set(self._s_drop_ratio, mp.get("s_drop_ratio", 0.5))
+        _safe_set(self._s_buffer, mp.get("s_buffer_size", 8))
+        _safe_set(self._s_sim, mp.get("s_sim_threshold", 0.85))
+        _safe_set(self._s_min_text, mp.get("s_min_text_len", 2))
 
         # ── 常规参数 ──
-        _safe_set(self._r_dedup, _safe_val(cp._r_dedup_check, True))
-        _safe_set(self._r_sim, _safe_val(cp._r_sim_spin, 0.9))
-        _safe_set(self._r_buffer, _safe_val(cp._r_buffer_spin, 5))
-        _safe_set(self._r_min_text, _safe_val(cp._r_min_text_spin, 2))
-        _safe_set(self._r_filter, _safe_val(cp._r_filter_edit, ""))
-        _safe_set(self._r_interval, _safe_val(cp._r_interval_spin, 2.0))
+        _safe_set(self._r_dedup, mp.get("r_dedup", True))
+        _safe_set(self._r_sim, mp.get("r_sim_threshold", 0.9))
+        _safe_set(self._r_buffer, mp.get("r_buffer_size", 5))
+        _safe_set(self._r_min_text, mp.get("r_min_text_len", 2))
+        _safe_set(self._r_interval, mp.get("r_interval", 2.0))
 
         # ── 后处理 ──
-        _safe_set(self._post_conf_check, _safe_val(cp._post_conf_check, False))
-        _safe_set(self._post_conf_threshold, _safe_val(cp._post_conf_threshold, 0.6))
-        _safe_set(self._post_sim_threshold, _safe_val(cp._post_sim_threshold, 0.9))
-        _safe_set(self._post_min_text_len, _safe_val(cp._post_min_text_len, 2))
+        _safe_set(self._post_conf_check, mp.get("post_conf_enabled", False))
+        _safe_set(self._post_conf_threshold, mp.get("post_conf_threshold", 0.6))
+        _safe_set(self._post_sim_threshold, mp.get("post_sim_threshold", 0.9))
+        _safe_set(self._post_min_text_len, mp.get("post_min_text_len", 2))
 
         # ── 过滤器 ──
         self._filter_items.clear()
         self._filter_list.clear()
-        self._filter_original = []  # 用于计算增删差异
-        try:
-            for i in range(cp._filter_list.count()):
-                item = cp._filter_list.item(i)
-                if item:
-                    self._filter_items.append(item.text())
-                    self._filter_list.addItem(item.text())
-            self._filter_original = list(self._filter_items)
-        except RuntimeError:
-            pass
+        self._filter_original = list(self._initial_filter_keywords)
+        for kw in self._initial_filter_keywords:
+            self._filter_items.append(kw)
+            self._filter_list.addItem(kw)
 
         # ── AI 纠错 ──
-        _safe_set(self._corr_translate, _safe_val(cp._corr_translate_check, False))
-        _safe_set(self._corr_stream, _safe_val(cp._corr_stream_check, False))
-        _safe_set(self._corr_json, _safe_val(cp._corr_json_check, False))
-        _safe_set(self._corr_extract_env, _safe_val(cp._corr_extract_env_check, False))
-        # proofread 开关不在 config_panel，从 ai_correction.json 读取
+        _safe_set(self._corr_translate, mp.get("corr_translate", False))
+        _safe_set(self._corr_stream, mp.get("corr_stream", False))
+        _safe_set(self._corr_json, mp.get("corr_json", False))
+        _safe_set(self._corr_extract_env, mp.get("corr_extract_env", False))
         _safe_set(self._corr_proofread, self._corr_cfg.get("enable_proofread", False))
-        _safe_set(self._corr_summary_prompt, _safe_val(cp._corr_summary_prompt_text, ""))
-        _safe_set(self._corr_system_prompt, _safe_val(cp._corr_system_prompt_text, ""))
-        _safe_set(self._corr_output_format, _safe_val(cp._corr_output_format_edit, ""))
-        _safe_set(self._corr_preset, _safe_val(cp._corr_preset_combo, ""))
-        _safe_set(self._corr_batch, _safe_val(cp._corr_batch_spin, 5))
-        _safe_set(self._corr_context, _safe_val(cp._corr_context_spin, 3))
-        _safe_set(self._corr_retry, _safe_val(cp._corr_retry_spin, 2))
-        _safe_set(self._corr_prompt, _safe_val(cp._corr_prompt_text, ""))
+        _safe_set(self._corr_summary_prompt, mp.get("corr_summary_prompt", ""))
+        _safe_set(self._corr_system_prompt, mp.get("corr_system_prompt", ""))
+        _safe_set(self._corr_output_format, mp.get("corr_output_format", ""))
+        _safe_set(self._corr_preset, mp.get("corr_preset", ""))
+        _safe_set(self._corr_batch, mp.get("corr_batch_size", 5))
+        _safe_set(self._corr_context, mp.get("corr_context_window", 3))
+        _safe_set(self._corr_retry, mp.get("corr_retry", 2))
+        _safe_set(self._corr_prompt, mp.get("corr_prompt", ""))
 
         # ── ASR ──
-        _safe_set(self._asr_model_dir, _safe_val(cp._asr_model_dir_edit, "models/asr"))
+        _safe_set(self._asr_model_dir, mp.get("asr_model_dir", "models/asr"))
         self._refresh_asr_models()
-        model_size = _safe_val(cp._asr_model_combo, "")
-        if model_size:
-            _safe_set(self._asr_model, model_size)
-        _safe_set(self._asr_lang, _safe_val(cp._asr_lang_combo, "zh"))
-        _safe_set(self._asr_beam, _safe_val(cp._asr_beam_spin, 5))
-        _safe_set(self._asr_word_ts, _safe_val(cp._asr_word_ts_check, True))
-        _safe_set(self._asr_condition, _safe_val(cp._asr_condition_check, True))
-        _safe_set(self._asr_no_speech, _safe_val(cp._asr_no_speech_spin, 0.6))
-        _safe_set(self._asr_comp_ratio, _safe_val(cp._asr_comp_ratio_spin, 2.4))
-        _safe_set(self._asr_temp, _safe_val(cp._asr_temp_edit, "0.0,0.2,0.4,0.6,0.8,1.0"))
-        _safe_set(self._asr_hotwords, _safe_val(cp._asr_hotwords_edit, ""))
-        _safe_set(self._asr_prompt, _safe_val(cp._asr_prompt_edit, ""))
-        _safe_set(self._asr_vad, _safe_val(cp._asr_vad_check, False))
-        _safe_set(self._asr_vad_silence, _safe_val(cp._asr_vad_silence_spin, 500))
-        _safe_set(self._asr_vad_thresh, _safe_val(cp._asr_vad_thresh_spin, 0.5))
-        _safe_set(self._asr_region, _safe_val(cp._asr_region_edit, "语音"))
+        model_path = mp.get("asr_model_path", "")
+        if model_path:
+            self._select_combo_by_data(self._asr_model, model_path)
+        _safe_set(self._asr_lang, mp.get("asr_language", "zh"))
+        _safe_set(self._asr_beam, mp.get("asr_beam_size", 5))
+        _safe_set(self._asr_word_ts, mp.get("asr_word_ts", True))
+        _safe_set(self._asr_condition, mp.get("asr_condition_prev", True))
+        _safe_set(self._asr_no_speech, mp.get("asr_no_speech_thresh", 0.6))
+        _safe_set(self._asr_comp_ratio, mp.get("asr_comp_ratio_thresh", 2.4))
+        _safe_set(self._asr_temp, mp.get("asr_temperature", "0.0,0.2,0.4,0.6,0.8,1.0"))
+        _safe_set(self._asr_hotwords, mp.get("asr_hotwords", ""))
+        _safe_set(self._asr_prompt, mp.get("asr_initial_prompt", ""))
+        _safe_set(self._asr_vad, mp.get("asr_vad", False))
+        _safe_set(self._asr_vad_silence, mp.get("asr_vad_min_silence", 500))
+        _safe_set(self._asr_vad_thresh, mp.get("asr_vad_threshold", 0.5))
+        _safe_set(self._asr_region, mp.get("asr_region_name", "语音"))
 
         # ── 排序 ──
         self._sort_items.clear()
         self._sort_list.clear()
-        try:
-            for i in range(cp._sort_list.count()):
-                item = cp._sort_list.item(i)
-                widget = cp._sort_list.itemWidget(item)
-                if widget:
-                    children = widget.findChildren((QLineEdit, QLabel))
-                    if len(children) >= 2:
-                        prefix = children[0].text().strip() if isinstance(children[0], QLineEdit) else ""
-                        name = children[1].text() if isinstance(children[1], QLabel) else ""
-                        suffix = children[2].text().strip() if len(children) > 2 and isinstance(children[2], QLineEdit) else ""
-                        self._sort_items.append((prefix, name, suffix))
-                        self._add_sort_row(name, prefix, suffix)
-        except RuntimeError:
-            pass
+        for prefix, name, suffix in cp.get_sort_rules():
+            self._sort_items.append((prefix, name, suffix))
+            self._add_sort_row(name, prefix, suffix)
 
     def _sync_values_to_cp(self):
-        """将对话框中的值写回 ConfigPanel 的控件。"""
+        """将对话框中的值通过 ConfigPanel 公共 API 写回。"""
+        params = {}
+
+        # ── 基础设置 ──
+        params["frame_interval"] = self._frame_interval.value()
+        params["process_mode"] = self._process_mode.currentText()
+        params["subtitle_duration"] = self._subtitle_duration.value()
+        params["srt_export_mode"] = self._srt_export.currentText()
+        params["post_sim_dedup"] = self._post_sim_dedup.isChecked()
+        params["corr_enabled"] = self._corr_enabled.isChecked()
+
+        # ── 字幕模式 ──
+        params["subtitle_mode"] = self._subtitle_mode.currentText()
+        params["sentinel_enabled"] = self._s_sentinel.isChecked()
+
+        # ── 流式参数 ──
+        params["s_drop_ratio"] = self._s_drop_ratio.value()
+        params["s_buffer_size"] = self._s_buffer.value()
+        params["s_sim_threshold"] = self._s_sim.value()
+        params["s_min_text_len"] = self._s_min_text.value()
+
+        # ── 常规参数 ──
+        params["r_dedup"] = self._r_dedup.isChecked()
+        params["r_sim_threshold"] = self._r_sim.value()
+        params["r_buffer_size"] = self._r_buffer.value()
+        params["r_min_text_len"] = self._r_min_text.value()
+        params["r_interval"] = self._r_interval.value()
+
+        # ── 后处理 ──
+        params["post_conf_enabled"] = self._post_conf_check.isChecked()
+        params["post_conf_threshold"] = self._post_conf_threshold.value()
+        params["post_sim_threshold"] = self._post_sim_threshold.value()
+        params["post_min_text_len"] = self._post_min_text_len.value()
+
+        # ── AI 纠错 ──
+        params["corr_translate"] = self._corr_translate.isChecked()
+        params["corr_stream"] = self._corr_stream.isChecked()
+        params["corr_json"] = self._corr_json.isChecked()
+        params["corr_extract_env"] = self._corr_extract_env.isChecked()
+        params["corr_summary_prompt"] = self._corr_summary_prompt.toPlainText()
+        params["corr_system_prompt"] = self._corr_system_prompt.toPlainText()
+        params["corr_output_format"] = self._corr_output_format.text()
+        params["corr_preset"] = self._corr_preset.currentText()
+        params["corr_batch_size"] = self._corr_batch.value()
+        params["corr_context_window"] = self._corr_context.value()
+        params["corr_retry"] = self._corr_retry.value()
+        params["corr_prompt"] = self._corr_prompt.toPlainText()
+
+        # ── ASR ──
+        params["asr_model_dir"] = self._asr_model_dir.text().strip() or "models/asr"
+        params["asr_model_path"] = self._asr_model.currentData() or ""
+        params["asr_language"] = self._asr_lang.currentText()
+        params["asr_beam_size"] = self._asr_beam.value()
+        params["asr_word_ts"] = self._asr_word_ts.isChecked()
+        params["asr_condition_prev"] = self._asr_condition.isChecked()
+        params["asr_no_speech_thresh"] = self._asr_no_speech.value()
+        params["asr_comp_ratio_thresh"] = self._asr_comp_ratio.value()
+        params["asr_temperature"] = self._asr_temp.text()
+        params["asr_hotwords"] = self._asr_hotwords.text()
+        params["asr_initial_prompt"] = self._asr_prompt.text()
+        params["asr_vad"] = self._asr_vad.isChecked()
+        params["asr_vad_min_silence"] = self._asr_vad_silence.value()
+        params["asr_vad_threshold"] = self._asr_vad_thresh.value()
+        params["asr_region_name"] = self._asr_region.text()
+
+        # ── 排序 ──
+        self._collect_sort_items()
+        params["region_order"] = "\n".join(
+            f"{prefix}：{name}：{suffix}" if prefix and suffix
+            else f"{prefix}：{name}" if prefix
+            else f"{name}：{suffix}" if suffix
+            else name
+            for prefix, name, suffix in self._sort_items if name
+        )
+
+        # 通过公共 API 写入 ConfigPanel
         cp = self._cp
-        _safe_set(cp._frame_interval_spin, _safe_val(self._frame_interval, 0.1))
-        _safe_set(cp._process_mode_combo, _safe_val(self._process_mode, "OCR + ASR（完整流程）"))
-        _safe_set(cp._subtitle_duration_spin, _safe_val(self._subtitle_duration, 3.0))
-        _safe_set(cp._srt_export_combo, _safe_val(self._srt_export, "仅纠正结果"))
-        _safe_set(cp._post_sim_dedup, _safe_val(self._post_sim_dedup, True))
-        _safe_set(cp._corr_enabled_check, _safe_val(self._corr_enabled, False))
+        cp.apply_mode_params(params)
 
-        _safe_set(cp._subtitle_mode_combo, _safe_val(self._subtitle_mode, "流式字幕（去重）"))
-        _safe_set(cp._s_sentinel_check, _safe_val(self._s_sentinel, True))
-        _safe_set(cp._s_drop_ratio_spin, _safe_val(self._s_drop_ratio, 0.5))
-        _safe_set(cp._s_buffer_spin, _safe_val(self._s_buffer, 8))
-        _safe_set(cp._s_sim_spin, _safe_val(self._s_sim, 0.85))
-        _safe_set(cp._s_min_text_spin, _safe_val(self._s_min_text, 2))
-        _safe_set(cp._s_filter_edit, _safe_val(self._s_filter, ""))
-        _safe_set(cp._r_dedup_check, _safe_val(self._r_dedup, True))
-        _safe_set(cp._r_sim_spin, _safe_val(self._r_sim, 0.9))
-        _safe_set(cp._r_buffer_spin, _safe_val(self._r_buffer, 5))
-        _safe_set(cp._r_min_text_spin, _safe_val(self._r_min_text, 2))
-        _safe_set(cp._r_filter_edit, _safe_val(self._r_filter, ""))
-        _safe_set(cp._r_interval_spin, _safe_val(self._r_interval, 2.0))
+        # ── 过滤器差异同步 ──
+        original = getattr(self, '_filter_original', [])
+        current = list(self._filter_items)
+        for kw in set(original) - set(current):
+            cp.filter_remove_requested.emit(kw)
+        for kw in set(current) - set(original):
+            cp.filter_add_requested.emit(kw)
 
-        _safe_set(cp._post_conf_check, _safe_val(self._post_conf_check, False))
-        _safe_set(cp._post_conf_threshold, _safe_val(self._post_conf_threshold, 0.6))
-        _safe_set(cp._post_sim_threshold, _safe_val(self._post_sim_threshold, 0.9))
-        _safe_set(cp._post_min_text_len, _safe_val(self._post_min_text_len, 2))
-
-        # 同步过滤器
-        try:
-            cp._filter_list.clear()
-            for kw in self._filter_items:
-                cp._filter_list.addItem(kw)
-            # 同步差异到 FilterManager（发射 ConfigPanel 信号）
-            original = getattr(self, '_filter_original', [])
-            current = list(self._filter_items)
-            removed = set(original) - set(current)
-            added = set(current) - set(original)
-            for kw in removed:
-                cp.filter_remove_requested.emit(kw)
-            for kw in added:
-                cp.filter_add_requested.emit(kw)
-        except RuntimeError:
-            pass
-
-        _safe_set(cp._corr_translate_check, _safe_val(self._corr_translate, False))
-        _safe_set(cp._corr_stream_check, _safe_val(self._corr_stream, False))
-        _safe_set(cp._corr_json_check, _safe_val(self._corr_json, False))
-        _safe_set(cp._corr_extract_env_check, _safe_val(self._corr_extract_env, False))
-        _safe_set(cp._corr_summary_prompt_text, _safe_val(self._corr_summary_prompt, ""))
-        _safe_set(cp._corr_system_prompt_text, _safe_val(self._corr_system_prompt, ""))
-        _safe_set(cp._corr_output_format_edit, _safe_val(self._corr_output_format, ""))
-        _safe_set(cp._corr_preset_combo, _safe_val(self._corr_preset, ""))
-        _safe_set(cp._corr_batch_spin, _safe_val(self._corr_batch, 5))
-        _safe_set(cp._corr_context_spin, _safe_val(self._corr_context, 3))
-        _safe_set(cp._corr_retry_spin, _safe_val(self._corr_retry, 2))
-        _safe_set(cp._corr_prompt_text, _safe_val(self._corr_prompt, ""))
-
-        _safe_set(cp._asr_model_dir_edit, _safe_val(self._asr_model_dir, "models/asr"))
-        _safe_set(cp._asr_model_combo, _safe_val(self._asr_model, ""))
-        _safe_set(cp._asr_lang_combo, _safe_val(self._asr_lang, "zh"))
-        _safe_set(cp._asr_beam_spin, _safe_val(self._asr_beam, 5))
-        _safe_set(cp._asr_word_ts_check, _safe_val(self._asr_word_ts, True))
-        _safe_set(cp._asr_condition_check, _safe_val(self._asr_condition, True))
-        _safe_set(cp._asr_no_speech_spin, _safe_val(self._asr_no_speech, 0.6))
-        _safe_set(cp._asr_comp_ratio_spin, _safe_val(self._asr_comp_ratio, 2.4))
-        _safe_set(cp._asr_temp_edit, _safe_val(self._asr_temp, "0.0,0.2,0.4,0.6,0.8,1.0"))
-        _safe_set(cp._asr_hotwords_edit, _safe_val(self._asr_hotwords, ""))
-        _safe_set(cp._asr_prompt_edit, _safe_val(self._asr_prompt, ""))
-        _safe_set(cp._asr_vad_check, _safe_val(self._asr_vad, False))
-        _safe_set(cp._asr_vad_silence_spin, _safe_val(self._asr_vad_silence, 500))
-        _safe_set(cp._asr_vad_thresh_spin, _safe_val(self._asr_vad_thresh, 0.5))
-        _safe_set(cp._asr_region_edit, _safe_val(self._asr_region, "语音"))
-
-        # 同步排序
-        try:
-            cp._sort_list.clear()
-            for prefix, name, suffix in self._sort_items:
-                cp._add_sort_row(name, prefix, suffix)
-        except RuntimeError:
-            pass
+        # ── 排序规则同步 ──
+        cp.set_sort_rules(list(self._sort_items))
 
     # ── helpers ──
     def _wrap_scroll(self, widget):
@@ -345,8 +331,6 @@ class SettingsDialog(QDialog):
         post_group.addLayout(pf)
         layout.addWidget(post_group)
 
-
-
         layout.addStretch()
         return tab
 
@@ -398,9 +382,6 @@ class SettingsDialog(QDialog):
         self._s_min_text.setRange(1, 100)
         self._s_min_text.setValue(2)
         s_layout.addRow("最小文字长度:", self._s_min_text)
-        self._s_filter = QLineEdit()
-        self._s_filter.setPlaceholderText("过滤关键词，逗号分隔（可选）")
-        s_layout.addRow("过滤关键词:", self._s_filter)
         self._s_group.addLayout(s_layout)
         layout.addWidget(self._s_group)
 
@@ -425,9 +406,6 @@ class SettingsDialog(QDialog):
         self._r_min_text.setRange(1, 100)
         self._r_min_text.setValue(2)
         r_layout.addRow("最小文字长度:", self._r_min_text)
-        self._r_filter = QLineEdit()
-        self._r_filter.setPlaceholderText("过滤关键词，逗号分隔（可选）")
-        r_layout.addRow("过滤关键词:", self._r_filter)
         self._r_interval = QDoubleSpinBox()
         self._r_interval.setRange(0.1, 60.0)
         self._r_interval.setSingleStep(0.5)
@@ -490,6 +468,7 @@ class SettingsDialog(QDialog):
         self._asr_comp_ratio.setValue(2.4)
         gfl.addRow("压缩比阈值:", self._asr_comp_ratio)
         self._asr_temp = QLineEdit("0.0,0.2,0.4,0.6,0.8,1.0")
+        self._asr_temp.setPlaceholderText("0.0,0.2,0.4,0.6,0.8,1.0")
         self._asr_temp.setToolTip("温度参数（逗号分隔），越低越确定")
         gfl.addRow("温度:", self._asr_temp)
         self._asr_hotwords = QLineEdit()
@@ -532,22 +511,42 @@ class SettingsDialog(QDialog):
         self._s_group.setVisible(is_streaming)
         self._r_group.setVisible(not is_streaming)
 
+    # faster-whisper 标准模型大小（可自动下载）
+    _STANDARD_ASR_MODELS = [
+        "tiny", "tiny.en", "base", "base.en", "small", "small.en",
+        "medium", "medium.en", "large-v1", "large-v2", "large-v3",
+        "distil-small.en", "distil-medium.en", "distil-large-v2",
+    ]
+
     def _refresh_asr_models(self):
         from core.asr_engine import scan_local_asr_models
         model_dir = self._asr_model_dir.text().strip() or "models/asr"
         base = BASE_DIR
         full_dir = str(base / model_dir) if not os.path.isabs(model_dir) else model_dir
-        models = scan_local_asr_models(full_dir)
+        local_models = scan_local_asr_models(full_dir)
         self._asr_model.blockSignals(True)
         self._asr_model.clear()
-        if models:
-            for path in models:
-                display = os.path.basename(path) if os.path.isdir(path) else path
-                self._asr_model.addItem(display, path)
+        # 添加本地已下载的模型（显示完整路径，data 为完整路径）
+        for path in local_models:
+            display = os.path.basename(path) if os.path.isdir(path) else path
+            self._asr_model.addItem(f"📁 {display}", path)
+        # 添加标准模型大小（data 为模型名称，首次使用时自动下载）
+        for size in self._STANDARD_ASR_MODELS:
+            # 跳过已作为本地模型添加的
+            if any(os.path.basename(p) == size for p in local_models):
+                continue
+            self._asr_model.addItem(f"⬇ {size}（在线下载）", size)
+        if self._asr_model.count() > 0:
             self._asr_model.setCurrentIndex(0)
-        else:
-            self._asr_model.addItem("（未找到本地模型，使用默认 large-v3）")
         self._asr_model.blockSignals(False)
+
+    @staticmethod
+    def _select_combo_by_data(combo: QComboBox, data_value: str):
+        """通过 item data 值设置 QComboBox 选中项（而非显示文本）。"""
+        for i in range(combo.count()):
+            if combo.itemData(i) == data_value:
+                combo.setCurrentIndex(i)
+                return
 
     # ── Tab 3: OCR 字幕处理 ──
     def _build_ocr_tab(self):
@@ -621,7 +620,7 @@ class SettingsDialog(QDialog):
 
     def _on_add_filter(self):
         kw = self._filter_input.text().strip()
-        if kw:
+        if kw and kw not in self._filter_items:
             self._filter_items.append(kw)
             self._filter_list.addItem(kw)
             self._filter_input.clear()
@@ -702,8 +701,9 @@ class SettingsDialog(QDialog):
         self._corr_preset = QComboBox()
         self._corr_preset.setToolTip("选择纠错使用的 API 连接预设")
         from core.api_preset_manager import APIPresetManager
-        self._corr_preset.addItems(APIPresetManager().get_names())
-        default_name = APIPresetManager().get_default_name()
+        preset_mgr = APIPresetManager()
+        self._corr_preset.addItems(preset_mgr.get_names())
+        default_name = preset_mgr.get_default_name()
         if default_name:
             self._corr_preset.setCurrentText(default_name)
         self._corr_preset.currentTextChanged.connect(self._on_preset_changed)
@@ -731,6 +731,7 @@ class SettingsDialog(QDialog):
         af.setSpacing(6)
         self._corr_api_key = QLineEdit()
         self._corr_api_key.setPlaceholderText(_("sk-xxx（可选）"))
+        self._corr_api_key.setEchoMode(QLineEdit.Password)
         self._corr_api_key.setText(self._corr_cfg.get("api_key", ""))
         af.addRow("API Key:", self._corr_api_key)
         self._corr_api_url = QLineEdit()
@@ -800,10 +801,13 @@ class SettingsDialog(QDialog):
     def _add_sort_row(self, name: str, prefix: str = "", suffix: str = ""):
         row = QWidget()
         row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(2, 1, 2, 1); row_layout.setSpacing(4)
+        row_layout.setContentsMargins(2, 1, 2, 1)
+        row_layout.setSpacing(4)
 
         prefix_edit = QLineEdit(prefix)
-        prefix_edit.setPlaceholderText("前缀"); prefix_edit.setMaximumWidth(80)
+        prefix_edit.setObjectName("sortPrefix")
+        prefix_edit.setPlaceholderText("前缀")
+        prefix_edit.setMaximumWidth(80)
         row_layout.addWidget(prefix_edit)
 
         chip = QLabel(name)
@@ -812,10 +816,14 @@ class SettingsDialog(QDialog):
         row_layout.addWidget(chip)
 
         suffix_edit = QLineEdit(suffix)
-        suffix_edit.setPlaceholderText("后缀"); suffix_edit.setMaximumWidth(80)
+        suffix_edit.setObjectName("sortSuffix")
+        suffix_edit.setPlaceholderText("后缀")
+        suffix_edit.setMaximumWidth(80)
         row_layout.addWidget(suffix_edit)
 
-        btn_x = QPushButton("✕"); btn_x.setMaximumWidth(22); btn_x.setMaximumHeight(22)
+        btn_x = QPushButton("✕")
+        btn_x.setMaximumWidth(22)
+        btn_x.setMaximumHeight(22)
         btn_x.clicked.connect(lambda: self._remove_sort_item(row))
         row_layout.addWidget(btn_x)
         row_layout.addStretch()
@@ -835,11 +843,13 @@ class SettingsDialog(QDialog):
                 break
 
     def _get_sort_row_info(self, row: QWidget):
-        children = row.findChildren((QLineEdit, QLabel))
-        if len(children) >= 2:
-            prefix = children[0].text().strip() if isinstance(children[0], QLineEdit) else ""
-            name = children[1].text() if isinstance(children[1], QLabel) else ""
-            suffix = children[2].text().strip() if len(children) > 2 and isinstance(children[2], QLineEdit) else ""
+        prefix_edit = row.findChild(QLineEdit, "sortPrefix")
+        suffix_edit = row.findChild(QLineEdit, "sortSuffix")
+        chip = row.findChild(QLabel, "regionChip")
+        if chip:
+            prefix = prefix_edit.text().strip() if prefix_edit else ""
+            name = chip.text()
+            suffix = suffix_edit.text().strip() if suffix_edit else ""
             return (prefix, name, suffix)
         return ("", "", "")
 
@@ -867,8 +877,8 @@ class SettingsDialog(QDialog):
         self._corr_api_model.setEditText(preset.get("model", ""))
         self._corr_api_timeout.setValue(preset.get("timeout", 30))
 
-    def get_corr_api_config(self) -> dict:
-        """获取 API 连接配置，同时回写到当前选中预设。"""
+    def _sync_preset(self):
+        """将当前 API 连接字段回写到选中预设。"""
         from core.api_preset_manager import APIPresetManager
         preset_name = self._corr_preset.currentText()
         if preset_name:
@@ -878,6 +888,9 @@ class SettingsDialog(QDialog):
                 "model": self._corr_api_model.currentText(),
                 "timeout": self._corr_api_timeout.value(),
             })
+
+    def get_corr_api_config(self) -> dict:
+        """获取 API 连接配置（纯读取）。"""
         return {
             "enabled": self._corr_enabled.isChecked(),
             "api_key": self._corr_api_key.text(),
@@ -891,7 +904,7 @@ class SettingsDialog(QDialog):
         }
 
     def _on_fetch_corr_models(self):
-        """从纠错 API 连接的 Base URL 获取可用模型列表（后台线程，不阻塞 UI）。"""
+        """从纠错 API 连接的 Base URL 获取可用模型列表。"""
         base_url = self._corr_api_url.text().strip()
         if not base_url:
             self._corr_model_status.setText("⚠ 请先输入 Base URL")
@@ -931,8 +944,7 @@ class SettingsDialog(QDialog):
 
     def _on_accept(self):
         """确认时：同步数据到 ConfigPanel 并触发应用。"""
-        self._collect_sort_items()
         self._sync_values_to_cp()
+        self._sync_preset()
         self._cp.set_proofread_enabled(self._corr_proofread.isChecked())
-        self._cp._on_apply_mode()
         self.accept()

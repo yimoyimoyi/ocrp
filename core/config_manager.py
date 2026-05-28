@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any, Union
@@ -26,17 +25,76 @@ DEFAULT_SETTINGS = {
 
 
 def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
-    """读取 JSON 文件，自动去除 // 行注释和 /* */ 块注释后解析"""
+    """读取 JSON 文件，自动去除 // 行注释和 /* */ 块注释后解析。
+
+    使用状态机正确处理字符串内的 // 和 /*（含转义引号）。
+    """
     with open(filepath, encoding="utf-8") as f:
         text = f.read()
-    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
-    lines = []
+    # 第一步：去除块注释（状态机，正确处理字符串内的 /*）
+    out: list[str] = []
+    in_string = False
+    in_block_comment = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if in_block_comment:
+            if ch == '*' and i + 1 < len(text) and text[i + 1] == '/':
+                in_block_comment = False
+                i += 2
+            else:
+                i += 1
+            continue
+        if in_string:
+            if ch == '\\':
+                out.append(ch)
+                if i + 1 < len(text):
+                    out.append(text[i + 1])
+                    i += 2
+                else:
+                    i += 1
+            elif ch == '"':
+                in_string = False
+                out.append(ch)
+                i += 1
+            else:
+                out.append(ch)
+                i += 1
+        else:
+            if ch == '"':
+                in_string = True
+                out.append(ch)
+                i += 1
+            elif ch == '/' and i + 1 < len(text) and text[i + 1] == '*':
+                in_block_comment = True
+                i += 2
+            else:
+                out.append(ch)
+                i += 1
+    text = ''.join(out)
+    # 第二步：去除行注释（状态机，正确处理字符串内的 //）
+    lines: list[str] = []
     for line in text.split('\n'):
-        idx = line.find('//')
-        if idx >= 0:
-            before = line[:idx]
-            if before.count('"') % 2 == 0 and before.count("'") % 2 == 0:
-                line = before
+        in_string = False
+        j = 0
+        while j < len(line):
+            ch = line[j]
+            if in_string:
+                if ch == '\\':
+                    j += 2
+                elif ch == '"':
+                    in_string = False
+                    j += 1
+                else:
+                    j += 1
+            elif ch == '"':
+                in_string = True
+                j += 1
+            elif ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
+                line = line[:j]
+                break
+            else:
+                j += 1
         lines.append(line)
     return json.loads('\n'.join(lines))
 
@@ -163,6 +221,7 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
         "model": "", "timeout": 30, "batch_size": 10, "context_window": 3, "retry": 2,
         "summary_prompt": "", "correction_system_prompt": "", "output_format": "",
         "prompts": {"default": ""}, "stream_mode": True, "json_mode": True,
+        "seg_time_gap": 3.0,
         "enable_sentence_segmentation": False,
         "sentence_segmentation_prompt": "你是一个字幕分句专家。请将碎片化的文本合并为字幕条目。",
         "sentence_segmentation_system_prompt": "你是一个字幕分句助手。只输出JSON结果。",
@@ -170,7 +229,7 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
         "proofread_prompt": "你是一个专业的字幕校对审核员。请检查以下已翻译/纠错后的字幕文本...",
     },
     "api_presets.json": {
-        "presets": [],
+        "presets": {},
         "default": "",
     },
     "prompt_templates.json": {
@@ -178,7 +237,6 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
     },
     "filters.json": {
         "keywords": [],
-        "garbage_patterns": [],
     },
 }
 
@@ -212,8 +270,8 @@ class ConfigManager:
                     raise ValueError("settings.json 不是有效的对象")
                 self._migrate_mode_params(cfg)
                 merged = self._merge_defaults(cfg)
-                # 如果加载的配置与默认值有显著差异（缺键或结构异常），重写文件
-                if set(cfg.keys()) - set(merged.keys()):
+                # 如果加载的配置与默认值有差异（缺键或多余键），重写文件
+                if set(cfg.keys()) != set(merged.keys()):
                     self._save_settings(merged)
                 return merged
             except Exception as e:

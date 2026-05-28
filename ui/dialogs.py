@@ -47,6 +47,7 @@ class EngineConfigDialog(QDialog):
 
         self._api_key_edit = QLineEdit()
         self._api_key_edit.setPlaceholderText("sk-xxx")
+        self._api_key_edit.setEchoMode(QLineEdit.Password)
         self._api_key_edit.setText(config.get("api_key", ""))
         form.addRow(_("API Key:"), self._api_key_edit)
 

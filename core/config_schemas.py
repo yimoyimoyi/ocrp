@@ -65,6 +65,7 @@ AI_CORRECTION_SCHEMA = {
         "output_format": {"type": "str"},
         "stream_mode": {"type": "bool"},
         "json_mode": {"type": "bool"},
+        "seg_time_gap": {"type": "float", "min": 0.0, "max": 60.0},
     }
 }
 
@@ -111,7 +112,6 @@ PROMPT_TEMPLATES_SCHEMA = {
 FILTERS_SCHEMA = {
     "properties": {
         "keywords": {"type": "list"},
-        "garbage_patterns": {"type": "list"},
     }
 }
 

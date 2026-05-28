@@ -133,6 +133,7 @@ class FFmpegReader:
             if self._proc.poll() is not None:
                 self._proc = None
                 return False
+            self._closed = False
             return True
         except Exception as e:
             logger.warning("FFmpeg 打开视频失败: %s", e)

@@ -101,7 +101,7 @@ if !errorlevel! equ 0 goto :pyok
 
 rem fallback - system Python
 echo     Download failed. Searching system Python...
-for %%c in (python3.13 python3.12 python3.11 python3 python) do (
+for %%c in (python3.13 python3.12 python3 python) do (
     where %%c >nul 2>&1
     if not !errorlevel! equ 0 (
     ) else (
@@ -159,6 +159,7 @@ if !errorlevel! neq 0 (
     echo     Install manually: https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
     echo     Extract ffmpeg.exe, ffprobe.exe to core\
     call :log "FFmpeg download failed"
+    set "FFMPEG_MISSING=1"
     goto :ffdone
 )
 
@@ -221,6 +222,7 @@ if !errorlevel! equ 0 goto :sync_ok
 echo     [WARN] GPU sync failed, retry CPU mode...
 call :log "GPU failed, retry CPU"
 set "USE_GPU=0"
+if exist ".venv" rmdir /s /q ".venv" 2>nul
 del uv.lock 2>nul
 uv sync %UV_SYNC_OPTS%
 if !errorlevel! equ 0 goto :sync_ok
@@ -275,6 +277,12 @@ rem -- done -------------------------------------------------------------
 echo.
 echo =========================================
 echo   Setup complete!
+if defined FFMPEG_MISSING (
+    echo.
+    echo   [WARN] FFmpeg not installed! Video processing will not work.
+    echo   Download manually: https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+    echo   Extract ffmpeg.exe, ffprobe.exe to core\
+)
 echo.
 echo   Launch:   orcp_gui.bat
 echo   Diagnose: diagnose.bat

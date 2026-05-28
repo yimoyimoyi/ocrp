@@ -18,7 +18,6 @@ class FilterManager:
 
     def __init__(self):
         self._keywords: list[str] = []
-        self._garbage_patterns: list[str] = []
         self.reload()
 
     def reload(self):
@@ -31,18 +30,11 @@ class FilterManager:
                 from core.config_schemas import FILTERS_SCHEMA
                 validate_config(data, FILTERS_SCHEMA, "filters.json")
                 self._keywords = data.get("keywords", [])
-                self._garbage_patterns = data.get("garbage_patterns", [])
             except Exception as e:
                 logger.warning("加载过滤配置失败: %s", e)
                 self._keywords = []
-                self._garbage_patterns = []
         else:
             self._keywords = []
-            self._garbage_patterns = []
-
-    def get_garbage_patterns(self) -> list[str]:
-        """获取垃圾文本过滤模式列表。"""
-        return list(self._garbage_patterns)
 
     def get_keywords(self) -> list[str]:
         """获取所有过滤关键词。"""
@@ -70,17 +62,18 @@ class FilterManager:
         return False
 
     def matches(self, text: str) -> bool:
-        """检查文本是否匹配任一过滤关键词。"""
+        """检查文本是否匹配任一过滤关键词（大小写不敏感）。"""
         if not text or not self._keywords:
             return False
-        return any(kw in text for kw in self._keywords)
+        low = text.lower()
+        return any(kw.lower() in low for kw in self._keywords)
 
     def _save(self) -> bool:
         """保存关键词到配置文件。返回是否成功。"""
         try:
             FILTERS_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(FILTERS_PATH, "w", encoding="utf-8") as f:
-                json.dump({"keywords": self._keywords, "garbage_patterns": self._garbage_patterns}, f, ensure_ascii=False, indent=2)
+                json.dump({"keywords": self._keywords}, f, ensure_ascii=False, indent=2)
             return True
         except Exception as e:
             logger.warning("保存过滤配置失败: %s", e)

@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   ORCP Dark Theme — 高对比度、统一色温、无蓝色元素
+   ORCP Dark Theme — 高对比度、统一色温、蓝色强调色
    ═══════════════════════════════════════════════════════════════ */
 
 /* ── 全局 ── */
@@ -68,6 +68,9 @@ QPushButton#btnBatchStart {
     color: #ffffff; font-weight: bold; min-height: 30px; border-radius: 6px;
 }
 QPushButton#btnBatchStart:hover { background-color: #22a34a; }
+QPushButton#btnBatchStart:pressed { background-color: #15732e; }
+
+QPushButton#btnBatchStop { min-height: 30px; }
 
 QPushButton#btnAsrOnly {
     background-color: #8257e5; border-color: #9a74ed;
@@ -80,20 +83,22 @@ QPushButton#btnOcrOnly {
     background-color: #b8860b; border-color: #d4a017;
     color: #ffffff; font-weight: bold; min-height: 32px; border-radius: 6px;
 }
-QPushButton#btnOcrOnly:hover { background-color: #d4a017; }
+QPushButton#btnOcrOnly:hover   { background-color: #d4a017; }
+QPushButton#btnOcrOnly:pressed { background-color: #9a7209; }
 
 QPushButton#btnCorrection {
     background-color: #1f6feb; border-color: #388bfd;
     color: #ffffff; font-weight: bold; min-height: 32px; border-radius: 6px;
 }
-QPushButton#btnCorrection:hover { background-color: #388bfd; }
+QPushButton#btnCorrection:hover   { background-color: #388bfd; }
 QPushButton#btnCorrection:pressed { background-color: #1158c7; }
 
 QPushButton#btnCorrectionAll {
     background-color: #1f6feb; border-color: #388bfd;
     color: #ffffff; font-weight: bold; min-height: 32px; border-radius: 6px;
 }
-QPushButton#btnCorrectionAll:hover { background-color: #388bfd; }
+QPushButton#btnCorrectionAll:hover   { background-color: #388bfd; }
+QPushButton#btnCorrectionAll:pressed { background-color: #1158c7; }
 
 QPushButton#btnTheme { min-height: 30px; }
 QPushButton#btnRemoveRegion { color: #e04542; min-height: 28px; }
@@ -147,6 +152,7 @@ QLineEdit, QTextEdit, QPlainTextEdit {
     border: 1px solid #2a2a33; padding: 6px 8px;
     border-radius: 6px; selection-background-color: #58a6ff50;
 }
+QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover { border-color: #3a3a45; }
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus { border-color: #58a6ff; }
 QLineEdit:disabled, QTextEdit:disabled {
     background-color: #141419; color: #5f6368;
@@ -189,6 +195,7 @@ QFrame#searchBar QLineEdit {
     padding: 2px 6px;
     font-size: 15px;
 }
+QFrame#searchBar QLineEdit:hover { border-color: #58a6ff; }
 QFrame#searchBar QLineEdit:focus { border-color: #58a6ff; }
 QFrame#searchBar QToolButton {
     background-color: #1c1c24;
@@ -305,8 +312,8 @@ QSpinBox, QDoubleSpinBox {
     background-color: #1c1c24; color: #e8eaed;
     border: 1px solid #2a2a33; padding: 5px 8px; border-radius: 6px;
 }
-QSpinBox:focus, QDoubleSpinBox:focus { border-color: #58a6ff; }
 QSpinBox:hover, QDoubleSpinBox:hover { border-color: #3a3a45; }
+QSpinBox:focus, QDoubleSpinBox:focus { border-color: #58a6ff; }
 
 /* ── 状态栏 ── */
 QStatusBar {
@@ -463,10 +470,10 @@ QLabel#regionChip {
     background-color: #141419; border-color: #2a2a33;
 }
 #settingsDialog QSpinBox:hover, #settingsDialog QDoubleSpinBox:hover {
-    border-color: #2a2a33;
+    border-color: #3a3a45;
 }
 #settingsDialog QLineEdit { background-color: #141419; border-color: #2a2a33; }
-#settingsDialog QLineEdit:hover { border-color: #2a2a33; }
+#settingsDialog QLineEdit:hover { border-color: #3a3a45; }
 #settingsDialog QTextEdit { background-color: #141419; border-color: #2a2a33; }
 #settingsDialog QComboBox { background-color: #141419; border-color: #2a2a33; }
 #settingsDialog QDialogButtonBox QPushButton { min-width: 80px; }

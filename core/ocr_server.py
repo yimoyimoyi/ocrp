@@ -31,6 +31,7 @@ if sys.platform == "win32":
     import importlib.util
 
     # torch/lib/ — torch 自带 CUDA 运行时
+    _tl = None
     try:
         _ts = importlib.util.find_spec("torch")
         if _ts and _ts.origin:

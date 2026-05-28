@@ -41,8 +41,8 @@ dependencies = [
     "RapidFuzz>=3.0",
     # 音频 / ASR
     "whisperx>=3.3.1",
-    "torchaudio<2.11",
-    "torch<2.11",
+    "torchaudio>=2.0,<2.11",
+    "torch>=2.0,<2.11",
     # 系统工具
     "psutil>=5.9",
     "tqdm>=4.60",

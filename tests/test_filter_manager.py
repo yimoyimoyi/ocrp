@@ -4,12 +4,12 @@ import json
 
 
 class TestFilterManager:
-    """测试 FilterManager 关键词和垃圾模式管理。"""
+    """测试 FilterManager 关键词管理。"""
 
     def test_init_loads_keywords(self, tmp_path):
 
         # Write temp config
-        data = {"keywords": ["test1", "test2"], "garbage_patterns": ["垃圾1"]}
+        data = {"keywords": ["test1", "test2"]}
         p = tmp_path / "filters.json"
         p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
@@ -21,7 +21,6 @@ class TestFilterManager:
             mgr = fm.FilterManager()
             assert "test1" in mgr.get_keywords()
             assert "test2" in mgr.get_keywords()
-            assert "垃圾1" in mgr.get_garbage_patterns()
         finally:
             fm.FILTERS_PATH = old_path
 
@@ -80,12 +79,15 @@ class TestFilterManager:
         mgr._keywords = []
         assert not mgr.matches("anything")
 
-    def test_garbage_patterns_default(self):
+    def test_matches_case_insensitive(self):
         from core.filter_manager import FilterManager
 
         mgr = FilterManager()
-        mgr._garbage_patterns = []
-        assert mgr.get_garbage_patterns() == []
+        mgr._keywords = ["Hello", "WORLD"]
+        assert mgr.matches("say HELLO to the world")
+        assert mgr.matches("World peace")
+        assert mgr.matches("helloworld")
+        assert not mgr.matches("nothing here")
 
     def test_get_keywords_returns_copy(self):
         from core.filter_manager import FilterManager

@@ -31,9 +31,6 @@ from core.ocr_engine import (
 )
 from core.prompt_manager import PromptTemplateManager as PromptTemplateManager
 from core.result_processor import (
-    GARBAGE_PATTERN as GARBAGE_PATTERN,
-)
-from core.result_processor import (
     export_results as export_results,
 )
 from core.result_processor import (

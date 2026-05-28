@@ -54,7 +54,9 @@ class PromptTemplateManager:
                 data = _load_json_with_comments(path)
                 from core.config_schema import validate_config
                 from core.config_schemas import PROMPT_TEMPLATES_SCHEMA
-                validate_config(data, PROMPT_TEMPLATES_SCHEMA, "prompt_templates.json")
+                ok, errors = validate_config(data, PROMPT_TEMPLATES_SCHEMA, "prompt_templates.json")
+                if not ok:
+                    logger.warning("提示词模板配置校验失败: %s", "; ".join(errors[:3]))
                 self._templates = data.get("templates", [])
                 logger.info("已加载 %d 个提示词模板", len(self._templates))
             except Exception as e:

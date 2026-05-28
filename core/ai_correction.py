@@ -24,7 +24,7 @@ CONFIG_DIR = BASE_DIR / "config"
 
 logger = get_logger(__name__)
 
-# [DEBUG] 临时调试日志 —— LLM 输入输出
+# [DEBUG] 临时调试日志 —— LLM 输入输出（仅 ORCP_DEBUG_SEG=1 时启用）
 import datetime as _adt
 
 _ALOG = BASE_DIR / "logs" / "debug_seg.log"
@@ -32,6 +32,15 @@ _ALOG.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _alog(msg: str):
+    """写入分句/纠错调试日志。仅在环境变量 ORCP_DEBUG_SEG=1 时启用。"""
+    if os.environ.get("ORCP_DEBUG_SEG", "") != "1":
+        return
+    try:
+        if _ALOG.exists() and _ALOG.stat().st_size > 5 * 1024 * 1024:
+            data = _ALOG.read_bytes()
+            _ALOG.write_bytes(data[len(data) // 2:])
+    except OSError:
+        pass
     with open(_ALOG, "a", encoding="utf-8") as f:
         f.write(f"{_adt.datetime.now().strftime('%H:%M:%S.%f')[:-3]} [AI] {msg}\n")
 
@@ -82,6 +91,8 @@ def _resolve_api_config(config: dict, preset_name: str = "") -> dict:
         preset = APIPresetManager().get_preset(preset_name)
         if preset:
             return dict(preset)
+        logger.error("API 预设 [%s] 不存在，请检查 api_presets.json", preset_name)
+        return {"api_key": "", "base_url": "", "model": "", "timeout": 30}
     return {
         "api_key": config.get("api_key", "").strip(),
         "base_url": config.get("base_url", "http://127.0.0.1:8080"),
@@ -125,9 +136,9 @@ class AICorrector:
             "请用简洁的中文回答，格式：\n"
             "领域：xxx\n氛围：xxx\n内容：xxx")
         self._correction_system_prompt = self._config.get("correction_system_prompt",
-            "你是一个专业的字幕校对助手。你接收带有时间轴（起止时间）的OCR识别文本列表，"
-            "输出时保留原始行号前缀，可根据语义合并或拆分条目，并为每条重新设定合理的起止时间。"
-            "用户自定义提示词作为额外参考，不要被其限死输出格式。只返回修正后的结果。")
+            "你是一个专业的字幕校对助手。你接收带有时间轴的OCR识别文本列表，"
+            "逐行校对，保持行数不变，只修正明显错误，不要合并或拆分条目。"
+            "用户自定义提示词作为额外参考。只返回修正后的结果。")
         self._output_format = self._config.get("output_format", "[纠正后文本]")
         # ── 分句模式字段 ──
         self._sentence_segmentation_enabled = self._config.get("enable_sentence_segmentation", False)
@@ -135,6 +146,7 @@ class AICorrector:
             "你是一个字幕分句专家。请根据语义将以下碎片化的OCR识别文本合并为完整的字幕条目。")
         self._segmentation_system_prompt = self._config.get("sentence_segmentation_system_prompt",
             "你是一个字幕分句助手。输入是连续的时间轴文本片段。你的任务是决定哪些连续行应该合并为一句话，并逐字拼接（仅可加标点）。禁止添加、删除或改写任何文字。只输出JSON，不要加任何说明。")
+        self._seg_time_gap: float = self._config.get("seg_time_gap", 3.0)
         # ── 校对模式字段 ──
         self._use_template: bool = self._config.get("use_template", False)
         self._template_content: str = ""  # 由 ConfigPanel 或 main_window 设置
@@ -156,7 +168,17 @@ class AICorrector:
         self._enabled = val
 
     def reload_config(self):
-        """重新加载 ai_correction.json 配置。"""
+        """重新加载 ai_correction.json 配置（保留运行时模式标志）。"""
+        # 保存运行时状态（UI setter 设置的值，不应被配置文件覆盖）
+        _translate = self._translate_mode
+        _stream = self._stream_mode
+        _json = self._json_mode
+        _use_tpl = self._use_template
+        _tpl_content = self._template_content
+        _env_ctx = self._env_context
+        _extract = self._extract_env
+        _seg_tg = self._seg_time_gap
+
         self._config = load_correction_config()
         self._enabled = self._config.get("enabled", False)
         self._retry = self._config.get("retry_on_failure", 2)
@@ -170,21 +192,40 @@ class AICorrector:
         self._timeout = api_cfg.get("timeout", 30)
         self._summary_prompt = self._config.get("summary_prompt",
             "请根据以下OCR识别文本，总结出这段内容的：\n"
-            "1. 领域/类型\n2. 整体氛围/语气\n3. 主要内容/主题")
+            "1. 领域/类型（如：小说、新闻、游戏对话、学术论文等）\n"
+            "2. 整体氛围/语气（如：严肃、欢快、悲伤、紧张等）\n"
+            "3. 主要内容/主题（一句话概括）\n\n"
+            "请用简洁的中文回答，格式：\n"
+            "领域：xxx\n氛围：xxx\n内容：xxx")
         self._correction_system_prompt = self._config.get("correction_system_prompt",
-            "你是一个专业的字幕校对助手。你接收带有时间轴（起止时间）的OCR识别文本列表，"
-            "输出时保留原始行号前缀，可根据语义合并或拆分条目，并为每条重新设定合理的起止时间。"
-            "用户自定义提示词作为额外参考，不要被其限死输出格式。只返回修正后的结果。")
+            "你是一个专业的字幕校对助手。你接收带有时间轴的OCR识别文本列表，"
+            "逐行校对，保持行数不变，只修正明显错误，不要合并或拆分条目。"
+            "用户自定义提示词作为额外参考。只返回修正后的结果。")
         self._output_format = self._config.get("output_format", "[纠正后文本]")
         self._sentence_segmentation_enabled = self._config.get("enable_sentence_segmentation", False)
         self._segmentation_prompt = self._config.get("sentence_segmentation_prompt",
             "你是一个字幕分句专家。请根据语义将以下碎片化的OCR识别文本合并为完整的字幕条目。")
         self._segmentation_system_prompt = self._config.get("sentence_segmentation_system_prompt",
-            "你是一个专业的字幕分句助手。你接收带有时间轴的OCR识别文本碎片列表，根据语义将碎片合并为完整字幕句子。只输出JSON结果，不要添加任何说明文字。")
-        self._use_template = self._config.get("use_template", False)
+            "你是一个字幕分句助手。输入是连续的时间轴文本片段。你的任务是决定哪些连续行应该合并为一句话，并逐字拼接（仅可加标点）。禁止添加、删除或改写任何文字。只输出JSON，不要加任何说明。")
+        self._seg_time_gap = self._config.get("seg_time_gap", 3.0)
         self._proofread_enabled = self._config.get("enable_proofread", False)
         self._proofread_prompt = self._config.get("proofread_prompt",
-            "你是一个专业的字幕校对审核员...")
+            "你是一个专业的字幕校对审核员。请检查以下已翻译/纠错后的字幕文本，找出并修正：\n"
+            "1. 语法错误或不自然的表达\n2. 术语翻译不一致\n3. 遗漏或多余的信息\n"
+            "4. 不符合上下文语境的用词\n\n"
+            "原始文本：{原始结果}\n"
+            "待校对文本：{待校对文本}\n\n"
+            "请直接输出校对后的文本，不要附加说明。")
+
+        # 恢复运行时状态
+        self._translate_mode = _translate
+        self._stream_mode = _stream
+        self._json_mode = _json
+        self._use_template = _use_tpl
+        self._template_content = _tpl_content
+        self._env_context = _env_ctx
+        self._extract_env = _extract
+        self._seg_time_gap = _seg_tg
 
     @property
     def engine_name(self) -> str:
@@ -264,6 +305,28 @@ class AICorrector:
     def extract_env(self, val: bool):
         self._extract_env = val
 
+    def _should_skip_env_extraction(self) -> bool:
+        """判断是否跳过环境提取 API 调用。
+
+        跳过条件（满足任一）：
+        1. extract_env 开关已打开（用户手动管理环境上下文）
+        2. _env_context 已存在（已提取过）
+        3. 纠错/翻译 prompt 中已包含环境相关占位符或关键词
+        """
+        if self._extract_env:
+            return True
+        if self._env_context:
+            return True
+        env_keywords = ("{环境信息}", "环境上下文", "领域", "氛围", "环境描述")
+        combined_prompt = (
+            self._prompt_template + self._template_content +
+            self._summary_prompt + self._proofread_prompt
+        )
+        for kw in env_keywords:
+            if kw in combined_prompt:
+                return True
+        return False
+
     # ── API 调用辅助方法 ───────────────────────────────────────────
 
     def _get_engine_config(self) -> dict:
@@ -307,9 +370,9 @@ class AICorrector:
         if self._translate_mode:
             system_msg = (
                 "你是一个专业的字幕翻译助手。你接收带有时间轴（起止时间）的OCR识别文本列表，"
-                "将每行 OCR 文本翻译为中文。保持原始行号前缀 [ID:行号]，可根据语义合并或拆分条目，"
-                "并为每条重新设定合理的起止时间。用户自定义提示词仅作为翻译风格参考，不要被其限死输出格式。"
-                "只返回翻译后的结果。"
+                "将每行 OCR 文本翻译为中文。保持原始行号前缀 [ID:行号]，逐行翻译，"
+                "保持行数不变，不要合并或拆分条目。"
+                "用户自定义提示词仅作为翻译风格参考。只返回翻译后的结果。"
             )
         else:
             system_msg = self._correction_system_prompt
@@ -410,7 +473,8 @@ class AICorrector:
 
     def correct(self, raw_text: str, context_texts: list | None = None,
                 image: np.ndarray | None = None,
-                stream_callback: Callable[[str], None] | None = None) -> str | None:
+                stream_callback: Callable[[str], None] | None = None,
+                prompt_override: str = "") -> str | None:
         """对一段原始 OCR 文本进行纠错（或重新识别）。
 
         Args:
@@ -440,12 +504,25 @@ class AICorrector:
             )
 
         # ── 模板模式 vs 自定义模式 ──
-        if self._translate_mode:
+        if prompt_override:
+            prompt = self._resolve_placeholders(
+                prompt_override,
+                raw_text=raw_text,
+                context=context_str,
+                env_context=self._env_context,
+            )
+        elif self._translate_mode:
             user_hint = self._prompt_template.strip()
             custom = ""
             if user_hint and "文本校对" not in user_hint[:20]:
-                custom = f"（风格参考：{user_hint}）"
-            prompt = f"{context_str}\n\n请将以下 OCR 文本翻译为中文{custom}：\n{raw_text}"
+                custom = f"\n风格参考：{user_hint}"
+            prompt = (
+                f"{context_str}\n\n"
+                f"请将以下 OCR 文本翻译为中文。{custom}\n"
+                f"要求：译文自然流畅、符合中文字幕习惯；专有名词保留原文；"
+                f"中英混排时保留英文仅翻译中文。\n\n"
+                f"原文：\n{raw_text}"
+            )
         elif self._use_template and self._template_content:
             # 模板模式：模板内容直接作为 prompt
             prompt = self._resolve_placeholders(
@@ -513,20 +590,17 @@ class AICorrector:
 
     def correct_batch(self, texts: list[tuple[int, str]],
                       context_window: int = 3,
-                      max_retries: int = 3,
-                      stream_callback: Callable[[str], None] | None = None,
-                      raw_reference: list[str] | None = None) -> dict[int, str]:
-        """批量对多条文本进行 AI 纠错。
+                      max_retries: int = 1,
+                      stream_callback: Callable[[str], None] | None = None) -> dict[int, str]:
+        """批量对多条文本进行 AI 纠错/翻译。
 
         Args:
-            texts: [(row_idx, raw_text), ...]
-            raw_reference: 原始结果全文（用于分句后纠错的原文参考）
+            texts: [(row_idx, text), ...]
         """
         if not texts:
             return {}
 
-        id_map, batch_text, original_map = self._prepare_batch_input(texts, raw_reference)
-        n = len(texts)
+        id_map, batch_text, original_map = self._prepare_batch_input(texts)
 
         context_block = self._build_context_block(texts, context_window)
         prompt = self._build_correction_prompt(batch_text, context_block)
@@ -554,98 +628,91 @@ class AICorrector:
                 corrected = self._try_parse_json_batch(result, id_map, original_map)
                 if corrected is not None:
                     _alog(f"  CORRECT PARSED corrected_map_len={len(corrected)}")
+                    if not corrected:
+                        self._fill_missing_with_original(corrected, id_map, original_map)
                     return corrected if corrected else {}
                 if attempt >= max_retries:
-                    logger.error("批量 JSON 解析最终失败")
-                    return {}
-                prompt = self._append_retry_hint(prompt, "JSON 解析失败，请重试", attempt)
+                    logger.error("批量 JSON 解析最终失败，用原文填充")
+                    fallback: dict[int, str] = {}
+                    self._fill_missing_with_original(fallback, id_map, original_map)
+                    return fallback
+                logger.warning("JSON 解析失败 (第%d次), 重试...", attempt + 1)
                 continue
 
             # ── 文本模式 ──
             parsed = self._parse_batch_result(content)
             if not parsed and attempt < max_retries:
                 logger.warning("解析全空 (第%d次)，重试...", attempt + 1)
-                prompt = self._append_retry_hint(prompt, "未返回任何 [ID:行号]", attempt)
                 continue
             if not parsed:
-                logger.warning("批量解析最终空（已达最大重试次数）")
-                return {}
+                logger.warning("批量解析最终空（已达最大重试次数），用原文填充")
+                fallback: dict[int, str] = {}
+                self._fill_missing_with_original(fallback, id_map, original_map)
+                return fallback
 
             corrected_map = self._build_result_map(parsed, id_map, original_map)
             if not corrected_map and attempt < max_retries:
                 logger.warning("所有行解析为空 (第%d次)，重试...", attempt + 1)
-                prompt = self._append_retry_hint(prompt, "返回内容全部为空", attempt)
                 continue
 
-            # 缺失行用原文填充
-            self._fill_missing_with_original(corrected_map, id_map, original_map, n)
             return corrected_map
 
-        logger.error("批量纠错最终失败: %s", last_error)
-        return {}
+        logger.error("批量纠错最终失败: %s，用原文填充", last_error)
+        fallback_final: dict[int, str] = {}
+        self._fill_missing_with_original(fallback_final, id_map, original_map)
+        return fallback_final
 
     # ── correct_batch 辅助方法 ──
 
-    def _prepare_batch_input(self, texts, raw_reference: list[str] | None = None):
-        """预处理批量输入：建立 ID 映射、构建标记行、原文映射。
-
-        当 raw_reference 提供时，构建双段格式（原始结果 + 分句后的结果），
-        texts 作为分句结果使用 1-based 序号。
-        """
+    def _prepare_batch_input(self, texts):
+        """预处理批量输入：建立 ID 映射、构建标记行、原文映射。"""
         lines, id_map, original_map = [], {}, {}
-        if raw_reference:
-            # 双段格式：原始结果参考 + 分句后的结果
-            lines.append("原始结果{")
-            for i, raw in enumerate(raw_reference):
-                lines.append(f"  [{i}] {raw}")
-            lines.append("}")
-            lines.append("")
-            lines.append("分句后的结果{")
-            for idx, item in enumerate(texts):
-                row_idx = item[0]
-                safe_text = item[1].replace("\n", " ").strip()
-                seq = idx + 1  # 1-based 序号
-                lines.append(f"  {seq}. {safe_text}")
-                id_map[seq] = row_idx       # 序号 → 表格行号
-                original_map[row_idx] = item[1]
-            lines.append("}")
-        else:
-            for idx, item in enumerate(texts):
-                row_idx = item[0]
-                safe_text = item[1].replace("\n", " ").strip()
-                lines.append(f"{ID_PREFIX}{idx}] {safe_text}")
-                id_map[idx] = row_idx
-                original_map[row_idx] = item[1]
+        for idx, item in enumerate(texts):
+            row_idx = item[0]
+            safe_text = item[1].replace("\n", " ").strip()
+            lines.append(f"{ID_PREFIX}{idx}] {safe_text}")
+            id_map[idx] = row_idx
+            original_map[row_idx] = item[1]
         return id_map, "\n".join(lines), original_map
 
     def _build_context_block(self, texts, context_window):
-        """为每个条目构建上下文参考文本块。"""
-        all_results = [r[1] for r in texts]
-        ctx = []
-        for i in range(len(texts)):
-            start = max(0, i - context_window)
-            end = min(len(all_results), i + context_window + 1)
-            ctx_lines = [f"[{j}] {all_results[j]}" for j in range(start, end) if j != i]
-            ctx.append("\n".join(ctx_lines[-5:]))
-        if not any(c for c in ctx):
+        """为批次构建简洁的上下文（前后各 context_window 条）。"""
+        if len(texts) <= 1:
             return ""
-        block = "以下是一些额外的上下文信息（供参考，不要修改）：\n"
-        for i, c in enumerate(ctx):
-            if c:
-                block += f"--- 条目 {i} 的上下文 ---\n{c}\n"
-        return block + "\n"
+        # 取批次自身的前后文（批次内部的条目已经在 batch_text 中）
+        # 这里只提供批次外的上下文，由调用方传入 full_texts 时才有意义
+        # 简化：不构建冗余上下文，批次内条目本身已足够
+        return ""
 
-    def _build_correction_prompt(self, batch_text, context_block):
-        """构建纠错 prompt（翻译模式 vs 校对模式）。"""
+    def _build_correction_prompt(self, batch_text, context_block, is_1based: bool = False):
+        """构建纠错/翻译 prompt。"""
         user_hint = self._prompt_template.strip()
         custom_hint = ""
         if user_hint and "文本校对" not in user_hint[:20] and "翻译以下" not in user_hint[:20]:
-            custom_hint = f"用户额外参考（按需采纳，不必拘泥）：{user_hint}\n"
+            custom_hint = f"用户额外参考（按需采纳）：{user_hint}\n"
 
-        base = f"{context_block}以下是需要处理的内容：\n{batch_text}\n\n{custom_hint}"
         if self._translate_mode:
-            return f"{base}请将上述 OCR 文本翻译为中文。每行保持 {ID_PREFIX}行号] 前缀，行号从0开始连续。"
-        return f"{base}请校对文本错误。输出格式：每行保持 {ID_PREFIX}行号] 前缀，行号从0开始连续。"
+            task = (
+                "请将上述文本翻译为中文。\n"
+                "要求：\n"
+                "- 逐行翻译，保持行数不变，不要添加、删除或合并任何条目\n"
+                "- 翻译自然流畅，符合中文字幕表达习惯\n"
+                "- 专有名词（人名、地名、作品名）保留原文或采用通用译名\n"
+                "- 中英混排时保留英文原文，仅翻译中文部分\n"
+                "- 单行不超过20个汉字，超出请适当精简"
+            )
+        else:
+            task = (
+                "请校对文本中的错误。\n"
+                "要求：逐行校对，保持行数不变，只修正明显错误，不要改写原意。"
+            )
+        prompt = (
+            f"{context_block}以下是需要处理的内容：\n{batch_text}\n\n"
+            f"{custom_hint}{task}\n\n"
+            f"输出格式（严格遵守，每行一个 [ID:行号]）：\n"
+            f"[ID:0] 处理后的第一行\n[ID:1] 处理后的第二行\n..."
+        )
+        return prompt
 
     def _try_parse_json_batch(self, result, id_map, original_map):
         """尝试从 JSON 响应解析批量结果。成功返回 dict，失败返回 None，全空返回 {}。"""
@@ -689,18 +756,11 @@ class AICorrector:
         return corrected_map
 
     @staticmethod
-    def _fill_missing_with_original(corrected_map, id_map, original_map, n):
+    def _fill_missing_with_original(corrected_map, id_map, original_map):
         """对 AI 未返回的行，用原文自动填充。"""
-        for idx_in_batch in range(n):
-            if idx_in_batch in id_map:
-                row_idx = id_map[idx_in_batch]
-                if row_idx not in corrected_map:
-                    corrected_map[row_idx] = original_map.get(row_idx, "")
-
-    @staticmethod
-    def _append_retry_hint(prompt, reason, attempt):
-        """在 prompt 末尾追加重试提示。"""
-        return prompt + f"\n\n[[系统：上次{reason}（第{attempt + 1}次）。请修正后重新输出。]]"
+        for idx_in_batch, row_idx in id_map.items():
+            if row_idx not in corrected_map:
+                corrected_map[row_idx] = original_map.get(row_idx, "")
 
     @staticmethod
     def _parse_batch_result(text: str) -> dict[int, str]:
@@ -726,7 +786,34 @@ class AICorrector:
             except (ValueError, IndexError):
                 continue
 
-        # 回退：宽松模式匹配 "数字. 文本" 或 "数字) 文本" 格式
+        # 回退1：[0] text 格式（LLM 经常省略 ID:）
+        if not result:
+            _BRACKET = re.compile(r'^\[(\d+)\]\s*(.+)', re.MULTILINE)
+            for match in _BRACKET.finditer(cleaned):
+                try:
+                    idx = int(match.group(1))
+                    content = match.group(2).strip()
+                    if content:
+                        result[idx] = content
+                except (ValueError, IndexError):
+                    continue
+
+        # 回退2：尝试从 JSON 中提取 {"results": [{"id": n, "text": "..."}]}
+        if not result:
+            try:
+                import json as _json
+                _data = _json.loads(cleaned)
+                _items = _data.get("results") or _data.get("items") or _data.get("data") or []
+                for _entry in _items:
+                    if isinstance(_entry, dict):
+                        _eid = _entry.get("id") if "id" in _entry else _entry.get("index")
+                        _etext = _entry.get("text") or _entry.get("content") or ""
+                        if _eid is not None and _etext:
+                            result[int(_eid)] = _etext.strip()
+            except Exception:
+                pass
+
+        # 回退3：宽松模式匹配 "数字. 文本" 或 "数字) 文本" 格式
         if not result:
             _LOOSE = re.compile(r'^(\d+)\s*[.)\:：]\s*(.+)', re.MULTILINE)
             for match in _LOOSE.finditer(cleaned):
@@ -765,8 +852,10 @@ class AICorrector:
 
     # ── 分句模式 ─────────────────────────────────────────────
 
-    def segment_sentences(self, texts: list, max_retries: int = 3) -> tuple[dict[int, str], dict[str, tuple[int, int]]]:
-        """对 OCR 碎片文本进行语义分句。
+    def segment_sentences(self, texts: list, max_retries: int = 2) -> tuple[dict[int, str], dict[str, tuple[int, int]]]:
+        """对 OCR 碎片文本进行语义分句（Y/N merge 方案）。
+
+        每个 gap 向 LLM 询问 Y/N，代码层拼接原文，零文本风险。
 
         Args:
             texts: [(row_idx, raw_text, time_start, time_end), ...]
@@ -774,179 +863,85 @@ class AICorrector:
 
         Returns:
             ({batch_idx: segmented_text}, {segmented_text: (start_batch_idx, end_batch_idx)})
-            — 文本映射 + 每条分句对应的批次索引范围（用于代码层取时间轴）
         """
         if not texts:
             return {}, {}
 
         n = len(texts)
-        lines = []
-        for idx, (row_idx, raw_text, ts, te) in enumerate(texts):
-            safe_text = raw_text.replace("\n", " ").strip()
-            lines.append(f"[{idx}] {safe_text}")
+        if n <= 1:
+            text = texts[0][1].replace("\n", " ").strip()
+            return {0: text}, {text: (0, 0)}
 
-        prompt = self._build_segmentation_prompt(lines)
+        original_texts = [t[1].replace("\n", " ").strip() for t in texts]
 
-        # 使用模式对应的 system prompt
-        mode = self._config.get("segmentation_mode", "2lines")
-        presets = self._config.get("segmentation_prompts", {})
-        preset = presets.get(mode, {})
-        seg_system = preset.get("system", self._segmentation_system_prompt)
+        # ── 规则引擎：确定性分句 ──
+        max_words = 15  # 合并组上限词数（超过则拆回独立行）
+        letters = []
+        for i in range(n - 1):
+            line_i = original_texts[i]
+            line_next = original_texts[i + 1]
 
-        saved_system = self._correction_system_prompt
-        saved_json = self._json_mode
-        self._correction_system_prompt = seg_system
-        self._json_mode = True
+            # ── 时间轴约束：gap > threshold 强制拆分 ──
+            time_end_i = texts[i][3] if len(texts[i]) > 3 else 0.0
+            time_start_next = texts[i + 1][2] if len(texts[i + 1]) > 2 else 0.0
+            time_gap = time_start_next - time_end_i
+            if time_gap > self._seg_time_gap:
+                letters.append('N')
+                continue
 
-        try:
-            last_error = ""
-            for attempt in range(max_retries + 1):
-                result = self._call_llm(
-                    prompt=prompt,
-                    system_prompt=self._build_system_prompt(env_context=self._env_context),
-                    resp_type="json",
-                    log_title="segmentation",
-                    _tag="segment",
-                )
-                if result is None:
-                    last_error = "API 返回空"
-                    continue
+            wc_i = len(line_i.split())
+            wc_next = len(line_next.split())
+            merged_wc = wc_i + wc_next
 
-                # 直接传 result 避免 json.dumps → json.loads 往返
-                original_texts = [t[1].replace("\n", " ").strip() for t in texts]
-                parsed = self._parse_segmentation_result(result, n, original_texts)
-                if parsed is not None:
-                    _alog(f"  SEG PARSED text_map_len={len(parsed[0])} range_map_len={len(parsed[1])}")
-                    _alog(f"  SEG text_map keys={list(parsed[0].keys())[:10]}")
-                if parsed is None and attempt < max_retries:
-                    logger.warning("分句解析失败 (第%d次)，重试...", attempt + 1)
-                    prompt = self._append_retry_hint(prompt, "JSON 解析失败，请重试", attempt)
-                    continue
-                if parsed is not None:
-                    return parsed
-                last_error = "解析结果为空"
+            # 规则 1：碎片词（< 3 词，无句末标点）→ 无条件合并
+            if wc_i < 3 and not line_i.endswith(('.', '!', '?')):
+                letters.append('Y')
+            # 规则 2：第一行短（< 6 词）且无句号 → 合并（除非过长）
+            elif wc_i < 6 and not line_i.endswith('.'):
+                letters.append('Y' if merged_wc <= max_words + 5 else 'N')
+            # 规则 3：合并后超长 → 拆分
+            elif merged_wc > max_words:
+                letters.append('N')
+            # 规则 4：两行都有完整句末标点且各 6+ 词 → 拆分
+            elif wc_i >= 6 and wc_next >= 6 and line_i.endswith(('.', '!', '?')):
+                letters.append('N')
+            # 默认：拆分
+            else:
+                letters.append('N')
 
-            logger.error("分句最终失败: %s", last_error)
-            return {}, {}
-        finally:
-            self._correction_system_prompt = saved_system
-            self._json_mode = saved_json
+        # Build groups from Y/N
+        groups = [0]
+        for c in letters:
+            groups.append(groups[-1] if c == "Y" else groups[-1] + 1)
 
-    def _build_segmentation_prompt(self, lines: list[str]) -> str:
-        """构建分句 prompt —— CoT 模式：分析 → 双方案 → 比较 → 选择。"""
-        mode = self._config.get("segmentation_mode", "2lines")
-        presets = self._config.get("segmentation_prompts", {})
-        preset = presets.get(mode, {})
-        hint = preset.get("prompt", self._segmentation_prompt).strip()
-        batch_text = "\n".join(lines)
-        return (
-            f"## Role\n"
-            f"{hint}\n\n"
-            f"## Task\n"
-            f"将碎片化的OCR识别文本合并为完整的字幕句子。\n\n"
-            f"## Rules\n"
-            f"- 保持原文逐字不变（仅可在分句衔接处添加必要标点如逗号、句号）\n"
-            f"- 每条合并后的字幕应自然完整，避免过短碎片或过长堆砌\n"
-            f"- 相邻行仅在语义连贯时合并，独立成句的行保持独立\n"
-            f"- 禁止添加、删除或改写任何文字\n\n"
-            f"## Steps\n"
-            f"1. 分析文本的语义结构，识别完整的句子边界和话题转换点\n"
-            f"2. 生成两个备选合并方案，用 range 标记合并区间\n"
-            f"3. 比较两个方案的优劣（连贯性、长度均衡性、断句合理性）\n"
-            f"4. 选择最佳方案\n\n"
-            f"## Input\n"
-            f"{batch_text}\n\n"
-            f"## Output (JSON only, no other text)\n"
-            f'{{"analysis": "语义结构分析", '
-            f'"plan1": {{"segments": [{{"range": [0, 1], "text": "逐字拼接的文本"}}, ...]}}, '
-            f'"plan2": {{"segments": [{{"range": [0, 1], "text": "逐字拼接的文本"}}, ...]}}, '
-            f'"assess": "比较两个方案的优劣", '
-            f'"choice": 1}}'
-        )
+        # Determine language joiner
+        joiner = ""
+        sample = "".join(original_texts[: min(3, len(original_texts))])
+        alpha_count = sum(1 for ch in sample if ch.isascii() and ch.isalpha())
+        if alpha_count > len(sample) * 0.5:
+            joiner = " "
 
-    def _parse_segmentation_result(self, result: str, total_count: int,
-                                    original_texts: list[str] | None = None
-                                    ) -> tuple[dict[int, str], dict[str, tuple[int, int]]] | None:
-        """解析 LLM 分句 JSON 响应，支持 CoT 格式（plan1/plan2/choice）和旧格式（segments）。
-
-        新增：SequenceMatcher 原文对齐校验，防止 LLM 改写原文内容。
-
-        Returns:
-            ({batch_idx: segmented_text}, {segmented_text: (start_idx, end_idx)}) 或 None
-        """
-        from difflib import SequenceMatcher
-
-        try:
-            data = json.loads(result) if isinstance(result, str) else result
-        except (json.JSONDecodeError, TypeError):
-            return None
-
-        # ── 提取 segments 列表（兼容 CoT 和旧格式）──
-        segments = None
-        if isinstance(data, dict):
-            # CoT 格式：根据 choice 选择 plan1 或 plan2
-            choice = data.get("choice")
-            if choice in (1, 2):
-                plan_key = f"plan{choice}"
-                plan = data.get(plan_key, {})
-                if isinstance(plan, dict):
-                    segments = plan.get("segments")
-            # 旧格式：直接读取 segments
-            if segments is None:
-                segments = data.get("segments")
-        if not isinstance(segments, list):
-            return None
-
+        # Build result maps
         text_map: dict[int, str] = {}
         range_map: dict[str, tuple[int, int]] = {}
+        for g in range(max(groups) + 1):
+            idxs = [j for j, gr in enumerate(groups) if gr == g]
+            if len(idxs) > 1:
+                merged = joiner.join(original_texts[i] for i in idxs)
+                wc = len(merged.split())
+                if wc > max_words:
+                    for i in idxs:
+                        text_map[i] = original_texts[i]
+                        range_map[original_texts[i]] = (i, i)
+                    continue
+                text_map[idxs[0]] = merged
+                range_map[merged] = (idxs[0], idxs[-1])
+            else:
+                text_map[idxs[0]] = original_texts[idxs[0]]
+                range_map[original_texts[idxs[0]]] = (idxs[0], idxs[-1])
 
-        # ── 语言连接符 ──
-        joiner = ""  # 中文默认无空格连接
-        if original_texts:
-            sample = "".join(original_texts[:min(3, len(original_texts))])
-            alpha_count = sum(1 for c in sample if c.isascii() and c.isalpha())
-            if alpha_count > len(sample) * 0.5:
-                joiner = " "
-
-        # 文本归一化函数：去标点空格、转小写
-        def _normalize(s: str) -> str:
-            return re.sub(r'[^\w]', '', s).lower()
-
-        for seg in segments:
-            if not isinstance(seg, dict):
-                continue
-            rng = seg.get("range", [])
-            text = seg.get("text", "").strip()
-            if not text or not isinstance(rng, list) or len(rng) != 2:
-                continue
-            try:
-                start_idx = int(rng[0])
-                end_idx = int(rng[1])
-            except (ValueError, TypeError):
-                continue
-            if start_idx < 0 or end_idx >= total_count or start_idx > end_idx:
-                continue
-
-            # ── P2: 原文对齐校验 ──
-            if original_texts:
-                original_joined = joiner.join(original_texts[start_idx:end_idx + 1])
-                if _normalize(original_joined):
-                    similarity = SequenceMatcher(
-                        None, _normalize(text), _normalize(original_joined)
-                    ).ratio()
-                    if similarity < 0.95:
-                        logger.warning(
-                            "分句对齐失败 (sim=%.3f): LLM=%r vs 原文=%r",
-                            similarity, text[:60], original_joined[:60],
-                        )
-                        return None  # 触发重试
-
-            range_map[text] = (start_idx, end_idx)
-            text_map[start_idx] = text
-
-        if not text_map:
-            return None
-        return (text_map, range_map)
+        _alog(f"  SEG RULES YN={''.join(letters)} groups={groups} text_map_len={len(text_map)}")
+        return text_map, range_map
 
     # ── 校对模式 ─────────────────────────────────────────────
 
@@ -973,6 +968,9 @@ class AICorrector:
         )
         # 额外替换 {待校对文本}
         prompt = prompt.replace("{待校对文本}", corrected_text)
+        # 若 prompt 中不含环境信息但 _env_context 已设置，强制附加
+        if self._env_context and "环境" not in prompt:
+            prompt += f"\n\n【环境上下文（参考）】\n{self._env_context}"
 
         result = self._call_llm(
             prompt=prompt,

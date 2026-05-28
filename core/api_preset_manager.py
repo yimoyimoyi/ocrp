@@ -24,7 +24,9 @@ def _load_presets() -> dict:
                 cfg = json.load(f)
             from core.config_schema import validate_config
             from core.config_schemas import API_PRESETS_SCHEMA
-            validate_config(cfg, API_PRESETS_SCHEMA, "api_presets.json")
+            ok, errors = validate_config(cfg, API_PRESETS_SCHEMA, "api_presets.json")
+            if not ok:
+                logger.warning("API 预设配置校验失败: %s", "; ".join(errors[:3]))
             return cfg
         except Exception as e:
             logger.warning("加载 API 预设配置失败: %s", e)

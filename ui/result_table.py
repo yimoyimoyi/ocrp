@@ -5,6 +5,7 @@ from PyQt5.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QKeyEvent, QPalette
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -157,8 +158,8 @@ class ResultTableWidget(QWidget):
     delete_filtered_requested = pyqtSignal()
     cell_edit_activated = pyqtSignal(int)
 
-    COLUMNS = ["时间戳", "区域", "引擎", "原始结果", "分句结果", "纠错结果", "置信度", ""]
-    COL_WIDTHS = [70, 70, 70, 160, 160, 160, 50, 44]
+    COLUMNS = ["✓", "时间戳", "区域", "引擎", "原始结果", "分句结果", "纠错结果", "置信度", ""]
+    COL_WIDTHS = [28, 70, 70, 70, 160, 160, 160, 50, 44]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -182,12 +183,14 @@ class ResultTableWidget(QWidget):
             return
         total = self._table.viewport().width()
         btn_w = self.COL_WIDTHS[-1]
-        available = total - btn_w - 4
+        cb_w = self.COL_WIDTHS[0]  # 复选框列固定宽度
+        available = total - btn_w - cb_w - 4
         if available <= 0:
             return
-        sum_ratios = sum(self.COL_WIDTHS[:-1])
+        sum_ratios = sum(self.COL_WIDTHS[1:-1])
         self._table.blockSignals(True)
-        for i in range(n - 1):
+        self._table.setColumnWidth(0, cb_w)
+        for i in range(1, n - 1):
             w = max(int(available * self.COL_WIDTHS[i] / sum_ratios), 50)
             self._table.setColumnWidth(i, w)
         self._table.setColumnWidth(n - 1, btn_w)
@@ -235,13 +238,17 @@ class ResultTableWidget(QWidget):
             header.addWidget(btn)
 
         header.addSpacing(8)
-        sep = QFrame()
-        sep.setFrameShape(QFrame.VLine)
-        sep.setFixedHeight(18)
-        header.addWidget(sep)
-        header.addWidget(QLabel(_("📋 队列:")))
+        self._batch_sep = QFrame()
+        self._batch_sep.setFrameShape(QFrame.VLine)
+        self._batch_sep.setFixedHeight(18)
+        header.addWidget(self._batch_sep)
+        self._batch_label = QLabel(_("📋 队列:"))
+        header.addWidget(self._batch_label)
         self._batch_count_label = QLabel(_("(空)"))
         header.addWidget(self._batch_count_label)
+        self._batch_sep.setVisible(False)
+        self._batch_label.setVisible(False)
+        self._batch_count_label.setVisible(False)
 
         # 搜索切换按钮
         self._btn_toggle_search = QToolButton(self)
@@ -252,6 +259,12 @@ class ResultTableWidget(QWidget):
         header.addWidget(self._btn_toggle_search)
 
         layout.addLayout(header)
+
+        # 全选复选框
+        self._select_all_cb = QCheckBox(_("全选"))
+        self._select_all_cb.setStyleSheet("font-size: 12px;")
+        self._select_all_cb.toggled.connect(self._on_select_all_toggled)
+        header.addWidget(self._select_all_cb)
 
         # 分隔线
         _sep1 = QFrame()
@@ -307,6 +320,9 @@ class ResultTableWidget(QWidget):
         self._table.horizontalHeader().setStretchLastSection(False)
         for i in range(len(self.COLUMNS)):
             self._table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Interactive)
+        # 第0列（复选框）固定宽度
+        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        self._table.setColumnWidth(0, 28)
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(32)
         self._table.verticalHeader().setMinimumSectionSize(28)
@@ -318,19 +334,70 @@ class ResultTableWidget(QWidget):
         self._table.cellClicked.connect(self._on_cell_clicked)
         layout.addWidget(self._table)
 
+        # ── 选中行计数栏 ──
+        selection_bar = QFrame()
+        selection_bar.setObjectName("selectionBar")
+        sbl = QHBoxLayout(selection_bar)
+        sbl.setContentsMargins(4, 2, 4, 2)
+        sbl.setSpacing(8)
+        self._selection_label = QLabel(_("未选中任何行"))
+        self._selection_label.setStyleSheet("color: #78909c; font-size: 12px;")
+        sbl.addWidget(self._selection_label, 1)
+        layout.addWidget(selection_bar)
+
+        # 复选框集合
+        self._checkboxes: dict[int, QCheckBox] = {}
+
+        # 连接选择变化信号
+        self._table.itemSelectionChanged.connect(self._on_selection_changed)
+
+    def _on_selection_changed(self):
+        """选中行变化时更新计数栏。"""
+        count = sum(1 for cb in self._checkboxes.values() if cb.isChecked())
+        if count == 0:
+            self._selection_label.setText(_("未选中任何行"))
+            self._selection_label.setStyleSheet("color: #78909c; font-size: 12px;")
+        else:
+            self._selection_label.setText(f"已选中 {count} 行")
+            self._selection_label.setStyleSheet("color: #42a5f5; font-size: 12px; font-weight: bold;")
+
+    def get_selected_rows(self) -> set[int]:
+        """返回当前选中的行号集合。"""
+        return {row for row, cb in self._checkboxes.items() if cb.isChecked()}
+
+    def select_all(self, checked: bool = True):
+        """全选/全不选。"""
+        for cb in self._checkboxes.values():
+            cb.setChecked(checked)
+
+    def _on_checkbox_toggled(self, row: int):
+        """单个复选框状态变化。"""
+        self._on_selection_changed()
+        # 更新全选框状态（避免循环信号）
+        self._select_all_cb.blockSignals(True)
+        self._select_all_cb.setChecked(
+            all(cb.isChecked() for cb in self._checkboxes.values()) if self._checkboxes else False
+        )
+        self._select_all_cb.blockSignals(False)
+
+    def _on_select_all_toggled(self, checked: bool):
+        """全选/全不选。"""
+        for cb in self._checkboxes.values():
+            cb.setChecked(checked)
+
     # ── 单元格同步回调 ──
 
     def _on_cell_committed(self, editor: _CellEditor):
         for r in range(self._table.rowCount()):
-            for c in range(self._table.columnCount() - 1):
+            for c in range(1, self._table.columnCount() - 1):  # skip col 0 (checkbox)
                 if self._table.cellWidget(r, c) is editor:
                     text = editor.text()
                     if 0 <= r < len(self._results):
-                        if c == 3:
+                        if c == 4:    # raw (col 3 + 1 offset)
                             self._results[r]["raw"] = text
-                        elif c == 4:
+                        elif c == 5:  # segmented
                             self._results[r]["segmented"] = text
-                        elif c == 5:
+                        elif c == 6:  # corrected
                             self._results[r]["corrected"] = text
                     self.cell_edit_activated.emit(r)
                     return
@@ -348,6 +415,14 @@ class ResultTableWidget(QWidget):
         row = self._table.rowCount()
         self._table.insertRow(row)
 
+        # 第0列：复选框
+        cb = QCheckBox()
+        cb.setStyleSheet("margin-left: 6px;")
+        cb.toggled.connect(lambda _, r=row: self._on_checkbox_toggled(r))
+        self._table.setCellWidget(row, 0, cb)
+        self._checkboxes[row] = cb
+
+        # 数据列（从第1列开始）
         cells = [
             (time_str, False),
             (region, False),
@@ -360,7 +435,7 @@ class ResultTableWidget(QWidget):
         for col, (text, is_text) in enumerate(cells):
             editor = _CellEditor(self._table, text, is_text)
             editor.set_sync_callback(self._on_cell_committed)
-            self._table.setCellWidget(row, col, editor)
+            self._table.setCellWidget(row, col + 1, editor)  # col+1: 偏移复选框列
 
         btn = QPushButton("+")
         btn.setToolTip(_("将此条内容加入过滤器"))
@@ -376,7 +451,7 @@ class ResultTableWidget(QWidget):
     def update_correction(self, row: int, corrected_text: str):
         if 0 <= row < len(self._results):
             self._results[row]["corrected"] = corrected_text
-            editor = self._table.cellWidget(row, 5)
+            editor = self._table.cellWidget(row, 6)  # col+1 for checkbox offset
             if isinstance(editor, _CellEditor):
                 editor.set_text(corrected_text)
 
@@ -384,19 +459,20 @@ class ResultTableWidget(QWidget):
         """更新分句结果列。"""
         if 0 <= row < len(self._results):
             self._results[row]["segmented"] = segmented_text
-            editor = self._table.cellWidget(row, 4)
+            editor = self._table.cellWidget(row, 5)  # col+1 for checkbox offset
             if isinstance(editor, _CellEditor):
                 editor.set_text(segmented_text)
 
     def update_confidence(self, row: int, confidence: float):
         if 0 <= row < len(self._results):
             self._results[row]["confidence"] = confidence
-            editor = self._table.cellWidget(row, 6)
+            editor = self._table.cellWidget(row, 7)  # col+1 for checkbox offset
             if isinstance(editor, _CellEditor):
                 editor.set_text(f"{confidence:.0%}")
 
     def clear_results(self):
         self._results.clear()
+        self._checkboxes.clear()
         self._table.setRowCount(0)
         self._is_templated = False
         self._update_count()
@@ -411,11 +487,21 @@ class ResultTableWidget(QWidget):
                     (not engine_name or r.get("engine", "") == engine_name)):
                 self._table.removeRow(i)
                 del self._results[i]
+        # 重建 _checkboxes 映射（行索引已变化）
+        self._checkboxes.clear()
+        for row in range(self._table.rowCount()):
+            widget = self._table.cellWidget(row, 0)
+            if widget:
+                from PyQt5.QtWidgets import QCheckBox
+                cb = widget.findChild(QCheckBox)
+                if cb:
+                    self._checkboxes[row] = cb
         self._update_count()
 
     def _rebuild_table_rows(self, new_results: list):
         self._table.setRowCount(0)
         self._results = []
+        self._checkboxes.clear()
         for item in new_results:
             self._results.append(item)
             ts = item.get("time_sec", 0.0) or 0.0
@@ -429,6 +515,14 @@ class ResultTableWidget(QWidget):
             row = self._table.rowCount()
             self._table.insertRow(row)
 
+            # 第0列：复选框
+            cb = QCheckBox()
+            cb.setStyleSheet("margin-left: 6px;")
+            cb.toggled.connect(lambda _, r=row: self._on_checkbox_toggled(r))
+            self._table.setCellWidget(row, 0, cb)
+            self._checkboxes[row] = cb
+
+            # 数据列（从第1列开始）
             cells = [
                 (time_str, False),
                 (item.get("region", ""), False),
@@ -441,7 +535,7 @@ class ResultTableWidget(QWidget):
             for col, (text, is_text) in enumerate(cells):
                 editor = _CellEditor(self._table, text, is_text)
                 editor.set_sync_callback(self._on_cell_committed)
-                self._table.setCellWidget(row, col, editor)
+                self._table.setCellWidget(row, col + 1, editor)
 
             btn = QPushButton("+")
             btn.setToolTip(_("将此条内容加入过滤器"))
@@ -500,11 +594,13 @@ class ResultTableWidget(QWidget):
                     for rn in all_region_names:
                         if rn in template and rn in group:
                             time_str = group[rn].get("time", "--:--"); src = group[rn]; break
+                    seg = src.get("segmented", "") if src else ""
+                    corr = src.get("corrected", "") if src else ""
                     new_results.append({
                         "time_sec": ts, "end_sec": src.get("end_sec", ts + 3.0) if src else ts + 3.0,
                         "time": time_str, "region": output_line,
                         "engine": src.get("engine", "") if src else "",
-                        "raw": output_line, "segmented": "", "corrected": "",
+                        "raw": output_line, "segmented": seg, "corrected": corr,
                         "confidence": src.get("confidence", 0.0) if src else 0.0,
                     })
         self._rebuild_table_rows(new_results)
@@ -520,9 +616,35 @@ class ResultTableWidget(QWidget):
         from core.result_processor import polish_results
         raw_list = [(r["time_sec"], r["time"], r["region"], r["engine"], r["raw"])
                     for r in self._results]
-        return polish_results(raw_list, post_sim_dedup=post_sim_dedup,
-                              post_sim_threshold=post_sim_threshold,
-                              post_min_text_len=post_min_text_len)
+        polished = polish_results(raw_list, post_sim_dedup=post_sim_dedup,
+                                  post_sim_threshold=post_sim_threshold,
+                                  post_min_text_len=post_min_text_len)
+        # 携带 corrected / segmented / end_sec 字段：用 (time_sec, region, raw) 匹配回原始结果
+        correction_map = {}
+        segmented_map = {}
+        endsec_map = {}
+        for r in self._results:
+            corr = r.get("corrected", "").strip()
+            seg = r.get("segmented", "").strip()
+            end_sec = r.get("end_sec", 0.0)
+            key = (round(r.get("time_sec", 0.0) or 0.0, 1),
+                   r.get("region", ""), r.get("raw", ""))
+            if corr:
+                correction_map[key] = corr
+            if seg:
+                segmented_map[key] = seg
+            if end_sec:
+                endsec_map[key] = end_sec
+        for p in polished:
+            key = (round(p.get("time_sec", 0.0) or 0.0, 1),
+                   p.get("region", ""), p.get("raw", ""))
+            if key in correction_map:
+                p["corrected"] = correction_map[key]
+            if key in segmented_map:
+                p["segmented"] = segmented_map[key]
+            if key in endsec_map:
+                p["end_sec"] = endsec_map[key]
+        return polished
 
     # ── 事件处理 ──
 
@@ -543,6 +665,21 @@ class ResultTableWidget(QWidget):
         if file_path:
             self.export_requested.emit(fmt, file_path)
 
+    def delete_by_filter(self, matcher) -> int:
+        """删除匹配的结果行。matcher(raw, corrected) -> bool。返回删除数。"""
+        deleted = 0
+        for i in range(len(self._results) - 1, -1, -1):
+            raw = self._results[i].get("raw", "")
+            corrected = self._results[i].get("corrected", "")
+            if matcher(raw, corrected):
+                self._table.removeRow(i)
+                del self._results[i]
+                deleted += 1
+        if deleted:
+            self._checkboxes.clear()
+            self._update_count()
+        return deleted
+
     def _on_delete_filtered(self):
         self.delete_filtered_requested.emit()
 
@@ -550,12 +687,15 @@ class ResultTableWidget(QWidget):
         self._count_label.setText(f"({self._table.rowCount()} 条)")
 
     def set_batch_count(self, count: int, total_size: int = 0):
-        if count == 0:
-            self._batch_count_label.setText("(空)")
-        elif total_size > 0:
-            self._batch_count_label.setText(f"{count}/{total_size} 个文件")
-        else:
-            self._batch_count_label.setText(f"{count} 个文件")
+        visible = count > 0
+        self._batch_sep.setVisible(visible)
+        self._batch_label.setVisible(visible)
+        self._batch_count_label.setVisible(visible)
+        if visible:
+            if total_size > 0:
+                self._batch_count_label.setText(f"{count}/{total_size} 个文件")
+            else:
+                self._batch_count_label.setText(f"{count} 个文件")
 
     # ── 搜索/替换 ──
 

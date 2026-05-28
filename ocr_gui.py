@@ -201,6 +201,9 @@ def main():
     logger.info("ORCP 启动中...")
     logger.info("Python %s | 平台 %s", sys.version.split()[0], sys.platform)
 
+    # Windows 上强制 QMediaPlayer 使用 WMF 后端，避免 DirectShow 解码器缺失
+    if sys.platform == "win32":
+        os.environ["QT_MULTIMEDIA_PREFERRED_PLUGINS"] = "wmf"
     app = QApplication(sys.argv)
     app.setApplicationName("ORCP")
     app.setOrganizationName("ORCP")

@@ -25,6 +25,7 @@ CONFIG_DIR = BASE_DIR / "config"
 _CORE_DLL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from core.config_manager import _load_json_with_comments
+from core.llm_utils import ask_llm
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,72 +43,6 @@ def load_engines_config() -> dict:
         except Exception as e:
             logger.warning("加载 OCR 引擎配置失败: %s", e)
     return {"engines": {}, "default_engine": "paddleocr"}
-
-
-# ── Vision API 公共辅助 ────────────────────────────────────────────
-
-def _encode_image_b64(image: np.ndarray) -> str:
-    """将 numpy 图像编码为 JPEG base64 字符串。"""
-    import cv2
-    _, buf = cv2.imencode(".jpg", image)
-    return base64.b64encode(buf).decode("utf-8")
-
-
-def _call_vision_api(
-    image: np.ndarray,
-    prompt_text: str,
-    api_key: str,
-    base_url: str,
-    model: str,
-    timeout: int = 60,
-    temperature: float = 0.0,
-    max_tokens: int = 512,
-) -> str:
-    """调用 OpenAI 兼容 Vision API 进行图片 OCR 识别。
-
-    Args:
-        image: 输入图片 (numpy array)
-        prompt_text: 识别 prompt
-        api_key: API 密钥
-        base_url: API 端点 URL
-        model: 模型名称
-        timeout: 超时秒数
-        temperature: 采样温度
-        max_tokens: 最大输出 token 数
-
-    Returns:
-        识别的文字内容，失败返回空字符串
-
-    Raises:
-        openai.APITimeoutError: 请求超时
-        openai.APIConnectionError: 连接失败
-        openai.APIError: 其他 API 错误
-    """
-    from core.llm_utils import _normalize_base_url
-
-    b64 = _encode_image_b64(image)
-    url = _normalize_base_url(base_url)
-
-    logger.debug("Vision API | model=%s | image=%dx%d | timeout=%ds",
-                 model, image.shape[1], image.shape[0], timeout)
-
-    client = OpenAI(api_key=api_key, base_url=url)
-
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt_text},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ],
-        }],
-        max_tokens=max_tokens,
-        temperature=temperature,
-        timeout=timeout,
-    )
-
-    return resp.choices[0].message.content.strip()
 
 
 def _check_v1_availability(base_url: str, api_key: str = "", timeout: int = 10) -> bool:
@@ -496,10 +431,13 @@ class PaddleOCREngine(BaseOCREngine):
                 try:
                     import torch
                     if not torch.cuda.is_available():
+                        logger.warning("GPU 加速已启用但 torch 检测不到 CUDA，回退 CPU。"
+                                       "请确认：1) CUDA Toolkit 已安装 2) torch 版本含 CUDA 支持 3) GPU 驱动正常")
                         device = "cpu"
                 except Exception as e:
                     logger.warning("GPU 检测失败，回退 CPU: %s", e)
                     device = "cpu"
+                self._device = device  # 同步实际使用的设备
             try:
                 from paddleocr import PaddleOCR
             except Exception as e:
@@ -645,29 +583,24 @@ class OpenAIVisionEngine(BaseOCREngine):
         return []
 
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
-        max_retries = getattr(self, '_retry', 2)
         prompt_text = prompt or self._prompt_template
         logger.info("OpenAI Vision 请求 | model=%s | image=%dx%d",
                      self._model, image.shape[1], image.shape[0])
         logger.debug("Prompt: %s", prompt_text[:120])
-        for attempt in range(max_retries + 1):
-            try:
-                content = _call_vision_api(
-                    image=image,
-                    prompt_text=prompt_text,
-                    api_key=self._api_key,
-                    base_url=self._base_url,
-                    model=self._model,
-                    timeout=self._timeout,
-                )
-                logger.info("OpenAI Vision 响应: %d chars", len(content))
-                return content
-            except Exception as e:
-                logger.warning("OpenAI Vision 请求异常 (第%d次): %s", attempt + 1, e)
-                if attempt < max_retries:
-                    continue
-                return ""
-        return ""
+        content = ask_llm(
+            prompt=prompt_text,
+            api_key=self._api_key,
+            base_url=self._base_url,
+            model=self._model,
+            timeout=self._timeout,
+            image=image,
+            temperature=0.0,
+            max_tokens=512,
+            log_title="openai_vision",
+        )
+        result = content if isinstance(content, str) else ""
+        logger.info("OpenAI Vision 响应: %d chars", len(result))
+        return result
 
 
 # ═══════════════ Ollama Vision ═══════════════
@@ -691,29 +624,24 @@ class OllamaVisionEngine(BaseOCREngine):
         return _get_v1_model_list(self._base_url)
 
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
-        max_retries = getattr(self, '_retry', 2)
         prompt_text = prompt or self._prompt_template
         logger.info("Ollama Vision 请求 | model=%s | image=%dx%d",
                      self._model, image.shape[1], image.shape[0])
         logger.debug("Prompt: %s", prompt_text[:120])
-        for attempt in range(max_retries + 1):
-            try:
-                content = _call_vision_api(
-                    image=image,
-                    prompt_text=prompt_text,
-                    api_key="ollama",
-                    base_url=self._base_url,
-                    model=self._model,
-                    timeout=self._timeout,
-                )
-                logger.info("Ollama Vision 响应: %d chars", len(content))
-                return content
-            except Exception as e:
-                logger.warning("Ollama Vision 请求异常 (第%d次): %s", attempt + 1, e)
-                if attempt < max_retries:
-                    continue
-                return ""
-        return ""
+        content = ask_llm(
+            prompt=prompt_text,
+            api_key="ollama",
+            base_url=self._base_url,
+            model=self._model,
+            timeout=self._timeout,
+            image=image,
+            temperature=0.0,
+            max_tokens=512,
+            log_title="ollama_vision",
+        )
+        result = content if isinstance(content, str) else ""
+        logger.info("Ollama Vision 响应: %d chars", len(result))
+        return result
 
 
 # ═══════════════ llama.cpp ═══════════════
@@ -736,39 +664,30 @@ class LlamaCppEngine(BaseOCREngine):
         return _get_v1_model_list(self._base_url, self._api_key)
 
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
-        max_retries = getattr(self, '_retry', 2)
         prompt_text = prompt or self._prompt_template
         logger.info("[llama.cpp] API 请求: %s 模型=%s 图片=%dx%d prompt=%.80s",
                      self._base_url, self._model or "(default)",
                      image.shape[1], image.shape[0], prompt_text)
-        for attempt in range(max_retries + 1):
-            try:
-                content = _call_vision_api(
-                    image=image,
-                    prompt_text=prompt_text,
-                    api_key=self._api_key,
-                    base_url=self._base_url,
-                    model=self._model,
-                    timeout=self._timeout,
-                )
-                logger.info("[llama.cpp] 响应 %d chars", len(content))
-                return content
-            except Exception as e:
-                logger.warning("[llama.cpp] 请求异常 (第%d次): %s", attempt + 1, e)
-                if attempt < max_retries:
-                    continue
-                return ""
-        return ""
+        content = ask_llm(
+            prompt=prompt_text,
+            api_key=self._api_key,
+            base_url=self._base_url,
+            model=self._model,
+            timeout=self._timeout,
+            image=image,
+            temperature=0.0,
+            max_tokens=512,
+            log_title="llamacpp_vision",
+        )
+        result = content if isinstance(content, str) else ""
+        logger.info("[llama.cpp] 响应 %d chars", len(result))
+        return result
 
 
 # ═══════════════ 引擎注册表 ═══════════════
 # 模块导入时立即注册 DLL 路径并预加载 torch
 # 必须在 PyQt5 等可能干扰 DLL 搜索路径的模块之前执行
 _register_dll_dirs()
-try:
-    pass
-except Exception as e:
-    logger.warning("torch 导入失败: %s", e)
 
 ENGINE_CLASS_MAP = {
     "paddleocr": PaddleOCREngine,

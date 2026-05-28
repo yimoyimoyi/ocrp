@@ -5,11 +5,14 @@ import os
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from core.ocr_engine import OCREngineManager
+
+if TYPE_CHECKING:
+    from core.filter_manager import FilterManager
 
 
 def get_similarity(a: str, b: str) -> float:
@@ -87,12 +90,14 @@ class FrameProcessor:
         on_result: Callable | None = None,
         on_progress: Callable | None = None,
         on_log: Callable | None = None,
+        filter_manager: "FilterManager | None" = None,
     ):
         self._engine_mgr = engine_manager
         self._regions = regions or []
         self._on_result = on_result
         self._on_progress = on_progress
         self._on_log = on_log
+        self._filter_mgr = filter_manager
         self._stop_flag = threading.Event()
         self._pause_flag = threading.Event()  # set 表示暂停
         self._frame_interval: float = 0.1
@@ -103,14 +108,12 @@ class FrameProcessor:
         self._s_buffer_size: int = 8
         self._s_sim_threshold: float = 0.85
         self._s_min_text_len: int = 2
-        self._s_filter_keywords: str = ""
         self._s_ocr_version: str = ""
         # ── 常规参数 ──
         self._r_dedup: bool = True
         self._r_sim_threshold: float = 0.9
         self._r_buffer_size: int = 5
         self._r_min_text_len: int = 2
-        self._r_filter_keywords: str = ""
         self._r_interval: float = 2.0
 
     @property
@@ -225,29 +228,11 @@ class FrameProcessor:
         region_last_sent = {}  # rname → 上一帧已发送文本
         region_buffer = {}  # rname → 连续相同文本计数
 
-        # ── 根据模式选择参数组 ──
-        if "常规" in self._subtitle_mode:
-            filter_kw = self._r_filter_keywords
-        else:
-            filter_kw = self._s_filter_keywords
-        # 解析过滤关键词（支持逗号、分号、中文顿号分隔）
-        filter_keywords_list = []
-        if filter_kw:
-            import re as _re
-            filter_keywords_list = [kw.strip() for kw in _re.split(r'[,;，；、]', filter_kw) if kw.strip()]
-
-        def _matches_filter(text: str) -> bool:
-            if not filter_keywords_list or not text:
-                return False
-            return any(kw in text for kw in filter_keywords_list)
-
         all_results = []
         frame_idx = 0
 
         is_regular = "常规" in self._subtitle_mode
         last_regular_sec = -999.0
-        if is_regular:
-            max(1, int(fps * self._r_interval))  # 仅用于触发属性校验
 
         self._log(f"🎬 开始: {os.path.basename(video_path)} FPS={fps:.1f} 字幕模式={self._subtitle_mode}")
         if time_start > 0:
@@ -263,99 +248,90 @@ class FrameProcessor:
         if frame is not None:
             frame_idx += 1
 
-        while ff.is_opened() and frame is not None:
-            # ── 暂停等待 ──
-            while self._pause_flag.is_set():
-                if self._stop_flag.is_set():
+        try:
+            while ff.is_opened() and frame is not None:
+                # ── 暂停等待 ──
+                while self._pause_flag.is_set():
+                    if self._stop_flag.is_set():
+                        break
+                    self._pause_flag.wait(0.3)
+                current_sec = frame_idx / max(fps, 1)
+                if time_end > 0 and current_sec >= time_end:
                     break
-                self._pause_flag.wait(0.3)
-            current_sec = frame_idx / max(fps, 1)
-            if time_end > 0 and current_sec >= time_end:
-                break
-            if self._stop_flag.is_set():
-                self._log("⏹ 已中止")
-                break
+                if self._stop_flag.is_set():
+                    self._log("⏹ 已中止")
+                    break
 
-            if frame_idx % frame_step != 0:
-                # 跳过非采样帧：直接读下一帧
-                if prefetch_future is not None:
-                    frame = prefetch_future.result()
-                    prefetch_future = None
-                else:
-                    frame = ff.read()
-                frame_idx += 1
-                continue
+                if frame_idx % frame_step != 0:
+                    # 跳过非采样帧：直接读下一帧
+                    if prefetch_future is not None:
+                        frame = prefetch_future.result()
+                        prefetch_future = None
+                    else:
+                        frame = ff.read()
+                    frame_idx += 1
+                    continue
 
-            # ── 启动预读下一帧（在 OCR 期间并行执行）──
-            next_future = prefetch_executor.submit(self._prefetch_reader, ff, fps)
+                # ── 启动预读下一帧（在 OCR 期间并行执行）──
+                next_future = prefetch_executor.submit(self._prefetch_reader, ff, fps)
 
-            # ── 并行 OCR 当前帧的全部区域 ──
-            frame_results = self._process_regions_parallel(frame, engine_name, self._regions)
+                # ── 并行 OCR 当前帧的全部区域 ──
+                frame_results = self._process_regions_parallel(frame, engine_name, self._regions)
 
-            if is_regular:
-                # ── 常规字幕模式：按固定间隔输出，可选基本去重 ──
-                if current_sec - last_regular_sec >= self._r_interval:
-                    for rname, re_name, text, conf in frame_results:
-                        if _matches_filter(text):
-                            continue
-                        if text.strip():
-                            if self._r_dedup:
-                                last_sent = region_last_sent.get(rname, "")
-                                sim = get_similarity(text, last_sent) if last_sent else 0.0
-                                if sim >= self._r_sim_threshold:
-                                    # 缓冲区累积
-                                    buf = region_buffer.get(rname, 0) + 1
-                                    region_buffer[rname] = buf
-                                    if buf < self._r_buffer_size:
-                                        continue
-                                    region_buffer[rname] = 0
-                            t_str = format_time(current_sec)
-                            entry = (current_sec, t_str, rname, re_name, text, conf)
-                            all_results.append(entry)
-                            if self._on_result:
-                                self._on_result(current_sec, t_str, rname, re_name, text, conf)
-                            region_last_sent[rname] = text
-                    last_regular_sec = current_sec
-            else:
-                # ── 流式字幕模式：哨兵去重 ──
-                for rname, re_name, text, conf in frame_results:
-                    last_raw = region_last_raw.get(rname, "")
-                    last_sent = region_last_sent.get(rname, "")
-
-                    if _matches_filter(text):
-                        region_last_raw[rname] = text
-                        continue
-
-                    buffer_count = region_buffer.get(rname, 0)
-
-                    if self._sentinel_enabled:
-                        force_sentinel = (
-                            len(last_raw) > self._s_min_text_len
-                            and len(text) < len(last_raw) * self._s_drop_ratio
-                        )
-                        if force_sentinel:
-                            if last_sent and get_similarity(text, last_sent) < self._s_sim_threshold:
-                                t_str = format_time(current_sec)
-                                entry = (current_sec, t_str, rname, re_name, last_sent, 0.0)
-                                all_results.append(entry)
-                                if self._on_result:
-                                    self._on_result(current_sec, t_str, rname, re_name, last_sent, 0.0)
-                                region_last_sent[rname] = last_sent
-                                region_buffer[rname] = 0
-
-                        if len(text) >= self._s_min_text_len:
-                            sim = get_similarity(text, last_sent)
-                            if sim < self._s_sim_threshold:
+                if is_regular:
+                    # ── 常规字幕模式：按固定间隔输出，可选基本去重 ──
+                    if current_sec - last_regular_sec >= self._r_interval:
+                        for rname, re_name, text, conf in frame_results:
+                            if self._filter_mgr and self._filter_mgr.matches(text):
+                                continue
+                            if text.strip():
+                                if self._r_dedup:
+                                    last_sent = region_last_sent.get(rname, "")
+                                    sim = get_similarity(text, last_sent) if last_sent else 0.0
+                                    if sim >= self._r_sim_threshold:
+                                        # 缓冲区累积
+                                        buf = region_buffer.get(rname, 0) + 1
+                                        region_buffer[rname] = buf
+                                        if buf < self._r_buffer_size:
+                                            continue
+                                        region_buffer[rname] = 0
                                 t_str = format_time(current_sec)
                                 entry = (current_sec, t_str, rname, re_name, text, conf)
                                 all_results.append(entry)
                                 if self._on_result:
                                     self._on_result(current_sec, t_str, rname, re_name, text, conf)
                                 region_last_sent[rname] = text
-                                region_buffer[rname] = 0
-                            else:
-                                region_buffer[rname] = buffer_count + 1
-                                if region_buffer[rname] >= self._s_buffer_size:
+                        last_regular_sec = current_sec
+                else:
+                    # ── 流式字幕模式：哨兵去重 ──
+                    for rname, re_name, text, conf in frame_results:
+                        last_raw = region_last_raw.get(rname, "")
+                        last_sent = region_last_sent.get(rname, "")
+
+                        if self._filter_mgr and self._filter_mgr.matches(text):
+                            region_last_raw[rname] = text
+                            continue
+
+                        buffer_count = region_buffer.get(rname, 0)
+
+                        if self._sentinel_enabled:
+                            force_sentinel = (
+                                len(last_raw) > self._s_min_text_len
+                                and len(text) < len(last_raw) * self._s_drop_ratio
+                            )
+                            if force_sentinel:
+                                if last_sent and get_similarity(text, last_sent) < self._s_sim_threshold:
+                                    t_str = format_time(current_sec)
+                                    entry = (current_sec, t_str, rname, re_name, last_sent, 0.0)
+                                    all_results.append(entry)
+                                    if self._on_result:
+                                        self._on_result(current_sec, t_str, rname, re_name, last_sent, 0.0)
+                                    region_last_sent[rname] = last_sent
+                                    region_buffer[rname] = 0
+
+                            if len(text) >= self._s_min_text_len:
+                                sim = get_similarity(text, last_sent)
+                                if sim < self._s_sim_threshold:
                                     t_str = format_time(current_sec)
                                     entry = (current_sec, t_str, rname, re_name, text, conf)
                                     all_results.append(entry)
@@ -363,30 +339,41 @@ class FrameProcessor:
                                         self._on_result(current_sec, t_str, rname, re_name, text, conf)
                                     region_last_sent[rname] = text
                                     region_buffer[rname] = 0
-                    else:
-                        if len(text) >= self._s_min_text_len:
-                            if get_similarity(text, last_sent) < self._s_sim_threshold:
-                                t_str = format_time(current_sec)
-                                entry = (current_sec, t_str, rname, re_name, text, conf)
-                                all_results.append(entry)
-                                if self._on_result:
-                                    self._on_result(current_sec, t_str, rname, re_name, text, conf)
-                                region_last_sent[rname] = text
+                                else:
+                                    region_buffer[rname] = buffer_count + 1
+                                    if region_buffer[rname] >= self._s_buffer_size:
+                                        t_str = format_time(current_sec)
+                                        entry = (current_sec, t_str, rname, re_name, text, conf)
+                                        all_results.append(entry)
+                                        if self._on_result:
+                                            self._on_result(current_sec, t_str, rname, re_name, text, conf)
+                                        region_last_sent[rname] = text
+                                        region_buffer[rname] = 0
+                        else:
+                            if len(text) >= self._s_min_text_len:
+                                if get_similarity(text, last_sent) < self._s_sim_threshold:
+                                    t_str = format_time(current_sec)
+                                    entry = (current_sec, t_str, rname, re_name, text, conf)
+                                    all_results.append(entry)
+                                    if self._on_result:
+                                        self._on_result(current_sec, t_str, rname, re_name, text, conf)
+                                    region_last_sent[rname] = text
 
-                    region_last_raw[rname] = text
+                        region_last_raw[rname] = text
 
-            if self._on_progress:
-                s = region_last_raw.get(self._regions[0].get("name", ""), "")[:12] if self._regions else ""
-                self._on_progress(int(current_sec), int(total_sec), 0, s)
+                if self._on_progress:
+                    s = region_last_raw.get(self._regions[0].get("name", ""), "")[:12] if self._regions else ""
+                    self._on_progress(int(current_sec), int(total_sec), 0, s)
 
-            # ── 获取预读的下一帧 ──
-            try:
-                frame = next_future.result()
-            except Exception:
-                frame = ff.read()
-            frame_idx += 1
+                # ── 获取预读的下一帧 ──
+                try:
+                    frame = next_future.result()
+                except Exception:
+                    frame = ff.read()
+                frame_idx += 1
 
-        prefetch_executor.shutdown(wait=False)
-        ff.close()
+        finally:
+            prefetch_executor.shutdown(wait=False)
+            ff.close()
         self._log(f"✅ 完成: {len(all_results)} 条")
         return all_results

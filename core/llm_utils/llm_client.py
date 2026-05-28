@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import json_repair
 from openai import OpenAI
@@ -49,8 +50,12 @@ def _load_cache(cache_key: str, log_title: str):
                     entries = json.load(f)
                 for entry in entries:
                     if entry.get("cache_key") == cache_key:
+                        resp = entry.get("response")
+                        # 跳过空响应条目（历史缓存污染）
+                        if isinstance(resp, str) and not resp.strip():
+                            continue
                         logger.debug("命中缓存 [%s]: %s", log_title, cache_key[:12])
-                        return entry.get("response")
+                        return resp
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("读取缓存失败 [%s]: %s", log_title, e)
     return None
@@ -69,6 +74,9 @@ def _save_cache(cache_key: str, response, log_title: str):
             except (json.JSONDecodeError, OSError):
                 entries = []
         entries.append({"cache_key": cache_key, "response": response})
+        # 控制缓存文件大小，保留最新 200 条
+        if len(entries) > 200:
+            entries = entries[-200:]
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)
 
@@ -105,7 +113,7 @@ class RateLimiter:
 
 
 # 全局速率限制器实例
-_global_rate_limiter = RateLimiter(max_rpm=60)
+_global_rate_limiter = RateLimiter(max_rpm=30)
 
 
 # ── URL 修正 ──────────────────────────────────────────────────────
@@ -113,7 +121,7 @@ _global_rate_limiter = RateLimiter(max_rpm=60)
 def _normalize_base_url(base_url: str) -> str:
     """标准化 base_url —— 确保以 /v1 结尾（火山引擎特殊处理）。"""
     url = base_url.rstrip("/")
-    if "ark" in url:
+    if "ark.cn-beijing.volces.com" in url:
         return "https://ark.cn-beijing.volces.com/api/v3"
     if not url.endswith("/v1"):
         return url + "/v1"
@@ -156,7 +164,7 @@ def test_connection(api_key: str, base_url: str, model: str, timeout: int = 10) 
 
 # ── 核心调用 ──────────────────────────────────────────────────────
 
-@except_handler("LLM API request failed", retry=5, delay=1.0, default_return=None)
+@except_handler("LLM API request failed", retry=3, delay=1.0, default_return=None)
 def ask_llm(
     prompt: str,
     *,
@@ -171,6 +179,8 @@ def ask_llm(
     base_url: str = "",
     model: str = "",
     timeout: int = 120,
+    max_tokens: int = 2048,
+    image: Any = None,
 ) -> str | dict | None:
     """通过 OpenAI 兼容 API 调用 LLM。
 
@@ -196,6 +206,8 @@ def ask_llm(
         base_url: API 端点 URL
         model: 模型名称
         timeout: 请求超时秒数（默认 120s）
+        max_tokens: 最大输出 token 数（默认 512）
+        image: 可选 numpy 图像数组，非 None 时构造 vision 格式消息
 
     Returns:
         非流式：str（resp_type=None）或 dict（resp_type="json"）
@@ -209,8 +221,8 @@ def ask_llm(
         logger.error("模型名称未设置")
         return None
 
-    # ── 缓存检查（流式模式不缓存） ──
-    if not stream:
+    # ── 缓存检查（流式模式或 vision 模式不缓存） ──
+    if not stream and image is None:
         cache_key = _get_cache_key(model, temperature, prompt, system_prompt)
         cached = _load_cache(cache_key, log_title)
         if cached is not None:
@@ -228,17 +240,37 @@ def ask_llm(
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+
+    if image is not None:
+        import base64
+
+        import cv2
+        _, buf = cv2.imencode(".jpg", image)
+        b64 = base64.b64encode(buf).decode("utf-8")
+        messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ],
+        })
+    else:
+        messages.append({"role": "user", "content": prompt})
 
     params: dict = dict(
         model=model,
         messages=messages,
         temperature=temperature,
         timeout=timeout,
+        max_tokens=max_tokens,
     )
 
-    if resp_type == "json":
-        params["response_format"] = {"type": "json_object"}
+    # DeepSeek 默认启用 thinking mode，消耗 max_tokens 预算导致空返回
+    if "deepseek" in model.lower():
+        params["extra_body"] = {"thinking": {"type": "disabled"}}
+
+    # ── JSON 模式：不使用 response_format（DeepSeek 已知 bug：JSON 模式下概率空返回） ──
+    # 依赖 prompt 中的 "JSON" 字样 + json_repair 解析即可
 
     # ── 流式调用 ──
     if stream:
@@ -275,6 +307,11 @@ def _call_normal(client, params, resp_type, valid_def, cache_key, log_title, log
     """非流式调用 LLM —— 解析响应并缓存。"""
     resp_raw = client.chat.completions.create(**params)
     content = resp_raw.choices[0].message.content or ""
+
+    # ── 空响应直接返回 None（避免缓存和后续解析问题） ──
+    if not content.strip():
+        log.warning("LLM 返回空内容 [%s]", log_title)
+        return None
 
     # ── JSON 容错解析 ──
     if resp_type == "json":

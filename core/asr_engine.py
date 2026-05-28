@@ -244,10 +244,11 @@ class WhisperXEngine(BaseASREngine):
             # 等待 "ready" 信号（从 stderr_lines 中检测）
             deadline = time.time() + 120
             while time.time() < deadline:
-                if self._proc.poll() is not None:
+                if self._proc is None or self._proc.poll() is not None:
                     err = "\n".join(self._stderr_lines[-30:])
+                    code = self._proc.poll() if self._proc is not None else -1
                     logger.error("ASR 子进程提前退出 (code=%d): %s",
-                                 self._proc.poll(), err[:300])
+                                 code, err[:300])
                     self._stop_server()
                     return False
 
@@ -256,6 +257,7 @@ class WhisperXEngine(BaseASREngine):
                     if "ready" in line:
                         logger.info("ASR 子进程就绪")
                         self._ready = True
+                        self._closed = False
                         self._ready_event.set()
                         return True
                     if "error" in line.lower() and "Model load failed" in line:
@@ -609,7 +611,13 @@ def _ffmpeg_to_wav(input_path: str, output_dir: str = None,
 
 def extract_audio_from_video(video_path: str, output_dir: str = None,
                               time_start: float = 0.0, time_end: float = 0.0,
-                              sample_rate: int = 16000) -> str | None:
+                              sample_rate: int = 16000,
+                              cache_path: str = None) -> str | None:
+    """从视频提取音频为 WAV。若提供 cache_path（预览缓存）且无时间范围，直接复用。"""
+    # 无时间范围且有缓存 → 直接复用，跳过 FFmpeg 提取
+    if cache_path and os.path.isfile(cache_path) and time_start == 0.0 and time_end == 0.0:
+        logger.info("复用预览缓存音频: %s", cache_path)
+        return cache_path
     extra = []
     if time_start > 0:
         extra += ["-ss", str(time_start)]
@@ -639,7 +647,7 @@ class ASREngineManager:
     def reload_config(self):
         """重新加载配置并重启引擎（如有运行中的子进程会先停止）。"""
         # 先停止所有运行中的子进程
-        for eng in self._engines.values():
+        for eng in list(self._engines.values()):
             if hasattr(eng, '_stop_server'):
                 try:
                     eng._stop_server()

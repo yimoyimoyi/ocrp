@@ -12,25 +12,10 @@ from core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# [DEBUG] 临时调试日志
-import datetime as _dt
-from pathlib import Path as _Path
-
-_DEBUG_LOG = _Path(__file__).resolve().parent.parent / "logs" / "debug_seg.log"
-_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
-
-
-def _debug_log(msg: str):
-    with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
-        f.write(f"{_dt.datetime.now().strftime('%H:%M:%S.%f')[:-3]} {msg}\n")
-
 
 def _recognize_roi(engine, roi, prompt: str = "") -> str:
     """根据引擎类型调用 OCR 识别 ROI 图片。"""
-    if engine.engine_name == "paddleocr":
-        return engine.recognize(roi)
-    else:
-        return engine.recognize(roi, prompt=prompt)
+    return engine.recognize(roi, prompt=prompt)
 
 
 class WorkerSignals(QObject):
@@ -47,6 +32,7 @@ class OCRWorker(QThread):
     """单帧 OCR 识别线程。"""
 
     result_ready = pyqtSignal(float, str, str, str, str)
+    ocr_error = pyqtSignal(float, str)
 
     def __init__(self, engine, frame: np.ndarray, region: dict,
                  timestamp: float, engine_name: str):
@@ -75,6 +61,7 @@ class OCRWorker(QThread):
         except Exception as e:
             logger.warning("OCR Worker 运行失败: %s", e)
             traceback.print_exc()
+            self.ocr_error.emit(self._timestamp, str(e))
 
 
 class AICorrectionWorker(QThread):
@@ -106,12 +93,6 @@ class AICorrectionWorker(QThread):
         if self._stop_flag.is_set():
             return
         try:
-            # 区域级纠错提示词临时覆盖
-            saved = ""
-            if self._region_correction_prompt and hasattr(self._corrector, '_prompt_template'):
-                saved = self._corrector._prompt_template
-                self._corrector._prompt_template = self._region_correction_prompt
-
             # 构建流式回调（逐字发射信号更新表格）
             stream_mode = getattr(self._corrector, 'stream_mode', False)
             stream_cb = None
@@ -125,10 +106,8 @@ class AICorrectionWorker(QThread):
 
             corrected = self._corrector.correct(self._raw_text, self._context_texts,
                                                 image=self._image,
-                                                stream_callback=stream_cb)
-
-            if saved:
-                self._corrector._prompt_template = saved
+                                                stream_callback=stream_cb,
+                                                prompt_override=self._region_correction_prompt)
 
             if corrected and corrected != self._raw_text:
                 self.correction_ready.emit(self._result_index, self._raw_text, corrected)
@@ -146,21 +125,19 @@ class BatchCorrectionWorker(QThread):
     batch_error = pyqtSignal(str)                   # 错误信息
 
     def __init__(self, corrector, texts: list, context_window: int = 3,
-                 max_retries: int = 3, raw_reference: list[str] | None = None):
+                 max_retries: int = 3):
         """
         Args:
             corrector: AICorrector 实例
-            texts: list of (row_index, raw_text)
+            texts: list of (row_index, text)
             context_window: 上下文窗口
             max_retries: 最大重试次数
-            raw_reference: 原始结果全文（分句后纠错的原文参考）
         """
         super().__init__()
         self._corrector = corrector
         self._texts = list(texts)
         self._context_window = context_window
         self._max_retries = max_retries
-        self._raw_reference = raw_reference
         self._stop_flag = threading.Event()
 
     def stop(self):
@@ -184,11 +161,14 @@ class BatchCorrectionWorker(QThread):
                 context_window=self._context_window,
                 max_retries=self._max_retries,
                 stream_callback=stream_cb,
-                raw_reference=self._raw_reference,
             )
 
             if self._stop_flag.is_set():
                 return
+
+            # 当 API 返回空（重试耗尽）时，用原文填充避免静默丢失
+            if not corrected_map:
+                logger.warning("批量纠错返回空结果: %d 条未纠正", n)
 
             # 发射每条结果
             for item in self._texts:
@@ -203,6 +183,7 @@ class BatchCorrectionWorker(QThread):
             import traceback
             traceback.print_exc()
             self.batch_error.emit(str(e))
+            self.batch_finished.emit()  # 不断裂批处理链，剩余批次继续
 
 
 class VideoProcessWorker(QThread):
@@ -332,7 +313,7 @@ class AudioProcessWorker(QThread):
 
     def __init__(self, asr_engine, audio_source: str, is_video: bool = True,
                  time_start: float = 0.0, time_end: float = 0.0,
-                 asr_region_name: str = "语音"):
+                 asr_region_name: str = "语音", audio_cache_path: str = None):
         super().__init__()
         self._asr_engine = asr_engine
         self._audio_source = audio_source
@@ -340,6 +321,7 @@ class AudioProcessWorker(QThread):
         self._time_start = time_start
         self._time_end = time_end
         self._region_name = asr_region_name
+        self._audio_cache_path = audio_cache_path
         self._stop_flag = threading.Event()
 
     def stop(self):
@@ -361,6 +343,7 @@ class AudioProcessWorker(QThread):
                     self._audio_source,
                     time_start=self._time_start,
                     time_end=self._time_end,
+                    cache_path=self._audio_cache_path,
                 )
                 if not audio_path:
                     self.error.emit("音频提取失败")
@@ -718,9 +701,9 @@ class SegmentationWorker(QThread):
                 return
 
             # [DEBUG] 记录分句输入映射
-            _debug_log("=== 分句输入 ===")
+            logger.debug("=== 分句输入 ===")
             for i, t in enumerate(self._texts):
-                _debug_log(f"  batch[{i}] → row[{t[0]}] raw={t[1][:40]} ts={t[2]:.3f}-{t[3]:.3f}")
+                logger.debug(f"  batch[{i}] → row[{t[0]}] raw={t[1][:40]} ts={t[2]:.3f}-{t[3]:.3f}")
 
             text_map, self.range_map = self._corrector.segment_sentences(
                 self._texts, max_retries=self._max_retries,
@@ -730,18 +713,32 @@ class SegmentationWorker(QThread):
                 return
 
             # [DEBUG] 记录分句输出映射
-            _debug_log("=== 分句输出 ===")
-            _debug_log(f"  text_map: {dict(text_map)}")
-            _debug_log(f"  range_map: {dict(self.range_map)}")
+            logger.debug("=== 分句输出 ===")
+            logger.debug(f"  text_map: {dict(text_map)}")
+            logger.debug(f"  range_map: {dict(self.range_map)}")
+
+            # 构建 batch_idx → merged_text 的完整映射
+            # text_map 只含每组首行，range_map 含每组范围
+            # 同组所有行共享合并文本（便于后续传播纠错）
+            idx_to_text: dict[int, str] = {}
+            for merged_text, (start_idx, end_idx) in self.range_map.items():
+                for bi in range(start_idx, end_idx + 1):
+                    idx_to_text[bi] = merged_text
+            # text_map 中的条目覆盖 range_map 推导的（更精确）
+            for bi, txt in text_map.items():
+                idx_to_text[bi] = txt
 
             # 逐行发射分句结果
-            for batch_idx, segmented_text in text_map.items():
+            for batch_idx in range(len(self._texts)):
                 if self._stop_flag.is_set():
                     return
-                if 0 <= batch_idx < len(self._texts):
-                    row_idx = self._texts[batch_idx][0]
-                    _debug_log(f"  emit row[{row_idx}] = {segmented_text[:40]}")
-                    self.segmentation_ready.emit(row_idx, segmented_text)
+                row_idx = self._texts[batch_idx][0]
+                if batch_idx in idx_to_text:
+                    seg_text = idx_to_text[batch_idx]
+                else:
+                    # 不在任何 range 中的独立行，用原文
+                    seg_text = self._texts[batch_idx][1].replace("\n", " ").strip()
+                self.segmentation_ready.emit(row_idx, seg_text)
 
             self.finished_all.emit(self.range_map)
         except Exception as e:
