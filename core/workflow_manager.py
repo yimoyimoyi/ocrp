@@ -89,6 +89,7 @@ class WorkflowManager(QObject):
         self._correction_stop_requested: bool = False
         self._correction_in_progress: bool = False  # 防止重复提交
         self._seg_stop_requested: bool = False
+        self._seg_in_progress: bool = False  # 防止分句重复提交
         self._env_extraction_running: bool = False
         self._seg_then_correct: bool = False  # 分句完成后是否自动触发纠错
 
@@ -661,6 +662,7 @@ class WorkflowManager(QObject):
         self._seg_stop_requested = True
         self._correction_stop_requested = True
         self._correction_in_progress = False
+        self._seg_in_progress = False
 
         # 视频帧处理器（sentinel / OCR 循环）
         if self._frame_processor:
@@ -1051,6 +1053,10 @@ class WorkflowManager(QObject):
 
     def segment_sentences(self):
         """对当前全部结果进行 LLM 语义分句（分批提交）。"""
+        if self._seg_in_progress:
+            logger.warning("分句已在运行中，忽略重复请求")
+            return
+        self._seg_in_progress = True
         self._reload_all_config()
         self._seg_stop_requested = False
         results = self._get_results()
@@ -1257,6 +1263,7 @@ class WorkflowManager(QObject):
 
     def _on_segmentation_finished(self, range_map: dict):
         """分句完成。"""
+        self._seg_in_progress = False
         self._segmentation_range_map = range_map
         self._set_buttons(correction_all=True, correction=True)
         self._segmentation_worker = None
@@ -1287,6 +1294,7 @@ class WorkflowManager(QObject):
 
     def _on_segmentation_error(self, err: str):
         """分句出错。"""
+        self._seg_in_progress = False
         self._set_buttons(correction_all=True, correction=True)
         self.status_msg.emit(f"⚠ 分句失败: {err}")
         self._segmentation_worker = None
