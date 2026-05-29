@@ -66,6 +66,8 @@ AI_CORRECTION_SCHEMA = {
         "stream_mode": {"type": "bool"},
         "json_mode": {"type": "bool"},
         "seg_time_gap": {"type": "float", "min": 0.0, "max": 60.0},
+        "enable_polish": {"type": "bool"},
+        "polish_prompt": {"type": "str"},
     }
 }
 

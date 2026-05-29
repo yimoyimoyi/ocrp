@@ -20,9 +20,9 @@ from ui.workers import (
     AICorrectionWorker,
     AudioProcessWorker,
     BatchCorrectionWorker,
+    BatchPolishWorker,
     BatchProcessWorker,
     ImageProcessWorker,
-    SegmentationWorker,
     VideoProcessWorker,
 )
 
@@ -43,7 +43,7 @@ class WorkflowManager(QObject):
     process_finished = pyqtSignal()                                 # 处理完成后通知 MainWindow 做后处理
     correction_updated = pyqtSignal(int, str, str)                  # (row, raw, corrected)
     correction_stream_updated = pyqtSignal(int, str)                # (row, partial_text) 流式增量更新
-    segmentation_updated = pyqtSignal(int, str)                     # (row, segmented_text) 分句结果更新
+    polish_updated = pyqtSignal(int, str, str)                      # (row, original, polished)
     batch_progress = pyqtSignal(str, int, int)                      # (fname, idx, total)
     batch_file_done = pyqtSignal(str, list)                         # (file_path, results)
     batch_all_done = pyqtSignal()                                   # 批量全部完成
@@ -72,10 +72,6 @@ class WorkflowManager(QObject):
         self._batch_completed_count: int = 0
         self._batch_total_count: int = 0
         self._batch_pending_batches: deque = deque()
-        self._segmentation_worker: SegmentationWorker | None = None
-        self._segmentation_range_map: dict[str, tuple[int, int]] = {}
-        self._seg_cache_path = Path(__file__).resolve().parent.parent / "output" / "log" / "segmentation.json"
-        self._seg_retry_offset: int = 0  # 当前二次分句的 offset
 
         # ── ASR 缓存 ──
         self._asr_cache_dir = Path(__file__).resolve().parent.parent / "output" / "llm_log"
@@ -88,10 +84,13 @@ class WorkflowManager(QObject):
         # ── 批处理控制 ──
         self._correction_stop_requested: bool = False
         self._correction_in_progress: bool = False  # 防止重复提交
-        self._seg_stop_requested: bool = False
-        self._seg_in_progress: bool = False  # 防止分句重复提交
         self._env_extraction_running: bool = False
-        self._seg_then_correct: bool = False  # 分句完成后是否自动触发纠错
+        self._polish_in_progress: bool = False
+        self._polish_stop_requested: bool = False
+        self._polish_total_batches: int = 0
+        self._polish_completed_batches: int = 0
+        self._polish_pending_batches: deque = deque()
+        self._polish_workers: list[BatchPolishWorker] = []
 
         # ── 批量状态 ──
         self._batch_files: list[str] = []
@@ -182,11 +181,11 @@ class WorkflowManager(QObject):
         logger.info("ASR 结果已缓存: %s (%d 段)", video_path, len(results))
 
     def clear_all_caches(self):
-        """清除所有缓存（LLM 响应缓存 + ASR 结果缓存 + 分句缓存 + 分句调试日志）。"""
+        """清除所有缓存（LLM 响应缓存 + ASR 结果缓存 + 调试日志）。"""
         project_root = Path(__file__).resolve().parent.parent
         count = 0
 
-        # LLM 缓存 (output/llm_log/*.json) + 分句缓存 (output/log/*.json)
+        # LLM 缓存 (output/llm_log/*.json) + 日志 (output/log/*.json)
         for cache_dir in [project_root / "output" / "llm_log", project_root / "output" / "log"]:
             if cache_dir.exists():
                 for f in cache_dir.glob("*.json"):
@@ -200,23 +199,6 @@ class WorkflowManager(QObject):
         if self._asr_cache_file.exists():
             try:
                 self._asr_cache_file.unlink()
-                count += 1
-            except OSError:
-                pass
-
-        # 分句缓存（显式文件）
-        if self._seg_cache_path.exists():
-            try:
-                self._seg_cache_path.unlink()
-                count += 1
-            except OSError:
-                pass
-
-        # 分句调试日志
-        debug_seg = project_root / "logs" / "debug_seg.log"
-        if debug_seg.exists():
-            try:
-                debug_seg.unlink()
                 count += 1
             except OSError:
                 pass
@@ -256,6 +238,10 @@ class WorkflowManager(QObject):
             self._engine_mgr.reload_config()
         if self._config_mgr and hasattr(self._config_mgr, 'reload'):
             self._config_mgr.reload()
+        # 同步 RPM 限制
+        from core.llm_utils.llm_client import set_global_rpm
+        mp = self._get_mode_params()
+        set_global_rpm(mp.get("corr_rpm", 30))
 
     # ═══════════════════════════════════════════════════════════════
     # 单文件处理入口
@@ -264,7 +250,6 @@ class WorkflowManager(QObject):
     def start_processing(self):
         """单文件处理入口（对应 MainWindow._on_start_processing）。"""
         self._correction_stop_requested = False
-        self._seg_stop_requested = False
         self._reload_all_config()
         vp = self._get_video_path()
         if not vp:
@@ -608,7 +593,8 @@ class WorkflowManager(QObject):
         self.status_msg.emit(f"处理中... {cur}s / {total}s | 哨兵: {sentinel}")
 
     def _on_process_finished(self, _):
-        self._set_buttons(start=True, stop=False, correction=True, correction_all=True, pause=False)
+        self._set_buttons(start=True, stop=False, correction=True, correction_all=True,
+                          polish=True, polish_all=True, pause=False)
         self.progress_val.emit(0)
 
         # 排序：先按时间，再按区域顺序模板（如有）
@@ -628,22 +614,17 @@ class WorkflowManager(QObject):
             msg += f" | 过滤: {self._filtered_count} 条"
         self._filtered_count = 0
 
-        # 全量处理：先分句后纠错（分句合并碎片，纠错/翻译基于完整句子）
+        # 全量处理：直接纠错
         corr_enabled = mp.get("corr_enabled", False)
-        seg_enabled = self._corrector and self._corrector.sentence_segmentation_enabled
-        if seg_enabled and n > 0:
-            # 分句完成后会自动触发纠错（如果启用）
-            self._seg_then_correct = corr_enabled
-            self.segment_sentences()
-            self.status_msg.emit(f"{msg} | LLM 分句中...")
-        elif corr_enabled and n > 0:
+        if corr_enabled and n > 0:
             self._run_full_correction(is_auto=True)
             self.status_msg.emit(f"{msg} | 全量 AI 纠错中...")
         else:
             self.status_msg.emit(msg)
 
     def _on_process_error(self, err):
-        self._set_buttons(start=True, stop=False, correction=True, correction_all=True, pause=False)
+        self._set_buttons(start=True, stop=False, correction=True, correction_all=True,
+                          polish=True, polish_all=True, pause=False)
         self.progress_val.emit(0)
         self.status_msg.emit(f"❌ 处理失败: {err}")
         is_batch = self._batch_worker and self._batch_worker.isRunning()
@@ -658,11 +639,13 @@ class WorkflowManager(QObject):
         """停止所有正在进行的处理（OCR / ASR / 纠错 / 批量）。"""
         logger.info("停止处理")
 
-        # 阻止分句/纠错批处理链继续
-        self._seg_stop_requested = True
+        # 阻止纠错批处理链继续
         self._correction_stop_requested = True
         self._correction_in_progress = False
-        self._seg_in_progress = False
+
+        # 阻止润色批处理链继续
+        self._polish_stop_requested = True
+        self._polish_in_progress = False
 
         # 视频帧处理器（sentinel / OCR 循环）
         if self._frame_processor:
@@ -674,7 +657,6 @@ class WorkflowManager(QObject):
             ("图片", self._image_worker),
             ("音频", self._audio_worker),
             ("批量", self._batch_worker),
-            ("分句", self._segmentation_worker),
         ]
         for name, w in workers:
             if w and w.isRunning():
@@ -686,6 +668,13 @@ class WorkflowManager(QObject):
 
         # 清空待处理批次队列
         self._batch_pending_batches.clear()
+
+        # 停止润色 workers
+        for w in self._polish_workers:
+            if w.isRunning():
+                w.stop()
+        self._polish_workers.clear()
+        self._polish_pending_batches.clear()
 
         # 批量纠错（并行 worker 列表）
         with self._batch_correction_workers_lock:
@@ -707,7 +696,8 @@ class WorkflowManager(QObject):
                         w.quit()
 
         self.status_msg.emit("已停止")
-        self._set_buttons(start=True, stop=False, correction=True, correction_all=True)
+        self._set_buttons(start=True, stop=False, correction=True, correction_all=True,
+                          polish=True, polish_all=True)
         self.progress_val.emit(0)
 
     def pause_processing(self):
@@ -772,14 +762,13 @@ class WorkflowManager(QObject):
             return
         logger.info("批量纠错选中: %d 行", len(selected_rows))
 
-        # 构建选中行的 texts 列表（有分句优先用分句，无分句回退到原始文本）
+        # 构建选中行的 texts 列表（使用原始文本）
         results = self._get_results()
         texts = []
         for row in sorted(selected_rows):
             if 0 <= row < len(results):
                 r = results[row]
-                segmented = r.get("segmented", "").strip()
-                raw = segmented or r.get("raw", "")
+                raw = r.get("raw", "")
                 if raw.strip():
                     ts = r.get("time_sec", 0.0) or 0.0
                     te = r.get("end_sec", 0.0) or 0.0
@@ -796,15 +785,16 @@ class WorkflowManager(QObject):
         context_window = mp.get("corr_context_window", 3)
         max_retries = mp.get("corr_retry", 3)
         batch_size = mp.get("corr_batch_size", 5)
+        concurrency = mp.get("corr_concurrency", 4)
 
         total_batches = (len(texts) + batch_size - 1) // batch_size
-        self._set_buttons(correction_all=False, correction=False)
+        self._set_buttons(correction_all=False, correction=False, polish=False, polish_all=False)
         self._total_correction_batches = total_batches
         self._is_auto_correction = False
         self._correction_stop_requested = False
 
         self._submit_all_correction_batches(texts, batch_size, context_window, max_retries,
-                                             total_batches)
+                                             total_batches, concurrency)
         self.status_msg.emit(f"已提交 {len(texts)} 条批量纠错 [{total_batches} 批]")
 
     # ═══════════════════════════════════════════════════════════════
@@ -822,38 +812,15 @@ class WorkflowManager(QObject):
 
         self._start_batch_correction(results, is_auto=False)
 
-    def _build_correction_texts(self, results: list, prefer_segmented: bool = False) -> list:
-        """从结果列表提取有效文本条目。
-
-        Args:
-            results: 结果列表
-            prefer_segmented: True=优先使用分句文本（无分句时回退到原文），按 segmented 去重（同组只取首行）
-        """
+    def _build_correction_texts(self, results: list) -> list:
+        """从结果列表提取有效文本条目。"""
         texts = []
-        seen_seg: set[str] = set()
         for row, r in enumerate(results):
-            if prefer_segmented:
-                segmented = r.get("segmented", "").strip()
-                if segmented:
-                    if segmented in seen_seg:
-                        continue  # 同组已取过，跳过重复
-                    seen_seg.add(segmented)
-                    texts.append((row, segmented,
-                                  r.get("time_sec", 0.0) or 0.0,
-                                  r.get("end_sec", 0.0) or 0.0))
-                else:
-                    # 无分句结果，回退到原始文本
-                    raw = r.get("raw", "")
-                    if raw.strip():
-                        texts.append((row, raw,
-                                      r.get("time_sec", 0.0) or 0.0,
-                                      r.get("end_sec", 0.0) or 0.0))
-            else:
-                raw = r.get("raw", "")
-                if raw.strip():
-                    texts.append((row, raw,
-                                  r.get("time_sec", 0.0) or 0.0,
-                                  r.get("end_sec", 0.0) or 0.0))
+            raw = r.get("raw", "")
+            if raw.strip():
+                texts.append((row, raw,
+                              r.get("time_sec", 0.0) or 0.0,
+                              r.get("end_sec", 0.0) or 0.0))
         return texts
 
     def _sync_corrector_modes(self, mp: dict):
@@ -896,7 +863,7 @@ class WorkflowManager(QObject):
         self._sync_corrector_modes(mp)
         self._maybe_extract_env(results, mp)
 
-        texts = self._build_correction_texts(results, prefer_segmented=True)
+        texts = self._build_correction_texts(results)
         if not texts:
             self.status_msg.emit(f"✅ 完成: {len(results)} 条结果 | 无有效文本可纠错")
             return
@@ -904,20 +871,22 @@ class WorkflowManager(QObject):
         context_window = mp.get("corr_context_window", 3)
         max_retries = mp.get("corr_retry", 3)
         batch_size = mp.get("corr_batch_size", 5)
+        concurrency = mp.get("corr_concurrency", 4)
 
         # 按 batch_size 分批提交
         total_batches = (len(texts) + batch_size - 1) // batch_size
-        self._set_buttons(correction_all=False, correction=False)
+        self._set_buttons(correction_all=False, correction=False, polish=False, polish_all=False)
         self._total_correction_batches = total_batches
         self._is_auto_correction = is_auto
 
         self._submit_all_correction_batches(texts, batch_size, context_window, max_retries,
-                                             total_batches)
+                                             total_batches, concurrency)
 
     def _submit_all_correction_batches(self, texts: list, batch_size: int,
                                         context_window: int, max_retries: int,
-                                        total_batches: int):
-        """并行提交所有批次纠错（滑动窗口，默认 4 并发）。"""
+                                        total_batches: int,
+                                        concurrency: int = 4):
+        """并行提交所有批次纠错（滑动窗口并发）。"""
         if self._correction_stop_requested:
             self._on_batch_correction_finished()
             return
@@ -933,8 +902,8 @@ class WorkflowManager(QObject):
         with self._batch_correction_workers_lock:
             self._batch_correction_workers.clear()
 
-        # 滑动窗口：最多 4 个批次并行
-        concurrency = min(4, len(batches))
+        # 滑动窗口并发
+        concurrency = min(concurrency, len(batches))
         for _ in range(concurrency):
             self._launch_next_correction_batch(context_window, max_retries)
 
@@ -1009,295 +978,18 @@ class WorkflowManager(QObject):
         self._correction_in_progress = False
         with self._batch_correction_workers_lock:
             self._batch_correction_workers.clear()
-        self._propagate_corrections_to_merged_rows()
         n = self._get_table_row_count()
         self.status_msg.emit(f"✅ 完成: {n} 条结果 | 全量纠错完成")
-
-    def _propagate_corrections_to_merged_rows(self):
-        """将合并首行的纠错结果传播到同组的被合并行。"""
-        results = self._get_results()
-        # 收集每个 segmented 文本对应的 corrected（只取合并首行的）
-        seg_to_corr: dict[str, str] = {}
-        for r in results:
-            seg = r.get("segmented", "").strip()
-            corr = r.get("corrected", "").strip()
-            raw = r.get("raw", "").replace("\n", " ").strip()
-            if seg and corr and seg != raw:
-                seg_to_corr[seg] = corr
-        if not seg_to_corr:
-            return
-        # 传播到被合并行（corrected 为空但 segmented 有值且 == raw 的行）
-        changed = 0
-        for r in results:
-            if not r.get("corrected", "").strip():
-                seg = r.get("segmented", "").strip()
-                if seg in seg_to_corr:
-                    r["corrected"] = seg_to_corr[seg]
-                    changed += 1
-        if changed:
-            logger.info("纠错传播: %d 行从合并首行获取翻译", changed)
 
     def _on_batch_correction_finished(self):
         """批量纠错完成（来自 correct_all）。"""
         self._correction_stop_requested = False
         self._correction_in_progress = False
-        self._set_buttons(correction_all=True, correction=True)
+        self._set_buttons(correction_all=True, correction=True, polish=True, polish_all=True)
         with self._batch_correction_workers_lock:
             self._batch_correction_workers.clear()
         n = self._get_table_row_count()
         self.status_msg.emit(f"✅ 完成: {n} 条结果 | 批量纠错完成")
-
-    # ═══════════════════════════════════════════════════════════════
-    # LLM 分句
-    # ═══════════════════════════════════════════════════════════════
-
-    def segment_sentences(self):
-        """对当前全部结果进行 LLM 语义分句（分批提交）。"""
-        if self._seg_in_progress:
-            logger.warning("分句已在运行中，忽略重复请求")
-            return
-        self._seg_in_progress = True
-        self._reload_all_config()
-        self._seg_stop_requested = False
-        results = self._get_results()
-        if not results:
-            self._show_error("提示", "暂无识别结果可分句。")
-            return
-
-        texts = self._build_correction_texts(results)
-        if not texts:
-            self.status_msg.emit("⚠ 无有效文本可分句")
-            return
-
-        mp = self._get_mode_params()
-        batch_size = mp.get("corr_batch_size", 5)
-        max_retries = mp.get("corr_retry", 3)
-
-        self._seg_texts = texts
-        self._seg_batch_size = batch_size
-        self._seg_max_retries = max_retries
-        self._seg_offset = 0
-        self._seg_merged_range_map: dict[str, tuple[int, int]] = {}
-        self._seg_failed_offsets: list[int] = []  # 失败批次的起始 offset
-        self._seg_is_retry_pass = False  # 是否为二次分句阶段
-        self._seg_total_batches = (len(texts) + batch_size - 1) // batch_size
-        self._seg_cache_path = Path(__file__).resolve().parent.parent / "output" / "log" / "segmentation.json"
-
-        # ── P4: 断点续跑 ──
-        if self._seg_cache_path.exists():
-            try:
-                with open(self._seg_cache_path, encoding="utf-8") as f:
-                    cache = json.load(f)
-                cached_offset = cache.get("offset", 0)
-                cached_map = cache.get("range_map", {})
-                cached_failed = cache.get("failed_batches", [])
-                if cached_offset > 0 and cached_map:
-                    self._seg_offset = cached_offset
-                    self._seg_merged_range_map = cached_map
-                    self._seg_failed_offsets = cached_failed
-                    logger.info("分句缓存恢复: 已完成 %d 条, %d 句, 失败 %d 批",
-                                cached_offset, len(cached_map), len(cached_failed))
-            except (json.JSONDecodeError, OSError) as e:
-                logger.warning("分句缓存读取失败: %s", e)
-
-        self._set_buttons(correction_all=False, correction=False)
-        self._submit_segmentation_batch()
-
-    def _submit_segmentation_batch(self):
-        """提交一批分句任务。"""
-        texts = self._seg_texts
-        offset = self._seg_offset
-        batch = texts[offset:offset + self._seg_batch_size]
-        batch_num = offset // self._seg_batch_size + 1
-        total = self._seg_total_batches
-
-        self.status_msg.emit(f"⏳ LLM 分句 [{batch_num}/{total}] 批...")
-        self._segmentation_worker = SegmentationWorker(
-            self._corrector, batch, max_retries=self._seg_max_retries,
-        )
-        self._segmentation_worker.segmentation_ready.connect(self._on_segmentation_ready)
-        self._segmentation_worker.finished_all.connect(self._on_segmentation_batch_done)
-        self._segmentation_worker.error.connect(self._on_segmentation_error)
-        self._segmentation_worker.start()
-
-    def _on_segmentation_batch_done(self, batch_range_map: dict):
-        """一批分句完成，合并 range_map 并启动下一批。"""
-        offset = self._seg_offset
-        batch_num = offset // self._seg_batch_size + 1
-        total = self._seg_total_batches
-
-        if batch_range_map:
-            # range 索引从 batch-relative 转为全局 table row index
-            for seg_text, (start, end) in batch_range_map.items():
-                if offset + start < len(self._seg_texts) and offset + end < len(self._seg_texts):
-                    global_start = self._seg_texts[offset + start][0]
-                    global_end = self._seg_texts[offset + end][0]
-                    self._seg_merged_range_map[seg_text] = (global_start, global_end)
-        else:
-            # 空结果：标记失败批次，后续二次分句
-            batch_end = min(offset + self._seg_batch_size, len(self._seg_texts))
-            row_start = self._seg_texts[offset][0] if offset < len(self._seg_texts) else -1
-            row_end = self._seg_texts[batch_end - 1][0] if batch_end > 0 else -1
-            logger.warning("分句批次 [%d/%d] 返回空结果 (rows %d-%d)，标记为失败",
-                           batch_num, total, row_start, row_end)
-            self.status_msg.emit(f"⚠ 分句批次 [{batch_num}/{total}] 失败 (rows {row_start}-{row_end})，将二次重试")
-            if not self._seg_is_retry_pass:
-                self._seg_failed_offsets.append(offset)
-
-        self._seg_offset += self._seg_batch_size
-
-        # ── P4: 保存断点缓存 ──
-        try:
-            cache = {
-                "offset": self._seg_offset,
-                "range_map": self._seg_merged_range_map,
-                "failed_batches": self._seg_failed_offsets,
-            }
-            self._seg_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._seg_cache_path, "w", encoding="utf-8") as f:
-                json.dump(cache, f, ensure_ascii=False, indent=2)
-        except OSError as e:
-            logger.warning("分句缓存写入失败: %s", e)
-
-        if self._seg_offset < len(self._seg_texts) and not self._seg_stop_requested:
-            self._submit_segmentation_batch()
-        elif self._seg_failed_offsets and not self._seg_is_retry_pass:
-            # 正常分句完成，进入二次分句阶段
-            self._start_retry_failed_batches()
-        else:
-            self._on_segmentation_finished(self._seg_merged_range_map)
-
-    def _on_segmentation_ready(self, row: int, segmented_text: str):
-        """分句结果逐行更新。"""
-        self.segmentation_updated.emit(row, segmented_text)
-
-    def _start_retry_failed_batches(self):
-        """启动二次分句阶段：对失败批次重新分句。"""
-        if not self._seg_failed_offsets:
-            self._on_segmentation_finished(self._seg_merged_range_map)
-            return
-
-        self._seg_is_retry_pass = True
-        retry_count = len(self._seg_failed_offsets)
-        logger.info("开始二次分句: %d 个失败批次", retry_count)
-        self.status_msg.emit(f"⏳ 二次分句: {retry_count} 个失败批次...")
-        self._submit_retry_segmentation_batch()
-
-    def _submit_retry_segmentation_batch(self):
-        """提交一个失败批次进行二次分句。"""
-        if not self._seg_failed_offsets or self._seg_stop_requested:
-            self._on_segmentation_finished(self._seg_merged_range_map)
-            return
-
-        self._seg_retry_offset = self._seg_failed_offsets.pop(0)
-        texts = self._seg_texts
-        batch = texts[self._seg_retry_offset:self._seg_retry_offset + self._seg_batch_size]
-        remaining = len(self._seg_failed_offsets) + 1
-
-        batch_end = min(self._seg_retry_offset + self._seg_batch_size, len(texts))
-        row_start = texts[self._seg_retry_offset][0] if self._seg_retry_offset < len(texts) else -1
-        row_end = texts[batch_end - 1][0] if batch_end > 0 else -1
-        logger.info("二次分句: offset=%d rows=%d-%d, 剩余 %d 批",
-                    self._seg_retry_offset, row_start, row_end, remaining)
-        self.status_msg.emit(f"⏳ 二次分句 [剩余 {remaining} 批] rows {row_start}-{row_end}...")
-        self._segmentation_worker = SegmentationWorker(
-            self._corrector, batch, max_retries=self._seg_max_retries,
-        )
-        self._segmentation_worker.segmentation_ready.connect(self._on_segmentation_ready)
-        self._segmentation_worker.finished_all.connect(self._on_retry_segmentation_batch_done)
-        self._segmentation_worker.error.connect(self._on_retry_segmentation_error)
-        self._segmentation_worker.start()
-
-    def _on_retry_segmentation_batch_done(self, batch_range_map: dict):
-        """二次分句一批完成。"""
-        offset = self._seg_retry_offset
-        batch_end = min(offset + self._seg_batch_size, len(self._seg_texts))
-        row_start = self._seg_texts[offset][0] if offset < len(self._seg_texts) else -1
-        row_end = self._seg_texts[batch_end - 1][0] if batch_end > 0 else -1
-
-        if batch_range_map:
-            # range 索引从 batch-relative 转为全局 table row index
-            for seg_text, (start, end) in batch_range_map.items():
-                if offset + start < len(self._seg_texts) and offset + end < len(self._seg_texts):
-                    global_start = self._seg_texts[offset + start][0]
-                    global_end = self._seg_texts[offset + end][0]
-                    self._seg_merged_range_map[seg_text] = (global_start, global_end)
-            logger.info("二次分句成功: rows %d-%d → %d 句", row_start, row_end, len(batch_range_map))
-        else:
-            # 二次分句仍失败，保底：用原始文本填充该批次
-            logger.warning("二次分句仍失败: rows %d-%d，用原始文本填充", row_start, row_end)
-            self.status_msg.emit(f"⚠ 二次分句失败 rows {row_start}-{row_end}，用原始文本填充")
-            batch = self._seg_texts[offset:offset + self._seg_batch_size]
-            for item in batch:
-                row_idx = item[0]
-                raw_text = item[1].replace("\n", " ").strip()
-                self.segmentation_updated.emit(row_idx, raw_text)
-
-        # 保存缓存
-        try:
-            cache = {
-                "offset": self._seg_offset,
-                "range_map": self._seg_merged_range_map,
-                "failed_batches": self._seg_failed_offsets,
-            }
-            self._seg_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._seg_cache_path, "w", encoding="utf-8") as f:
-                json.dump(cache, f, ensure_ascii=False, indent=2)
-        except OSError as e:
-            logger.warning("分句缓存写入失败: %s", e)
-
-        if self._seg_failed_offsets and not self._seg_stop_requested:
-            self._submit_retry_segmentation_batch()
-        else:
-            self._on_segmentation_finished(self._seg_merged_range_map)
-
-    def _on_retry_segmentation_error(self, err: str):
-        """二次分句出错。"""
-        row_start = self._seg_texts[self._seg_retry_offset][0] if self._seg_retry_offset < len(self._seg_texts) else -1
-        logger.warning("二次分句出错: rows from %d, error=%s", row_start, err)
-        self.status_msg.emit(f"⚠ 二次分句出错 rows from {row_start}: {err}")
-        if self._seg_failed_offsets and not self._seg_stop_requested:
-            self._submit_retry_segmentation_batch()
-        else:
-            self._on_segmentation_finished(self._seg_merged_range_map)
-
-    def _on_segmentation_finished(self, range_map: dict):
-        """分句完成。"""
-        self._seg_in_progress = False
-        self._segmentation_range_map = range_map
-        self._set_buttons(correction_all=True, correction=True)
-        self._segmentation_worker = None
-
-        # ── P4: 清理分句缓存 ──
-        try:
-            if self._seg_cache_path.exists():
-                self._seg_cache_path.unlink()
-        except OSError:
-            pass
-        n = self._get_table_row_count()
-        merged_count = len(range_map)
-        failed_count = len(self._seg_failed_offsets) if hasattr(self, '_seg_failed_offsets') else 0
-        if merged_count:
-            msg = f"✅ 分句完成: {n} 条碎片 → {merged_count} 句"
-            if failed_count > 0:
-                msg += f" | {failed_count} 批失败已用原文填充"
-            self.status_msg.emit(msg)
-        else:
-            self.status_msg.emit(f"✅ 分句完成: {n} 条结果")
-        logger.info("分句完成: %d 条 → %d 句, 失败 %d 批", n, merged_count, failed_count)
-
-        # 分句完成后触发纠错/翻译（如果在 _on_process_finished 中设置了标志）
-        if getattr(self, '_seg_then_correct', False):
-            self._seg_then_correct = False
-            self._run_full_correction(is_auto=True)
-            self.status_msg.emit(f"{msg} | 全量 AI 纠错中...")
-
-    def _on_segmentation_error(self, err: str):
-        """分句出错。"""
-        self._seg_in_progress = False
-        self._set_buttons(correction_all=True, correction=True)
-        self.status_msg.emit(f"⚠ 分句失败: {err}")
-        self._segmentation_worker = None
 
     # ═══════════════════════════════════════════════════════════════
     # AI 纠错 —— 单条提交
@@ -1309,9 +1001,14 @@ class WorkflowManager(QObject):
         results = self._get_results()
 
         ctx = []
+        seg_gap = mp.get("seg_time_gap", 3.0)
         for i in range(max(0, row - ctx_window), min(len(results), row + ctx_window + 1)):
             if i != row:
-                ctx.append(results[i].get("segmented", "").strip() or results[i].get("raw", ""))
+                # 跳过时间间隔超过 seg_time_gap 的上下文行
+                time_gap = abs((results[i].get("time_sec", 0.0) or 0.0) -
+                               (results[row].get("time_sec", 0.0) or 0.0))
+                if time_gap <= seg_gap:
+                    ctx.append(results[i].get("raw", ""))
 
         # 获取 ROI 图像（本地引擎纠错需要）
         image = None
@@ -1354,6 +1051,126 @@ class WorkflowManager(QObject):
     def _on_correction_stream(self, row, partial_text):
         """流式增量更新 —— 实时更新表格中的纠错文本。"""
         self.correction_stream_updated.emit(row, partial_text)
+
+    # ═══════════════════════════════════════════════════════════════
+    # AI 润色 —— 独立流程（并行批处理）
+    # ═══════════════════════════════════════════════════════════════
+
+    def polish_selected(self, selected_rows: set):
+        """对选中行进行润色（优先使用纠错结果作为输入）。"""
+        self._reload_all_config()
+        if not selected_rows:
+            self._show_error("提示", "请先在表格中选中需要润色的行（可多选）。")
+            return
+
+        results = self._get_results()
+        items = self._build_polish_items(results, selected_rows)
+        if not items:
+            self.status_msg.emit("⚠ 选中的行无有效文本可润色")
+            return
+
+        logger.info("润色选中: %d 行", len(items))
+        self._start_polish(items)
+
+    def polish_all(self):
+        """对全部行进行润色（优先使用纠错结果作为输入）。"""
+        self._reload_all_config()
+        results = self._get_results()
+        if not results:
+            self._show_error("提示", "暂无识别结果可润色。")
+            return
+
+        all_rows = set(range(len(results)))
+        items = self._build_polish_items(results, all_rows)
+        if not items:
+            self.status_msg.emit("⚠ 无有效文本可润色")
+            return
+
+        logger.info("润色全部: %d 行", len(items))
+        self._start_polish(items)
+
+    def _build_polish_items(self, results: list, rows: set) -> list[tuple[int, str, str]]:
+        """构建润色输入列表：优先使用纠错结果，回退到原始文本。"""
+        items = []
+        for row in sorted(rows):
+            if 0 <= row < len(results):
+                r = results[row]
+                raw = r.get("raw", "")
+                corrected = r.get("segmented", "")  # 纠错结果（col5）
+                text_to_polish = corrected if corrected.strip() else raw
+                if text_to_polish.strip():
+                    items.append((row, raw, text_to_polish))
+        return items
+
+    def _start_polish(self, items: list[tuple[int, str, str]]):
+        """启动润色（并行批处理，滑动窗口 4 并发）。"""
+        mp = self._get_mode_params()
+        self._sync_corrector_modes(mp)
+        self._maybe_extract_env(self._get_results(), mp)
+
+        batch_size = mp.get("corr_batch_size", 5)
+        batches = [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+
+        self._set_buttons(polish=False, polish_all=False)
+        self._polish_in_progress = True
+        self._polish_stop_requested = False
+        self._polish_total_batches = len(batches)
+        self._polish_completed_batches = 0
+        self._polish_pending_batches = deque(batches)
+        self._polish_workers: list[BatchPolishWorker] = []
+
+        total = len(items)
+        concurrency = mp.get("corr_concurrency", 4)
+        logger.info("润色启动: %d 条, %d 批 (batch_size=%d, concurrency=%d)",
+                     total, len(batches), batch_size, concurrency)
+        self.status_msg.emit(f"润色中: {total} 条 [{len(batches)} 批]")
+
+        concurrency = min(concurrency, len(batches))
+        for _ in range(concurrency):
+            self._launch_next_polish_batch()
+
+    def _launch_next_polish_batch(self):
+        """从待处理队列中取下一批并启动润色 worker。"""
+        if self._polish_stop_requested or not self._polish_pending_batches:
+            return
+
+        batch = self._polish_pending_batches.popleft()
+        worker = BatchPolishWorker(self._corrector, batch)
+        worker.polish_ready.connect(self._on_polish_ready)
+        worker.batch_finished.connect(self._on_polish_batch_done)
+        worker.batch_error.connect(self._on_polish_batch_error)
+        self._polish_workers.append(worker)
+        worker.start()
+
+    def _on_polish_batch_done(self):
+        """单个润色批次完成，启动下一批或结束。"""
+        self._polish_completed_batches += 1
+        self.status_msg.emit(
+            f"润色进度: {self._polish_completed_batches}/{self._polish_total_batches} 批")
+
+        if self._polish_pending_batches and not self._polish_stop_requested:
+            self._launch_next_polish_batch()
+        elif self._polish_completed_batches >= self._polish_total_batches:
+            self._on_polish_finished()
+
+    def _on_polish_batch_error(self, err):
+        """单个润色批次出错，继续后续批次。"""
+        logger.warning("润色批次失败: %s", err)
+        self._polish_completed_batches += 1
+        if self._polish_pending_batches and not self._polish_stop_requested:
+            self._launch_next_polish_batch()
+        elif self._polish_completed_batches >= self._polish_total_batches:
+            self._on_polish_finished()
+
+    def _on_polish_ready(self, row, original, polished):
+        self.polish_updated.emit(row, original, polished)
+
+    def _on_polish_finished(self):
+        self._polish_in_progress = False
+        self._polish_workers.clear()
+        self._set_buttons(polish=True, polish_all=True)
+        n = self._get_table_row_count()
+        self.status_msg.emit(f"✅ 完成: {n} 条结果 | 润色完成")
 
     # ═══════════════════════════════════════════════════════════════
     # 批量文件处理
@@ -1486,8 +1303,6 @@ class WorkflowManager(QObject):
             workers.append(self._audio_worker)
         if self._batch_worker and self._batch_worker.isRunning():
             workers.append(self._batch_worker)
-        if self._segmentation_worker and self._segmentation_worker.isRunning():
-            workers.append(self._segmentation_worker)
         if self._image_worker and self._image_worker.isRunning():
             workers.append(self._image_worker)
 

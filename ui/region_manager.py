@@ -1,12 +1,11 @@
 """区域管理面板 —— 区域列表 + 滑动属性编辑器。"""
 
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -15,7 +14,6 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
@@ -68,12 +66,12 @@ class RegionManagerWidget(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         # ── 标题栏 ──
         header = QHBoxLayout()
-        header.setSpacing(4)
+        header.setSpacing(6)
         title = QLabel("📐 区域")
         title.setObjectName("regionTitle")
         header.addWidget(title)
@@ -82,11 +80,11 @@ class RegionManagerWidget(QWidget):
         btn_add = QPushButton("+ 添加")
         btn_add.setToolTip("在预览图上拖拽绘制矩形区域")
         btn_add.clicked.connect(self.region_add_requested.emit)
-        btn_add.setFixedHeight(24)
+        btn_add.setFixedHeight(28)
         header.addWidget(btn_add)
 
         btn_clear = QPushButton("清空")
-        btn_clear.setFixedHeight(24)
+        btn_clear.setFixedHeight(28)
         btn_clear.clicked.connect(self._on_clear_all)
         header.addWidget(btn_clear)
         layout.addLayout(header)
@@ -96,25 +94,20 @@ class RegionManagerWidget(QWidget):
         self._list_widget.currentRowChanged.connect(self._on_selection_changed)
         layout.addWidget(self._list_widget)
 
-        # ── 属性编辑（滑动窗口） ──
-        self._prop_scroll = QScrollArea()
-        self._prop_scroll.setWidgetResizable(True)
-        self._prop_scroll.setFrameShape(QFrame.NoFrame)
-        self._prop_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # ── 属性编辑 ──
         prop_root = QWidget()
         vl = QVBoxLayout(prop_root)
         vl.setContentsMargins(0, 0, 0, 0)
         vl.setSpacing(6)
         self._build_prop_editor(vl)
-        self._prop_scroll.setWidget(prop_root)
-        layout.addWidget(self._prop_scroll, 1)
+        layout.addWidget(prop_root, 1)
 
         self._set_editor_enabled(False)
 
     def _build_prop_editor(self, vl):
         """构建滑动窗口内的属性编辑区域。"""
         # 第1行：名称 + 启用
-        row1 = QHBoxLayout(); row1.setSpacing(4)
+        row1 = QHBoxLayout(); row1.setSpacing(6)
         row1.addWidget(QLabel("名称:"))
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("区域名称")
@@ -127,7 +120,7 @@ class RegionManagerWidget(QWidget):
         vl.addLayout(row1)
 
         # 第2行：引擎 + 模板
-        row2 = QHBoxLayout(); row2.setSpacing(4)
+        row2 = QHBoxLayout(); row2.setSpacing(6)
         row2.addWidget(QLabel("引擎:"))
         self._engine_combo = QComboBox()
         self._engine_combo.addItems(self._engine_names)
@@ -142,7 +135,7 @@ class RegionManagerWidget(QWidget):
 
         # 第3-4行：X/Y/W/H 网格
         grid = QGridLayout()
-        grid.setSpacing(4)
+        grid.setSpacing(6)
         grid.addWidget(QLabel("X:"), 0, 0)
         self._x_spin = QSpinBox(); self._x_spin.setRange(0, 9999)
         self._x_spin.valueChanged.connect(self._on_prop_changed)
@@ -162,7 +155,7 @@ class RegionManagerWidget(QWidget):
         vl.addLayout(grid)
 
         # 第5行：膨胀比例
-        row5 = QHBoxLayout(); row5.setSpacing(4)
+        row5 = QHBoxLayout(); row5.setSpacing(6)
         row5.addWidget(QLabel("膨胀:"))
         self._expand_ratio_spin = QSpinBox()
         self._expand_ratio_spin.setRange(0, 200); self._expand_ratio_spin.setSuffix("%")
@@ -173,7 +166,7 @@ class RegionManagerWidget(QWidget):
         vl.addLayout(row5)
 
         # 第6行：裁剪四边
-        row6 = QHBoxLayout(); row6.setSpacing(4)
+        row6 = QHBoxLayout(); row6.setSpacing(6)
         row6.addWidget(QLabel("裁剪 L:"))
         self._crop_left_spin = QSpinBox(); self._crop_left_spin.setRange(0, 9999)
         self._crop_left_spin.valueChanged.connect(self._on_prop_changed)
@@ -211,7 +204,7 @@ class RegionManagerWidget(QWidget):
         # 删除按钮
         self._btn_remove = QPushButton("- 删除此区域")
         self._btn_remove.setObjectName("btnRemoveRegion")
-        self._btn_remove.setFixedHeight(24)
+        self._btn_remove.setFixedHeight(28)
         self._btn_remove.clicked.connect(self._on_remove_current)
         vl.addWidget(self._btn_remove)
 

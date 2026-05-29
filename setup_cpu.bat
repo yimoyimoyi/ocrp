@@ -86,22 +86,27 @@ if exist "%FEXT%" rmdir /s /q "%FEXT%" >nul 2>&1
 
 rem -- [4/6] Sync dependencies (CPU, incremental) -----------------------
 call :step "4/6" "Sync dependencies (CPU)"
-if not exist ".venv" (
-    echo     First install - creating venv...
+echo     Syncing dependencies...
+uv sync --index-strategy unsafe-best-match
+if !errorlevel! neq 0 (
+    echo     [WARN] Sync failed, retrying with clean lock...
+    del uv.lock 2>nul
     uv sync --index-strategy unsafe-best-match
-    goto :sync_done
+    if !errorlevel! neq 0 (
+        echo [ERROR] uv sync failed. See install.log
+        pause
+        exit /b 1
+    )
 )
-echo     Updating existing venv...
-uv sync --index-strategy unsafe-best-match
-if !errorlevel! equ 0 goto :sync_done
-echo     [WARN] Incremental sync failed, retrying with clean lock...
-del uv.lock 2>nul
-uv sync --index-strategy unsafe-best-match
-if !errorlevel! equ 0 goto :sync_done
-echo [ERROR] uv sync failed. See install.log
-pause
-exit /b 1
-:sync_done
+
+rem Ensure CPU paddle is installed (not GPU version)
+uv run python -c "import paddle; assert not paddle.device.is_compiled_with_cuda()" 2>nul
+if !errorlevel! equ 0 (
+    echo     CPU paddle confirmed
+) else (
+    echo     Installing CPU paddlepaddle...
+    uv pip install paddlepaddle --reinstall
+)
 call :log "uv sync done"
 
 rem -- [5/6] Verify PaddleOCR -------------------------------------------

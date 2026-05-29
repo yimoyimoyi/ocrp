@@ -100,39 +100,48 @@ rem -- [5/7] Sync dependencies (GPU, incremental) -----------------------
 call :step "5/7" "Sync dependencies (GPU - CUDA 12.6)"
 echo     Source: PyTorch CUDA 12.6 + PaddlePaddle CUDA 12.6 + PyPI
 
-set "UV_EXTRA=--extra-index-url https://download.pytorch.org/whl/cu126 --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/"
+set "TORCH_IDX=https://download.pytorch.org/whl/cu126"
+set "PADDLE_IDX=https://www.paddlepaddle.org.cn/packages/stable/cu126/"
 
-if not exist ".venv" (
-    echo     First install - creating venv (~2.5GB, 5-15 min)...
-    uv sync --index-strategy unsafe-best-match %UV_EXTRA%
-    goto :sync_done
-)
-
-echo     Updating existing venv...
-uv sync --index-strategy unsafe-best-match %UV_EXTRA%
-if !errorlevel! equ 0 goto :sync_done
-
-echo     [WARN] Incremental sync failed, retrying with clean lock...
-del uv.lock 2>nul
-uv sync --index-strategy unsafe-best-match %UV_EXTRA%
-if !errorlevel! equ 0 goto :sync_done
-
-echo     [WARN] GPU sync failed, retrying CPU...
-del uv.lock 2>nul
-uv sync --index-strategy unsafe-best-match
+rem Step 1: Base sync (always run to ensure all deps are present)
+echo     Syncing base dependencies...
+uv sync --index-strategy unsafe-best-match 2>nul
 if !errorlevel! neq 0 (
-    echo [ERROR] Sync failed. See install.log
-    pause
-    exit /b 1
+    echo     [WARN] Base sync failed, retrying with clean lock...
+    del uv.lock 2>nul
+    uv sync --index-strategy unsafe-best-match
+    if !errorlevel! neq 0 (
+        echo [ERROR] Sync failed. See install.log
+        pause
+        exit /b 1
+    )
 )
-echo     Fallback to CPU mode
 
-:sync_done
-rem Ensure paddlepaddle-gpu is installed (uv sync may resolve CPU version)
-uv pip install paddlepaddle-gpu --reinstall --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ 2>nul
-if !errorlevel! neq 0 (
-    echo     [WARN] paddlepaddle-gpu not available - ASR+CPU OCR works
+rem Step 2: Check and install GPU torch if missing
+echo     Checking GPU packages...
+uv pip show torch 2>nul | findstr "+cu126" >nul
+if !errorlevel! equ 0 (
+    echo     GPU torch already installed
+) else (
+    echo     Installing GPU torch (CUDA 12.6)...
+    uv pip install torch torchvision torchaudio --extra-index-url "%TORCH_IDX%" --no-deps --force-reinstall
+    if !errorlevel! neq 0 (
+        echo     [WARN] GPU torch install failed - will use CPU
+    )
 )
+
+rem Step 3: Check and install paddlepaddle-gpu if missing
+uv pip show paddlepaddle-gpu >nul 2>&1
+if !errorlevel! equ 0 (
+    echo     paddlepaddle-gpu already installed
+) else (
+    echo     Installing paddlepaddle-gpu (CUDA 12.6)...
+    uv pip install paddlepaddle-gpu --extra-index-url "%PADDLE_IDX%" --no-deps --force-reinstall
+    if !errorlevel! neq 0 (
+        echo     [WARN] paddlepaddle-gpu not available - ASR+CPU OCR works
+    )
+)
+
 call :log "uv sync done"
 
 rem -- [6/7] Verify PaddleOCR -------------------------------------------

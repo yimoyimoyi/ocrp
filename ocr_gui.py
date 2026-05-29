@@ -17,6 +17,12 @@ warnings.filterwarnings(
     category=UserWarning,
     module="requests",
 )
+# qt-material 的 QFontDatabase 警告（PyQt5 兼容性问题，无害）
+warnings.filterwarnings(
+    "ignore",
+    message=".*QFontDatabase.*",
+    category=UserWarning,
+)
 
 # ── Windows 控制台 UTF-8 编码 ──
 if sys.platform == "win32":
@@ -28,6 +34,9 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     except Exception:
         pass
+
+# ── 强制 Python 默认文件编码为 UTF-8（解决 qt-material 在中文 Windows 下 GBK 解码问题）──
+os.environ.setdefault("PYTHONUTF8", "1")
 
 # 确保项目根目录在 sys.path 中
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
@@ -165,37 +174,8 @@ def _install_crash_handler():
 _install_crash_handler()
 
 
-def _check_sync():
-    """如果 pyproject.toml 比 uv.lock 新，自动增量同步依赖。"""
-    try:
-        import shutil
-        import subprocess
-        uv = shutil.which("uv")
-        if not uv:
-            return
-        lock = BASE_DIR / "uv.lock"
-        toml = BASE_DIR / "pyproject.toml"
-        if not lock.exists() or (toml.exists() and toml.stat().st_mtime > lock.stat().st_mtime):
-            kw = {"cwd": str(BASE_DIR), "timeout": 300,
-                  "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
-            if sys.platform == "win32":
-                kw["creationflags"] = subprocess.CREATE_NO_WINDOW
-                try:
-                    si = subprocess.STARTUPINFO()
-                    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    si.wShowWindow = subprocess.SW_HIDE
-                    kw["startupinfo"] = si
-                except (AttributeError, OSError):
-                    pass
-            subprocess.run(
-                [uv, "sync", "--index-strategy", "unsafe-best-match"], **kw)
-    except Exception:
-        pass  # 失败不阻塞启动
-
-
 def main():
     """应用入口。"""
-    _check_sync()
     from core.config_manager import ensure_config_files
     ensure_config_files()
     logger.info("ORCP 启动中...")
@@ -228,7 +208,6 @@ def main():
     _fade.start()
 
     _verify_startup_environment()
-    _check_sync()
 
     logger.info("主窗口已显示，进入事件循环")
     sys.exit(app.exec_())

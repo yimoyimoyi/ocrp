@@ -53,8 +53,8 @@ class _AudioExtractWorker(QThread):
 
     def run(self):
         try:
-            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-            tmp.close()
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                tmp_path = tmp.name
             ffmpeg = find_ffmpeg()
             cmd = [
                 ffmpeg, "-v", "error",
@@ -63,17 +63,19 @@ class _AudioExtractWorker(QThread):
                 "-acodec", "pcm_s16le",
                 "-ar", "16000",
                 "-ac", "1",
-                "-y", tmp.name,
+                "-y", tmp_path,
             ]
             result = subprocess.run(cmd, capture_output=True, timeout=60)
-            if result.returncode != 0 or not os.path.isfile(tmp.name):
-                self.error.emit(f"FFmpeg 返回码 {result.returncode}")
+            if result.returncode != 0 or not os.path.isfile(tmp_path):
+                stderr = result.stderr.decode(errors="replace").strip() if result.stderr else ""
+                detail = stderr[-200:] if stderr else "无输出"
+                self.error.emit(f"FFmpeg 返回码 {result.returncode}: {detail}")
                 try:
-                    os.unlink(tmp.name)
+                    os.unlink(tmp_path)
                 except OSError:
                     pass
                 return
-            self.finished.emit(tmp.name)
+            self.finished.emit(tmp_path)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -757,7 +759,11 @@ class VideoPreviewWidget(QWidget):
 
     def _on_audio_extract_error(self, err: str):
         """音频提取失败回调。"""
-        logger.warning("FFmpeg 音频提取失败: %s", err)
+        # 返回码 -22 通常表示视频没有音频流，降级为 info 级别
+        if "-22" in err or "4294967274" in err:
+            logger.info("视频无音频流，将静音播放")
+        else:
+            logger.warning("FFmpeg 音频提取失败: %s", err)
         self._cleanup_audio_temp()
 
     def _cleanup_audio_temp(self):

@@ -213,19 +213,39 @@ goto :sync_fail
 echo     Mode: GPU
 echo     Source: PaddlePaddle CUDA 12.6 + PyTorch CUDA 12.6 + PyPI
 echo     NOTE: torch cu126 bundles CUDA DLLs, paddlepaddle-gpu uses nvidia pip packages
-uv sync %UV_SYNC_OPTS% --extra-index-url https://download.pytorch.org/whl/cu126 --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
-if !errorlevel! neq 0 goto :sync_fail
-rem Replace CPU paddlepaddle with GPU version (same package, GPU extras)
-uv pip install paddlepaddle-gpu --reinstall --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/
-if !errorlevel! equ 0 goto :sync_ok
+set "TORCH_IDX=https://download.pytorch.org/whl/cu126"
+set "PADDLE_IDX=https://www.paddlepaddle.org.cn/packages/stable/cu126/"
 
-echo     [WARN] GPU sync failed, retry CPU mode...
-call :log "GPU failed, retry CPU"
-set "USE_GPU=0"
-if exist ".venv" rmdir /s /q ".venv" 2>nul
-del uv.lock 2>nul
+rem Step 1: Base sync
+echo     Syncing base dependencies...
 uv sync %UV_SYNC_OPTS%
-if !errorlevel! equ 0 goto :sync_ok
+if !errorlevel! neq 0 goto :sync_fail
+
+rem Step 2: Check and install GPU torch if missing
+echo     Checking GPU packages...
+uv pip show torch 2>nul | findstr "+cu126" >nul
+if !errorlevel! equ 0 (
+    echo     GPU torch already installed
+) else (
+    echo     Installing GPU torch (CUDA 12.6)...
+    uv pip install torch torchvision torchaudio --extra-index-url "%TORCH_IDX%" --no-deps --force-reinstall
+    if !errorlevel! neq 0 (
+        echo     [WARN] GPU torch install failed - will use CPU
+    )
+)
+
+rem Step 3: Check and install paddlepaddle-gpu if missing
+uv pip show paddlepaddle-gpu >nul 2>&1
+if !errorlevel! equ 0 (
+    echo     paddlepaddle-gpu already installed
+) else (
+    echo     Installing paddlepaddle-gpu (CUDA 12.6)...
+    uv pip install paddlepaddle-gpu --extra-index-url "%PADDLE_IDX%" --no-deps --force-reinstall
+    if !errorlevel! neq 0 (
+        echo     [WARN] paddlepaddle-gpu not available - will use CPU paddle
+    )
+)
+goto :sync_ok
 
 :sync_fail
 echo [ERROR] uv sync failed. See install.log

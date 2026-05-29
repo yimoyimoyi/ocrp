@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
 
 
 class CollapsibleGroup(QWidget):
-    """可折叠的分组卡片。
+    """可折叠的分组卡片 —— Windows 11 / Material 风格。
 
     Signals:
         toggled(bool): 展开/折叠状态变化
@@ -83,8 +83,8 @@ class CollapsibleGroup(QWidget):
         header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         header.mousePressEvent = lambda e: self._collapse(not self._collapsed)
         hl = QHBoxLayout(header)
-        hl.setContentsMargins(8, 5, 8, 5)
-        hl.setSpacing(4)
+        hl.setContentsMargins(10, 6, 10, 6)
+        hl.setSpacing(6)
 
         self._toggle_btn = QToolButton()
         self._toggle_btn.setObjectName("collapsibleToggle")
@@ -108,14 +108,36 @@ class CollapsibleGroup(QWidget):
         content.setObjectName("collapsibleContent")
         content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._content_layout = QVBoxLayout(content)
-        self._content_layout.setContentsMargins(8, 4, 8, 8)
-        self._content_layout.setSpacing(4)
+        self._content_layout.setContentsMargins(10, 4, 10, 10)
+        self._content_layout.setSpacing(6)
         outer.addWidget(content)
 
         if self._collapsed:
             content.setVisible(False)
             self._toggle_btn.setArrowType(Qt.RightArrow)
-            header.setStyleSheet("#collapsibleHeader { border-radius: 6px; }")
+            self._update_border_radius(True)
+
+    def _update_border_radius(self, collapsed: bool):
+        """动态调整整体和标题栏的圆角。"""
+        header = self.findChild(QWidget, "collapsibleHeader")
+        if collapsed:
+            # 折叠：整体四角全圆
+            self.setStyleSheet(
+                "#collapsibleGroup { border-radius: 10px; }"
+            )
+            if header:
+                header.setStyleSheet(
+                    "#collapsibleHeader { border-radius: 10px; }"
+                )
+        else:
+            # 展开：整体圆角，标题栏仅顶部圆角
+            self.setStyleSheet(
+                "#collapsibleGroup { border-radius: 10px; }"
+            )
+            if header:
+                header.setStyleSheet(
+                    "#collapsibleHeader { border-radius: 10px 10px 0 0; }"
+                )
 
     def _collapse(self, coll: bool):
         if self._collapsed == coll:
@@ -127,19 +149,9 @@ class CollapsibleGroup(QWidget):
             content.setVisible(not coll)
         # 箭头切换
         self._toggle_btn.setArrowType(Qt.RightArrow if coll else Qt.DownArrow)
-        # 动态圆角：折叠时四角全圆，展开时仅顶部圆角
-        header = self.findChild(QWidget, "collapsibleHeader")
-        if header:
-            if coll:
-                header.setStyleSheet(
-                    "#collapsibleHeader { border-radius: 6px; }"
-                )
-            else:
-                header.setStyleSheet(
-                    "#collapsibleHeader { border-radius: 6px 6px 0 0; }"
-                )
-        # 逐级向上通知布局更新（QScrollArea / QTabWidget 等），
-        # 但遇到 QSplitter / QMainWindow 立即停止，避免级联重分配
+        # 动态圆角
+        self._update_border_radius(coll)
+        # 逐级向上通知布局更新
         self.updateGeometry()
         p = self.parent()
         while p:

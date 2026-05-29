@@ -34,10 +34,31 @@ CACHE_LOCK = threading.Lock()
 
 # ── 缓存读写 ──────────────────────────────────────────────────────
 
-def _get_cache_key(model: str, temperature: float, prompt: str, system_prompt: str) -> str:
+def _get_cache_key(model: str, temperature: float, prompt: str, system_prompt: str,
+                   max_tokens: int = 2048, resp_type: str | None = None,
+                   base_url: str = "") -> str:
     """生成缓存键 —— 任何影响 LLM 输出的参数都应参与计算。"""
-    raw = f"{model}|{temperature}|{prompt}|{system_prompt}"
+    raw = f"{model}|{temperature}|{max_tokens}|{resp_type}|{base_url}|{prompt}|{system_prompt}"
     return hashlib.md5(raw.encode()).hexdigest()
+
+
+# ── 缓存 TTL（秒） ──
+CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 天
+
+
+def _is_meta_response(resp) -> bool:
+    """判断响应是否为 meta-response（LLM 没有执行任务，而是询问输入）。
+
+    这类响应通常以"请提供"/"请问"/"好的，"开头且很短，是 prompt 缺少上下文时的典型表现。
+    """
+    if not isinstance(resp, str):
+        return False
+    text = resp.strip()
+    if len(text) > 100:
+        return False
+    meta_prefixes = ("好的，请提供", "请提供", "请问", "好的，请问", "我需要您提供",
+                     "请告诉我", "请您提供")
+    return any(text.startswith(p) for p in meta_prefixes)
 
 
 def _load_cache(cache_key: str, log_title: str):
@@ -48,11 +69,21 @@ def _load_cache(cache_key: str, log_title: str):
             try:
                 with open(cache_file, encoding="utf-8") as f:
                     entries = json.load(f)
+                now = time.time()
                 for entry in entries:
                     if entry.get("cache_key") == cache_key:
                         resp = entry.get("response")
                         # 跳过空响应条目（历史缓存污染）
                         if isinstance(resp, str) and not resp.strip():
+                            continue
+                        # 跳过 meta-response（LLM 未执行任务）
+                        if _is_meta_response(resp):
+                            logger.debug("跳过 meta-response 缓存 [%s]: %s", log_title, resp[:40])
+                            continue
+                        # 跳过过期条目
+                        cached_at = entry.get("cached_at", 0)
+                        if cached_at and (now - cached_at) > CACHE_TTL_SECONDS:
+                            logger.debug("缓存已过期 [%s]: %s", log_title, cache_key[:12])
                             continue
                         logger.debug("命中缓存 [%s]: %s", log_title, cache_key[:12])
                         return resp
@@ -73,7 +104,11 @@ def _save_cache(cache_key: str, response, log_title: str):
                     entries = json.load(f)
             except (json.JSONDecodeError, OSError):
                 entries = []
-        entries.append({"cache_key": cache_key, "response": response})
+        entries.append({
+            "cache_key": cache_key,
+            "response": response,
+            "cached_at": time.time(),
+        })
         # 控制缓存文件大小，保留最新 200 条
         if len(entries) > 200:
             entries = entries[-200:]
@@ -114,6 +149,11 @@ class RateLimiter:
 
 # 全局速率限制器实例
 _global_rate_limiter = RateLimiter(max_rpm=30)
+
+
+def set_global_rpm(max_rpm: int):
+    """设置全局速率限制器的 RPM 上限。"""
+    _global_rate_limiter.set_max_rpm(max_rpm)
 
 
 # ── URL 修正 ──────────────────────────────────────────────────────
@@ -181,6 +221,7 @@ def ask_llm(
     timeout: int = 120,
     max_tokens: int = 2048,
     image: Any = None,
+    no_cache: bool = False,
 ) -> str | dict | None:
     """通过 OpenAI 兼容 API 调用 LLM。
 
@@ -221,9 +262,10 @@ def ask_llm(
         logger.error("模型名称未设置")
         return None
 
-    # ── 缓存检查（流式模式或 vision 模式不缓存） ──
-    if not stream and image is None:
-        cache_key = _get_cache_key(model, temperature, prompt, system_prompt)
+    # ── 缓存检查（流式模式、vision 模式、no_cache 不缓存） ──
+    if not stream and image is None and not no_cache:
+        cache_key = _get_cache_key(model, temperature, prompt, system_prompt,
+                                    max_tokens, resp_type, base_url)
         cached = _load_cache(cache_key, log_title)
         if cached is not None:
             return cached

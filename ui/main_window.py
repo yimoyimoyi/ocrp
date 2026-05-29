@@ -12,8 +12,10 @@ from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -25,6 +27,7 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QStatusBar,
     QToolBar,
@@ -52,12 +55,17 @@ from core.utils import MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
 from core.workflow_manager import WorkflowManager
 from ui.collapsible_group import CollapsibleGroup
 from ui.config_panel import ConfigPanel
-from ui.dialogs import EngineConfigDialog, PresetManageDialog
+from ui.dialogs import PresetManageDialog
 from ui.display_dialog import DisplayDialog
 from ui.region_manager import RegionManagerWidget
 from ui.result_table import ResultTableWidget
 from ui.settings_dialog import SettingsDialog
-from ui.style_loader import load_qss_theme, scale_stylesheet
+from ui.style_loader import (
+    DEFAULT_DARK,
+    DEFAULT_LIGHT,
+    apply_theme,
+    is_dark_theme,
+)
 from ui.video_preview import VideoPreviewWidget
 
 WIN_TITLE = _("ORCP - OCR 处理工具")
@@ -294,7 +302,7 @@ class MainWindow(QMainWindow):
 
         # ── 清除缓存 ──
         self._qt_clear_cache = QAction(_("🗑 清缓存"), self)
-        self._qt_clear_cache.setToolTip(_("清除所有缓存（LLM 响应缓存 + ASR 结果缓存 + 分句缓存）"))
+        self._qt_clear_cache.setToolTip(_("清除所有缓存（LLM 响应缓存 + ASR 结果缓存）"))
         self._qt_clear_cache.triggered.connect(self._on_clear_cache)
         tb.addAction(self._qt_clear_cache)
 
@@ -338,6 +346,48 @@ class MainWindow(QMainWindow):
             self._qt_process_mode.setCurrentText("OCR+ASR")
         self._qt_process_mode.blockSignals(False)
 
+        # 同步右侧面板控件
+        self._sync_right_panel_from_config()
+
+    def _sync_right_panel_from_config(self):
+        """从 ConfigPanel 同步右侧面板控件状态。"""
+        cp = self._config_panel
+        mp = cp.get_mode_params()
+
+        # 字幕模式
+        self._subtitle_mode_combo_r.blockSignals(True)
+        self._subtitle_mode_combo_r.setCurrentText(mp.get("subtitle_mode", "流式字幕（去重）"))
+        self._subtitle_mode_combo_r.blockSignals(False)
+
+        # 帧间隔
+        self._frame_interval_r.blockSignals(True)
+        self._frame_interval_r.setValue(mp.get("frame_interval", 0.1))
+        self._frame_interval_r.blockSignals(False)
+
+        # 后处理选项
+        self._post_sim_dedup_r.blockSignals(True)
+        self._post_sim_dedup_r.setChecked(mp.get("post_sim_dedup", True))
+        self._post_sim_dedup_r.blockSignals(False)
+
+        self._post_sim_threshold_r.blockSignals(True)
+        self._post_sim_threshold_r.setValue(mp.get("post_sim_threshold", 0.9))
+        self._post_sim_threshold_r.blockSignals(False)
+
+        self._post_min_text_len_r.blockSignals(True)
+        self._post_min_text_len_r.setValue(mp.get("post_min_text_len", 2))
+        self._post_min_text_len_r.blockSignals(False)
+
+        self._post_conf_check_r.blockSignals(True)
+        self._post_conf_check_r.setChecked(mp.get("post_conf_enabled", False))
+        self._post_conf_check_r.blockSignals(False)
+
+        self._post_conf_threshold_r.blockSignals(True)
+        self._post_conf_threshold_r.setValue(mp.get("post_conf_threshold", 0.6))
+        self._post_conf_threshold_r.blockSignals(False)
+
+        # ASR 组可见性：仅 OCR 模式时隐藏
+        self._asr_group.setVisible(MODE_OCR_ONLY not in mp.get("process_mode", ""))
+
     # ── 快速开关事件 ──
     def _on_qt_corr_toggled(self, checked: bool):
         self._config_panel.corr_enabled = checked
@@ -377,7 +427,7 @@ class MainWindow(QMainWindow):
         """清除所有缓存。"""
         reply = QMessageBox.question(
             self, "清除缓存",
-            "确定清除所有缓存？\n（LLM 响应缓存 + ASR 结果缓存 + 分句缓存）",
+            "确定清除所有缓存？\n（LLM 响应缓存 + ASR 结果缓存）",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             self._workflow.clear_all_caches()
@@ -385,15 +435,6 @@ class MainWindow(QMainWindow):
     # ── 菜单栏 ──
     def _build_menu_bar(self):
         mb = self.menuBar()
-
-        # ── 引擎菜单 ──
-        self._engine_menu = mb.addMenu("引擎(&E)")
-        self._engine_action_group = QActionGroup(self)
-        self._engine_action_group.setExclusive(True)
-        self._engine_menu.addSeparator()
-        self._engine_config_action = QAction("引擎配置...", self)
-        self._engine_config_action.triggered.connect(self._on_menu_engine_config)
-        self._engine_menu.addAction(self._engine_config_action)
 
         # ── 参数设置菜单 ──
         self._settings_menu = mb.addMenu("参数设置(&P)")
@@ -454,8 +495,8 @@ class MainWindow(QMainWindow):
         central = QWidget(self)
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(6, 6, 6, 6)
-        root.setSpacing(6)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
 
         # ── 主拆分器：上（视频+控制） / 下（结果+操作） ──
         self._main_splitter = QSplitter(Qt.Vertical)
@@ -473,19 +514,25 @@ class MainWindow(QMainWindow):
 
         # 左：视频预览 + 工具栏
         left = QWidget()
-        ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(4)
+        ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(6)
         vc = QHBoxLayout()
-        self._btn_capture = QPushButton("📸 截取测试帧")
+        vc.setSpacing(6)
+        self._btn_capture = QPushButton("📸 截取帧")
+        self._btn_capture.setToolTip("截取当前视频帧用于预览和区域绘制")
+        self._btn_capture.setFixedHeight(30)
         self._btn_capture.clicked.connect(self._on_capture_test_frame)
         vc.addWidget(self._btn_capture)
-        self._btn_open = QPushButton("📂 打开视频/图片")
+        self._btn_open = QPushButton("📂 打开文件")
+        self._btn_open.setToolTip("打开视频、音频或图片文件")
+        self._btn_open.setFixedHeight(30)
         self._btn_open.clicked.connect(self._on_open_video)
         vc.addWidget(self._btn_open)
-        self._btn_batch_clear = QPushButton("🗑 清空队列")
+        self._btn_batch_clear = QPushButton("🗑 清空")
         self._btn_batch_clear.setObjectName("btnBatchClear")
+        self._btn_batch_clear.setFixedHeight(30)
         self._btn_batch_clear.clicked.connect(self._on_batch_clear)
         vc.addWidget(self._btn_batch_clear); vc.addStretch()
-        ll.addLayout(vc); ll.addSpacing(2)
+        ll.addLayout(vc); ll.addSpacing(4)
 
         self._video_preview = VideoPreviewWidget()
         self._video_preview.video_loaded.connect(self._on_video_loaded)
@@ -500,7 +547,18 @@ class MainWindow(QMainWindow):
         self._right_panel.setObjectName("rightPanel")
         self._right_panel.setFrameShape(QFrame.NoFrame)
         self._right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
-        rl = QVBoxLayout(self._right_panel); rl.setContentsMargins(0, 0, 0, 0); rl.setSpacing(4)
+        rl = QVBoxLayout(self._right_panel); rl.setContentsMargins(0, 0, 0, 0); rl.setSpacing(0)
+
+        # 整体滚动区域
+        from PyQt5.QtWidgets import QScrollArea
+        self._right_scroll = QScrollArea()
+        self._right_scroll.setWidgetResizable(True)
+        self._right_scroll.setFrameShape(QFrame.NoFrame)
+        self._right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_content = QWidget()
+        scl = QVBoxLayout(scroll_content)
+        scl.setContentsMargins(6, 6, 6, 6)
+        scl.setSpacing(4)
 
         # ── RegionManager ──
         self._region_manager = RegionManagerWidget()
@@ -524,13 +582,38 @@ class MainWindow(QMainWindow):
         self._region_group = CollapsibleGroup(_("📐 区域参数"))
         self._region_group.addWidget(self._region_manager)
         self._region_group.content_layout().addWidget(self._tpl_bar)
-        rl.addWidget(self._region_group, 1)
+        scl.addWidget(self._region_group)
+
+        # ── 字幕设置折叠组 ──
+        self._subtitle_group = CollapsibleGroup(_("📝 字幕设置"))
+        subtitle_form = QWidget()
+        subtitle_layout = QFormLayout(subtitle_form)
+        subtitle_layout.setSpacing(6)
+
+        self._subtitle_mode_combo_r = QComboBox()
+        self._subtitle_mode_combo_r.addItems(["流式字幕（去重）", "常规字幕（固定间隔）"])
+        self._subtitle_mode_combo_r.setToolTip("流式：哨兵去重实时输出\n常规：固定间隔采样")
+        self._subtitle_mode_combo_r.currentTextChanged.connect(self._on_subtitle_mode_r_changed)
+        subtitle_layout.addRow(_("模式:"), self._subtitle_mode_combo_r)
+
+        self._frame_interval_r = QDoubleSpinBox()
+        self._frame_interval_r.setRange(0.02, 10.0)
+        self._frame_interval_r.setSingleStep(0.1)
+        self._frame_interval_r.setDecimals(2)
+        self._frame_interval_r.setValue(0.1)
+        self._frame_interval_r.setSuffix(" 秒")
+        self._frame_interval_r.setToolTip("每隔多少秒处理一帧")
+        self._frame_interval_r.valueChanged.connect(self._on_frame_interval_r_changed)
+        subtitle_layout.addRow(_("帧间隔:"), self._frame_interval_r)
+
+        self._subtitle_group.addWidget(subtitle_form)
+        scl.addWidget(self._subtitle_group)
 
         # ASR 折叠组
-        self._asr_group = CollapsibleGroup(_("🎤 ASR 选项"))
+        self._asr_group = CollapsibleGroup(_("🎤 ASR 选项"), collapsed=True)
         asr_form = QWidget()
         asr_layout = QFormLayout(asr_form)
-        asr_layout.setSpacing(4)
+        asr_layout.setSpacing(6)
 
         self._asr_model_combo_r = QComboBox()
         self._asr_model_combo_r.setEditable(False)
@@ -555,25 +638,72 @@ class MainWindow(QMainWindow):
         self._asr_region_edit_r.textChanged.connect(self._on_asr_r_changed)
 
         self._asr_group.addWidget(asr_form)
-        self._asr_group.hide()
-        rl.addWidget(self._asr_group)
+        scl.addWidget(self._asr_group)
 
-        # 底部占位：折叠时接管 stretch，保持右侧面板宽度
-        self._right_bottom_spacer = QWidget()
-        self._right_bottom_spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        rl.addWidget(self._right_bottom_spacer)
+        # ── 后处理折叠组 ──
+        self._post_group = CollapsibleGroup(_("🔧 后处理"), collapsed=True)
+        post_form = QWidget()
+        post_layout = QFormLayout(post_form)
+        post_layout.setSpacing(6)
+
+        self._post_sim_dedup_r = QCheckBox("相似度去重")
+        self._post_sim_dedup_r.setChecked(True)
+        self._post_sim_dedup_r.toggled.connect(self._on_post_option_r_changed)
+        post_layout.addRow("", self._post_sim_dedup_r)
+
+        self._post_sim_threshold_r = QDoubleSpinBox()
+        self._post_sim_threshold_r.setRange(0.0, 1.0)
+        self._post_sim_threshold_r.setSingleStep(0.05)
+        self._post_sim_threshold_r.setDecimals(2)
+        self._post_sim_threshold_r.setValue(0.9)
+        self._post_sim_threshold_r.setToolTip("相似度高于此阈值的结果将被去重合并")
+        self._post_sim_threshold_r.valueChanged.connect(self._on_post_option_r_changed)
+        post_layout.addRow(_("相似度阈值:"), self._post_sim_threshold_r)
+
+        self._post_min_text_len_r = QSpinBox()
+        self._post_min_text_len_r.setRange(1, 100)
+        self._post_min_text_len_r.setValue(2)
+        self._post_min_text_len_r.setToolTip("小于此长度的结果将被过滤")
+        self._post_min_text_len_r.valueChanged.connect(self._on_post_option_r_changed)
+        post_layout.addRow(_("最小文字长度:"), self._post_min_text_len_r)
+
+        self._post_conf_check_r = QCheckBox("置信度过滤")
+        self._post_conf_check_r.setChecked(False)
+        self._post_conf_check_r.toggled.connect(self._on_post_option_r_changed)
+        post_layout.addRow("", self._post_conf_check_r)
+
+        self._post_conf_threshold_r = QDoubleSpinBox()
+        self._post_conf_threshold_r.setRange(0.0, 1.0)
+        self._post_conf_threshold_r.setSingleStep(0.05)
+        self._post_conf_threshold_r.setDecimals(2)
+        self._post_conf_threshold_r.setValue(0.6)
+        self._post_conf_threshold_r.setToolTip("仅 PaddleOCR：置信度低于此阈值的结果将被过滤")
+        self._post_conf_threshold_r.valueChanged.connect(self._on_post_option_r_changed)
+        post_layout.addRow(_("置信度阈值:"), self._post_conf_threshold_r)
+
+        self._post_group.addWidget(post_form)
+        scl.addWidget(self._post_group)
+
+        # 底部弹性空间
+        scl.addStretch()
+
+        # 将滚动内容设置到滚动区域
+        self._right_scroll.setWidget(scroll_content)
+        rl.addWidget(self._right_scroll)
 
         # 折叠时动态切换 stretch：展开→区域组填充，折叠→底部占位填充
         self._region_group.toggled.connect(self._on_region_group_toggled)
 
         self._top_splitter.addWidget(self._right_panel)
-        self._top_splitter.setSizes([600, 280])
+        self._top_splitter.setSizes([720, 320])
+        self._top_splitter.setStretchFactor(0, 7)
+        self._top_splitter.setStretchFactor(1, 3)
 
         self._main_splitter.addWidget(self._top_splitter)
 
         # ═══ 下半区：结果表格 + 底部操作栏 ═══
         bottom = QWidget()
-        bl = QVBoxLayout(bottom); bl.setContentsMargins(0, 0, 0, 0); bl.setSpacing(4)
+        bl = QVBoxLayout(bottom); bl.setContentsMargins(0, 0, 0, 0); bl.setSpacing(6)
 
         self._result_table = ResultTableWidget()
         self._result_table.filter_requested.connect(self._on_result_filter)
@@ -586,46 +716,72 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("bottomBar")
         bbl = QHBoxLayout(bar)
-        bbl.setContentsMargins(8, 6, 8, 6)
-        bbl.setSpacing(8)
+        bbl.setContentsMargins(10, 8, 10, 8)
+        bbl.setSpacing(6)
 
+        # ── 处理控制组 ──
         self._btn_start = QPushButton(_("▶ 开始处理"))
         self._btn_start.setObjectName("btnStart")
+        self._btn_start.setFixedHeight(34)
+        self._btn_start.setMinimumWidth(100)
         self._btn_start.clicked.connect(self._on_start_processing)
         bbl.addWidget(self._btn_start)
         self._btn_pause = QPushButton(_("⏸ 暂停"))
         self._btn_pause.setObjectName("btnPause")
+        self._btn_pause.setFixedHeight(34)
+        self._btn_pause.setMinimumWidth(70)
         self._btn_pause.setEnabled(False)
         self._btn_pause.clicked.connect(self._on_pause_processing)
         bbl.addWidget(self._btn_pause)
         self._btn_stop = QPushButton(_("⏹ 停止"))
         self._btn_stop.setObjectName("btnStop")
+        self._btn_stop.setFixedHeight(34)
+        self._btn_stop.setMinimumWidth(70)
         self._btn_stop.setEnabled(False)
         self._btn_stop.clicked.connect(self._on_stop_processing)
         bbl.addWidget(self._btn_stop)
 
-        sep = QFrame(); sep.setFrameShape(QFrame.VLine); sep.setFixedHeight(24)
-        bbl.addWidget(sep)
+        # ── 分隔线 ──
+        sep1 = QFrame(); sep1.setObjectName("barSeparator")
+        sep1.setFrameShape(QFrame.VLine); sep1.setFixedHeight(24)
+        bbl.addWidget(sep1)
 
+        # ── AI 纠错组 ──
         self._btn_correction = QPushButton(_("✏ 纠错选中"))
         self._btn_correction.setObjectName("btnCorrection")
+        self._btn_correction.setFixedHeight(34)
         self._btn_correction.clicked.connect(self._on_correction_selected)
         bbl.addWidget(self._btn_correction)
-        self._btn_correction_all = QPushButton(_("✏ 纠正全部"))
+        self._btn_correction_all = QPushButton(_("✏ 纠错全部"))
         self._btn_correction_all.setObjectName("btnCorrectionAll")
+        self._btn_correction_all.setFixedHeight(34)
         self._btn_correction_all.clicked.connect(self._on_correction_all)
         bbl.addWidget(self._btn_correction_all)
-        self._btn_segmentation = QPushButton(_("📝 分句"))
-        self._btn_segmentation.setObjectName("btnSegmentation")
-        self._btn_segmentation.setToolTip(_("使用 LLM 对 OCR 碎片进行语义分句合并"))
-        self._btn_segmentation.clicked.connect(self._on_segmentation)
-        bbl.addWidget(self._btn_segmentation)
+
+        # ── 分隔线 ──
+        sep2 = QFrame(); sep2.setObjectName("barSeparator")
+        sep2.setFrameShape(QFrame.VLine); sep2.setFixedHeight(24)
+        bbl.addWidget(sep2)
+
+        # ── 润色组 ──
+        self._btn_polish = QPushButton(_("✨ 润色选中"))
+        self._btn_polish.setObjectName("btnPolish")
+        self._btn_polish.setFixedHeight(34)
+        self._btn_polish.clicked.connect(self._on_polish_selected)
+        bbl.addWidget(self._btn_polish)
+        self._btn_polish_all = QPushButton(_("✨ 润色全部"))
+        self._btn_polish_all.setObjectName("btnPolishAll")
+        self._btn_polish_all.setFixedHeight(34)
+        self._btn_polish_all.clicked.connect(self._on_polish_all)
+        bbl.addWidget(self._btn_polish_all)
 
         bbl.addStretch()
         bl.addWidget(bar)
 
         self._main_splitter.addWidget(bottom)
-        self._main_splitter.setSizes([380, 620])
+        self._main_splitter.setSizes([400, 600])
+        self._main_splitter.setStretchFactor(0, 2)
+        self._main_splitter.setStretchFactor(1, 3)
 
         root.addWidget(self._main_splitter, 1)
 
@@ -646,18 +802,35 @@ class MainWindow(QMainWindow):
     # ── 主题 ──
     def _apply_theme(self, theme=None):
         self._theme = theme or self._theme
-        self._config_mgr.set("theme", self._theme); self._config_mgr.save_settings()
-        qss = scale_stylesheet(load_qss_theme(self._theme), self._config_mgr.get_scale())
-        # 应用用户配置的字体大小
-        font_size = self._config_mgr.get_font_size()
-        if font_size != 12:
-            import re
-            qss = re.sub(r'font-size:\s*\d+px', f'font-size: {font_size}px', qss)
+        self._config_mgr.set("theme", self._theme)
+        self._config_mgr.save_settings()
         app = QApplication.instance()
-        if app: app.setStyleSheet(qss)
+        if app:
+            scale = self._config_mgr.get_scale()
+            font_size = self._config_mgr.get_font_size()
+            # qt-material 不直接支持缩放，通过字体大小间接调整
+            font_family = f"Microsoft YaHei UI, font-size: {font_size}px" if font_size != 13 else "Microsoft YaHei UI"
+            density = "0"
+            if scale < 0.9:
+                density = "-2"
+            elif scale < 1.0:
+                density = "-1"
+            elif scale > 1.1:
+                density = "1"
+            elif scale > 1.2:
+                density = "2"
+            apply_theme(app, self._theme, font_family=font_family, density_scale=density)
+            # qt-material 之后再用 setStyleSheet 追加字体大小覆盖
+            if font_size != 13:
+                current = app.styleSheet()
+                font_override = f"* {{ font-size: {font_size}px; }}"
+                app.setStyleSheet(current + "\n" + font_override)
 
     def _toggle_theme(self):
-        self._apply_theme("light" if self._theme == "dark" else "dark")
+        if is_dark_theme(self._theme):
+            self._apply_theme(DEFAULT_LIGHT)
+        else:
+            self._apply_theme(DEFAULT_DARK)
 
     def _set_progress_animated(self, value: int):
         """平滑动画更新进度条。"""
@@ -681,7 +854,8 @@ class MainWindow(QMainWindow):
         corr_cfg.setdefault("retry_on_failure", 2)
 
         dlg = SettingsDialog(self._config_panel, correction_config=corr_cfg, parent=self,
-                             filter_keywords=self._filter_mgr.get_keywords())
+                             filter_keywords=self._filter_mgr.get_keywords(),
+                             engine_manager=self._engine_mgr, current_engine=self._current_engine)
         if 0 <= tab_index < dlg._tabs.count():
             dlg._tabs.setCurrentIndex(tab_index)
         elif tab_index == -1:
@@ -703,6 +877,18 @@ class MainWindow(QMainWindow):
             config_path = BASE_DIR / "config" / "ai_correction.json"
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(corr_file_cfg, f, ensure_ascii=False, indent=2)
+            # 保存引擎配置
+            eng_name, eng_cfg = dlg.get_engine_config()
+            engs = self._engine_mgr._config.get("engines", {})
+            if eng_name in engs:
+                engs[eng_name].setdefault("config", {}).update(eng_cfg)
+                self._engine_mgr._engines.pop(eng_name, None)
+            ocr_cfg_path = BASE_DIR / "config" / "ocr_engines.json"
+            try:
+                with open(ocr_cfg_path, "w", encoding="utf-8") as f:
+                    json.dump(self._engine_mgr._config, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error("保存引擎配置失败: %s", e)
             self._status_label.setText("✅ 参数设置已更新")
             self.sync_quick_toggles()
 
@@ -728,12 +914,22 @@ class MainWindow(QMainWindow):
         self._config_mgr.set("font_size", font_size)
         self._config_mgr.set("ui_scale", scale)
         self._config_mgr.save_settings()
-        qss = scale_stylesheet(load_qss_theme(theme), scale)
-        if font_size != 12:
-            import re
-            qss = re.sub(r'font-size:\s*\d+px', f'font-size: {font_size}px', qss)
         app = QApplication.instance()
-        if app: app.setStyleSheet(qss)
+        if app:
+            density = "0"
+            if scale < 0.9:
+                density = "-2"
+            elif scale < 1.0:
+                density = "-1"
+            elif scale > 1.1:
+                density = "1"
+            elif scale > 1.2:
+                density = "2"
+            apply_theme(app, theme, density_scale=density)
+            if font_size != 13:
+                current = app.styleSheet()
+                font_override = f"* {{ font-size: {font_size}px; }}"
+                app.setStyleSheet(current + "\n" + font_override)
 
     def _on_template_quick_selected(self, name: str):
         """快速模板下拉框选中。"""
@@ -777,8 +973,8 @@ class MainWindow(QMainWindow):
     def _restore_window_geometry(self):
         g = self._config_mgr.get_window_geometry()
         if g: self.setGeometry(g.get("x", 100), g.get("y", 100),
-                                g.get("width", 1280), g.get("height", 800))
-        else: self.resize(1280, 800)
+                                g.get("width", 1400), g.get("height", 900))
+        else: self.resize(1400, 900)
         if self._config_mgr.get("window_maximized", False):
             self.showMaximized()
         # 恢复拆分器尺寸
@@ -814,11 +1010,51 @@ class MainWindow(QMainWindow):
             saved_preset = saved.get("corr_preset", "")
             if saved_preset and self._corrector:
                 self._corrector.apply_preset(saved_preset)
-            # 恢复校对开关
-            if "corr_proofread" in saved and self._corrector:
-                self._corrector.proofread_enabled = saved["corr_proofread"]
+            # 恢复润色开关
+            if "corr_polish" in saved and self._corrector:
+                self._corrector.polish_enabled = saved["corr_polish"]
+            # 恢复右侧面板控件
+            self._restore_right_panel_params(saved)
         # 同步区域默认值（引擎/模板/提示词），确保新创建的区域使用当前提示词
         self._sync_region_defaults()
+
+    def _restore_right_panel_params(self, saved: dict):
+        """恢复右侧面板控件的值。"""
+        # 字幕模式
+        subtitle_mode = saved.get("subtitle_mode", "流式字幕（去重）")
+        self._subtitle_mode_combo_r.blockSignals(True)
+        self._subtitle_mode_combo_r.setCurrentText(subtitle_mode)
+        self._subtitle_mode_combo_r.blockSignals(False)
+
+        # 帧间隔
+        frame_interval = saved.get("frame_interval", 0.1)
+        self._frame_interval_r.blockSignals(True)
+        self._frame_interval_r.setValue(frame_interval)
+        self._frame_interval_r.blockSignals(False)
+
+        # 后处理选项
+        self._post_sim_dedup_r.blockSignals(True)
+        self._post_sim_dedup_r.setChecked(saved.get("post_sim_dedup", True))
+        self._post_sim_dedup_r.blockSignals(False)
+
+        self._post_sim_threshold_r.blockSignals(True)
+        self._post_sim_threshold_r.setValue(saved.get("post_sim_threshold", 0.9))
+        self._post_sim_threshold_r.blockSignals(False)
+
+        self._post_min_text_len_r.blockSignals(True)
+        self._post_min_text_len_r.setValue(saved.get("post_min_text_len", 2))
+        self._post_min_text_len_r.blockSignals(False)
+
+        self._post_conf_check_r.blockSignals(True)
+        self._post_conf_check_r.setChecked(saved.get("post_conf_enabled", False))
+        self._post_conf_check_r.blockSignals(False)
+
+        self._post_conf_threshold_r.blockSignals(True)
+        self._post_conf_threshold_r.setValue(saved.get("post_conf_threshold", 0.6))
+        self._post_conf_threshold_r.blockSignals(False)
+
+        # ASR 组可见性：仅 OCR 模式时隐藏
+        self._asr_group.setVisible(MODE_OCR_ONLY not in saved.get("process_mode", ""))
 
     def _schedule_mode_save(self):
         """延迟合并保存，避免频繁切换预设时连续写盘卡 UI。"""
@@ -833,7 +1069,8 @@ class MainWindow(QMainWindow):
 
     def _save_mode_params(self):
         """保存当前 UI 配置参数到 settings.json。"""
-        params = dict(self._mode_params)
+        params = {k: v for k, v in self._mode_params.items()
+                  if k != "corr_summary_prompt"}  # 环境提示词不持久化
         self._config_mgr.set("mode_params", params)
         # 仅当 ASR 参数实际变更时才同步（避免每次保存都阻塞 UI）
         if getattr(self, '_asr_params_changed', False):
@@ -905,35 +1142,12 @@ class MainWindow(QMainWindow):
         names = self._engine_mgr.get_engine_names()
         self._region_manager.set_engine_names(names)
 
-        # 重建引擎菜单单选动作
-        menu = self._engine_menu
-        for a in self._engine_action_group.actions():
-            self._engine_action_group.removeAction(a)
-        for a in menu.actions():
-            if a.isSeparator():
-                continue
-            if a is self._engine_config_action:
-                continue
-            menu.removeAction(a)
-
-        for name in names:
-            action = QAction(name, self)
-            action.setCheckable(True)
-            action.triggered.connect(lambda checked, n=name: self._on_menu_engine_selected(n))
-            self._engine_action_group.addAction(action)
-            menu.insertAction(self._engine_menu.actions()[0], action)
-
         last = self._config_mgr.get_last_engine()
         if last in names:
             self._engine_mgr.set_current_engine(last)
             self._current_engine = last
         else:
             self._current_engine = names[0] if names else "paddleocr"
-
-        for a in self._engine_action_group.actions():
-            if a.text() == self._current_engine:
-                a.setChecked(True)
-                break
 
         self._engine_label.setText(f"  |  引擎: {self._current_engine}")
         eng = self._engine_mgr.get_current_engine(warm_up=False)
@@ -1000,14 +1214,6 @@ class MainWindow(QMainWindow):
             if t:
                 self._config_panel.prompt_text = t.get("prompt", "")
 
-    def _get_engine_config(self, name: str) -> dict:
-        eng_cfg = self._engine_mgr._config.get("engines", {}).get(name, {})
-        return dict(eng_cfg.get("config", {}))
-
-    def _is_local_engine(self, name: str) -> bool:
-        eng_cfg = self._engine_mgr._config.get("engines", {}).get(name, {})
-        return eng_cfg.get("type") == "local"
-
     # ── 同步区域默认值 ──
     def _sync_region_defaults(self):
         """将当前引擎/模板/提示词同步为新增区域的默认值。"""
@@ -1017,63 +1223,6 @@ class MainWindow(QMainWindow):
             prompt=prompt,
             template=self._current_template
         )
-
-    # ── 菜单事件：引擎 ──
-    def _on_menu_engine_selected(self, name: str):
-        self._current_engine = name
-        self._engine_mgr.set_current_engine(name)
-        self._config_mgr.set("last_engine", name); self._config_mgr.save_settings()
-        eng = self._engine_mgr.get_current_engine()
-        avail = eng.is_available() if eng else False
-        self._engine_label.setText(f"  |  引擎: {name} {'✅' if avail else '⚠'}")
-        self._sync_region_defaults()
-
-    def _on_menu_engine_config(self):
-        name = self._current_engine
-        cfg = self._get_engine_config(name)
-        is_local = self._is_local_engine(name)
-        dlg = EngineConfigDialog(name, cfg, is_local, engine_manager=self._engine_mgr, parent=self)
-        self._restore_dialog_geometry(dlg, "engine_dialog_geometry")
-        if dlg.exec_() == QDialog.Accepted:
-            self._save_dialog_geometry(dlg, "engine_dialog_geometry")
-            new_cfg = dlg.get_config()
-            # 写入内存
-            engs = self._engine_mgr._config.get("engines", {})
-            if name in engs:
-                engs[name].setdefault("config", {}).update(new_cfg)
-                self._engine_mgr._engines.pop(name, None)
-            # 写入文件（ocr_engines.json）
-            ocr_cfg_path = BASE_DIR / "config" / "ocr_engines.json"
-            try:
-                with open(ocr_cfg_path, "w", encoding="utf-8") as f:
-                    json.dump(self._engine_mgr._config, f, ensure_ascii=False, indent=2)
-                self._status_label.setText(f"✅ 引擎 [{name}] 配置已保存")
-            except Exception as e:
-                logger.error("保存引擎配置失败: %s", e)
-                self._status_label.setText(f"⚠ 引擎配置保存失败: {e}")
-
-    def _on_menu_check_engine(self):
-        name = self._current_engine
-        eng = self._engine_mgr.get_engine(name)
-        if not eng:
-            self._status_label.setText(f"❌ 未找到引擎 [{name}]")
-            return
-        self._status_label.setText(f"正在检测 [{name}] 可用性...")
-        from ui.workers import HttpCheckWorker
-        self._check_worker = HttpCheckWorker(eng, "check")
-        self._check_worker.result.connect(lambda r: self._on_check_engine_result(name, r))
-        self._check_worker.error.connect(lambda e: self._status_label.setText(f"❌ 检测失败: {e[:30]}"))
-        self._check_worker.start()
-
-    def _on_check_engine_result(self, name: str, result: dict):
-        available = result.get("data", False)
-        if available:
-            self._status_label.setText(f"✅ [{name}] 可用")
-        else:
-            self._status_label.setText(f"❌ [{name}] 不可用，请检查 Base URL")
-        eng = self._engine_mgr.get_current_engine()
-        avail = eng.is_available() if eng else False
-        self._engine_label.setText(f"  |  引擎: {name} {'✅' if avail else '⚠'}")
 
     # ── 菜单事件：纠错 ──
     def _on_menu_preset_manage(self):
@@ -1207,29 +1356,25 @@ class MainWindow(QMainWindow):
 
         if is_audio:
             self._region_group.hide()
+            self._subtitle_group.show()
             self._asr_group.show()
+            self._post_group.show()
             self._sync_asr_from_config()
         elif is_image:
             self._region_group.show()
+            self._subtitle_group.hide()
             self._asr_group.hide()
+            self._post_group.show()
         else:
             self._region_group.show()
+            self._subtitle_group.show()
             self._asr_group.show()
+            self._post_group.show()
             self._sync_asr_from_config()
 
     def _on_region_group_toggled(self, collapsed: bool):
-        """区域参数折叠/展开时，动态切换 stretch 分配。"""
-        rl = self._right_panel.layout()
-        if rl is None:
-            return
-        if collapsed:
-            # 折叠：释放区域组 stretch，底部占位接管
-            rl.setStretchFactor(self._region_group, 0)
-            rl.setStretchFactor(self._right_bottom_spacer, 1)
-        else:
-            # 展开：区域组恢复 stretch，底部占位释放
-            rl.setStretchFactor(self._right_bottom_spacer, 0)
-            rl.setStretchFactor(self._region_group, 1)
+        """区域参数折叠/展开时，无需额外操作（滚动区域自动处理）。"""
+        pass
 
     def _populate_asr_model_combo(self, combo: QComboBox):
         """填充 ASR 模型 combo：本地已下载 + 标准模型大小。"""
@@ -1285,6 +1430,33 @@ class MainWindow(QMainWindow):
         cp.asr_language = self._asr_lang_combo_r.currentText()
         cp.asr_region_name = self._asr_region_edit_r.text()
         self._on_mode_changed(cp.get_mode_params())
+
+    def _on_subtitle_mode_r_changed(self, text: str):
+        """右侧字幕模式变更 → 同步到 ConfigPanel。"""
+        self._config_panel.subtitle_mode = text
+        self._on_mode_changed(self._config_panel.get_mode_params())
+        # 更新快速工具栏
+        self.sync_quick_toggles()
+
+    def _on_frame_interval_r_changed(self, value: float):
+        """右侧帧间隔变更 → 同步到 ConfigPanel。"""
+        params = self._config_panel.get_mode_params()
+        params["frame_interval"] = value
+        self._config_panel.apply_mode_params(params)
+        self._on_mode_changed(self._config_panel.get_mode_params())
+
+    def _on_post_option_r_changed(self):
+        """右侧后处理选项变更 → 同步到 ConfigPanel。"""
+        params = self._config_panel.get_mode_params()
+        params["post_sim_dedup"] = self._post_sim_dedup_r.isChecked()
+        params["post_sim_threshold"] = self._post_sim_threshold_r.value()
+        params["post_min_text_len"] = self._post_min_text_len_r.value()
+        params["post_conf_enabled"] = self._post_conf_check_r.isChecked()
+        params["post_conf_threshold"] = self._post_conf_threshold_r.value()
+        self._config_panel.apply_mode_params(params)
+        self._on_mode_changed(self._config_panel.get_mode_params())
+        # 更新快速工具栏
+        self.sync_quick_toggles()
 
     def _on_frame_captured(self, _):
         self._status_label.setText("测试帧已截取，在预览图上拖拽绘制矩形区域")
@@ -1387,9 +1559,9 @@ class MainWindow(QMainWindow):
         # 仅当预设名确实变化时才切换
         if "corr_preset" in p and p["corr_preset"] != old_params.get("corr_preset", ""):
             self._corrector.apply_preset(p["corr_preset"])
-        # 校对开关 + 模板模式
-        if "corr_proofread" in p:
-            self._corrector.proofread_enabled = p["corr_proofread"]
+        # 润色开关 + 模板模式
+        if "corr_polish" in p:
+            self._corrector.polish_enabled = p["corr_polish"]
         if "corr_use_template" in p:
             self._corrector.use_template = p["corr_use_template"]
         # 标记是否有 ASR 参数实际变更
@@ -1484,10 +1656,8 @@ class MainWindow(QMainWindow):
             cfg["stream_mode"] = params["corr_stream"]
         if "corr_json" in params:
             cfg["json_mode"] = params["corr_json"]
-        if "corr_segmentation" in params:
-            cfg["enable_sentence_segmentation"] = params["corr_segmentation"]
-        if "corr_proofread" in params:
-            cfg["enable_proofread"] = params["corr_proofread"]
+        if "corr_polish" in params:
+            cfg["enable_polish"] = params["corr_polish"]
         if "corr_use_template" in params:
             cfg["use_template"] = params["corr_use_template"]
         try:
@@ -1686,7 +1856,7 @@ class MainWindow(QMainWindow):
         wf.result_row.connect(self._on_process_result)
         wf.correction_updated.connect(self._on_correction_ready)
         wf.correction_stream_updated.connect(self._on_correction_stream)
-        wf.segmentation_updated.connect(self._on_segmentation_updated)
+        wf.polish_updated.connect(self._on_polish_ready)
         wf.batch_progress.connect(self._on_batch_progress_file)
         wf.batch_file_done.connect(self._on_batch_finished_one)
         wf.batch_all_done.connect(lambda: self._update_batch_label())
@@ -1702,7 +1872,10 @@ class MainWindow(QMainWindow):
             self._btn_correction.setEnabled(states["correction"])
         if "correction_all" in states:
             self._btn_correction_all.setEnabled(states["correction_all"])
-            self._btn_segmentation.setEnabled(states["correction_all"])
+        if "polish" in states:
+            self._btn_polish.setEnabled(states["polish"])
+        if "polish_all" in states:
+            self._btn_polish_all.setEnabled(states["polish_all"])
         if "pause" in states:
             self._btn_pause.setEnabled(states["pause"])
 
@@ -1717,14 +1890,6 @@ class MainWindow(QMainWindow):
     def _on_correction_all(self):
         """对全部结果行进行 AI 纠错（委托 WorkflowManager）。"""
         self._workflow.correct_all()
-
-    def _on_segmentation(self):
-        """对全部结果进行 LLM 语义分句。"""
-        self._workflow.segment_sentences()
-
-    def _on_segmentation_updated(self, row: int, segmented_text: str):
-        """分句结果逐行更新到表格。"""
-        self._result_table.update_segmentation(row, segmented_text)
 
     def _on_batch_correction_finished(self):
         """批量纠错全部完成。"""
@@ -1747,18 +1912,34 @@ class MainWindow(QMainWindow):
                                             raw_text=raw, time_sec=ts, confidence=conf, end_sec=end_sec)
 
     def _on_correction_ready(self, row, raw, corrected):
-        self._result_table.update_correction(row, corrected)
+        self._result_table.update_correction_result(row, corrected)  # 纠错→col5
         self._correction_results[row] = corrected
         self._correction_pending.discard(row)
 
     def _on_correction_failed(self, row, _): self._correction_pending.discard(row)
 
     def _on_correction_stream(self, row, partial_text):
-        """流式输出模式：实时更新表格中的纠错文本。"""
-        self._result_table.update_correction(row, partial_text)
+        """流式输出模式：实时更新表格中的纠错文本（col5）。"""
+        self._result_table.update_correction_result(row, partial_text)
+
+    def _on_polish_selected(self):
+        """对选中行进行润色（委托 WorkflowManager）。"""
+        selected_rows = self._result_table.get_selected_rows()
+        if not selected_rows:
+            QMessageBox.warning(self, "提示", "请先在表格中选中需要润色的行（可多选）。")
+            return
+        self._workflow.polish_selected(selected_rows)
+
+    def _on_polish_all(self):
+        """对全部行进行润色（委托 WorkflowManager）。"""
+        self._workflow.polish_all()
+
+    def _on_polish_ready(self, row, original, polished):
+        """润色结果回调：写入 col6（corrected 字段）。"""
+        self._result_table.update_correction(row, polished)
 
     def _recalculate_end_seconds(self):
-        """填充 OCR 结果的 end_sec（通过 process_finished DirectConnection 同步调用，在分句/纠错之前执行）。"""
+        """填充 OCR 结果的 end_sec（通过 process_finished DirectConnection 同步调用，在纠错之前执行）。"""
         # ── 置信度阈值过滤 ──
         if self._mode_params.get("post_conf_enabled", False):
             threshold = self._mode_params.get("post_conf_threshold", 0.6)
@@ -1818,35 +1999,22 @@ class MainWindow(QMainWindow):
             if end <= ts:
                 p["end_sec"] = ts + sub_dur
 
-        # 纠错结果已由 get_polished_results 携带在 corrected 字段中
+        # 纠错结果在 segmented 字段（列5），润色结果在 corrected 字段（列6）
         cmap = {}
         for pi, p in enumerate(polished):
-            corr = p.get("corrected", "").strip()
-            if corr:
-                cmap[pi] = corr
-        # 传播 corrected 到同 segmented 组的所有条目
-        seg_corr = {}
-        for pi, p in enumerate(polished):
-            seg = p.get("segmented", "").strip()
-            corr = cmap.get(pi, "").strip()
-            if seg and corr:
-                seg_corr[seg] = corr
-        for pi, p in enumerate(polished):
-            if pi not in cmap:
-                seg = p.get("segmented", "").strip()
-                if seg in seg_corr:
-                    cmap[pi] = seg_corr[seg]
+            # 优先级：corrected(润色) > segmented(纠错) > raw(原文)
+            polished_text = p.get("corrected", "").strip()
+            corrected_text = p.get("segmented", "").strip()
+            if polished_text:
+                cmap[pi] = polished_text
+            elif corrected_text:
+                cmap[pi] = corrected_text
         try:
-            # 构建 segmented_map：有分句文本的行 → 分句文本
-            seg_map = {i: p.get("segmented", "") for i, p in enumerate(polished)
-                       if p.get("segmented", "").strip()}
-            # 映射 UI 文本到内部模式
             srt_mode_map = {"仅纠正结果": "corrected", "仅原文": "original", "双语对照（原文+纠正）": "dual", "原文 换行 纠正": "dual"}
             srt_mode = srt_mode_map.get(self._mode_params.get("srt_export_mode", "仅纠正结果"), "corrected")
             export_results(polished, path, fmt, bool(cmap), cmap,
                            keep_original=self._mode_params.get("export_keep_original", False),
-                           srt_mode=srt_mode,
-                           segmented_map=seg_map if seg_map else None)
+                           srt_mode=srt_mode)
             self._status_label.setText(f"✅ 已导出: {Path(path).name}")
         except Exception as e:
             QMessageBox.critical(self, "导出失败", str(e))

@@ -51,20 +51,25 @@ def _safe_set(widget, value, setter=None):
 class SettingsDialog(QDialog):
     """参数设置对话框，集中管理处理参数 + 纠错 API 配置。"""
 
-    def __init__(self, config_panel, correction_config: dict = None, parent=None, filter_keywords: list[str] | None = None):
+    def __init__(self, config_panel, correction_config: dict = None, parent=None,
+                 filter_keywords: list[str] | None = None,
+                 engine_manager=None, current_engine: str = ""):
         super().__init__(parent)
         self.setWindowTitle(_("⚙ 参数设置"))
-        self.setMinimumSize(760, 620)
+        self.setMinimumSize(800, 640)
+        self.resize(860, 700)
         self.setObjectName("settingsDialog")
         self._cp = config_panel
         self._corr_cfg = correction_config or {}
         self._sort_items: list = []
         self._filter_items: list = []
         self._initial_filter_keywords = filter_keywords or []
+        self._engine_mgr = engine_manager
+        self._current_engine = current_engine
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
 
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
@@ -130,7 +135,7 @@ class SettingsDialog(QDialog):
         _safe_set(self._corr_stream, mp.get("corr_stream", False))
         _safe_set(self._corr_json, mp.get("corr_json", False))
         _safe_set(self._corr_extract_env, mp.get("corr_extract_env", False))
-        _safe_set(self._corr_proofread, self._corr_cfg.get("enable_proofread", False))
+        _safe_set(self._corr_polish, self._corr_cfg.get("enable_polish", False))
         _safe_set(self._corr_summary_prompt, mp.get("corr_summary_prompt", ""))
         _safe_set(self._corr_system_prompt, mp.get("corr_system_prompt", ""))
         _safe_set(self._corr_output_format, mp.get("corr_output_format", ""))
@@ -138,6 +143,9 @@ class SettingsDialog(QDialog):
         _safe_set(self._corr_batch, mp.get("corr_batch_size", 5))
         _safe_set(self._corr_context, mp.get("corr_context_window", 3))
         _safe_set(self._corr_retry, mp.get("corr_retry", 2))
+        _safe_set(self._corr_concurrency, mp.get("corr_concurrency", 4))
+        _safe_set(self._corr_rpm, mp.get("corr_rpm", 30))
+        _safe_set(self._seg_time_gap, mp.get("seg_time_gap", 3.0))
         _safe_set(self._corr_prompt, mp.get("corr_prompt", ""))
 
         # ── ASR ──
@@ -214,6 +222,9 @@ class SettingsDialog(QDialog):
         params["corr_batch_size"] = self._corr_batch.value()
         params["corr_context_window"] = self._corr_context.value()
         params["corr_retry"] = self._corr_retry.value()
+        params["corr_concurrency"] = self._corr_concurrency.value()
+        params["corr_rpm"] = self._corr_rpm.value()
+        params["seg_time_gap"] = self._seg_time_gap.value()
         params["corr_prompt"] = self._corr_prompt.toPlainText()
 
         # ── ASR ──
@@ -267,6 +278,100 @@ class SettingsDialog(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         return scroll
 
+    # ── 引擎配置 ──
+    def _on_engine_changed(self, name: str):
+        """引擎切换时更新字段可见性和值。"""
+        if not self._engine_mgr or not name:
+            return
+        eng_cfg = self._engine_mgr._config.get("engines", {}).get(name, {})
+        cfg = eng_cfg.get("config", {})
+        is_local = eng_cfg.get("type") == "local"
+        is_paddle = name == "paddleocr"
+        # 填充字段
+        self._eng_api_key.setText(cfg.get("api_key", ""))
+        self._eng_base_url.setText(cfg.get("base_url", ""))
+        self._eng_model.setEditText(cfg.get("model", ""))
+        self._eng_timeout.setValue(cfg.get("timeout", 30))
+        self._eng_gpu.setChecked(cfg.get("device") == "gpu" or cfg.get("use_gpu", False))
+        ver = cfg.get("ocr_version") or ""
+        if "v4" in ver:
+            self._eng_paddle_version.setCurrentIndex(2)
+        elif "mobile" in ver:
+            self._eng_paddle_version.setCurrentIndex(1)
+        else:
+            self._eng_paddle_version.setCurrentIndex(0)
+        self._eng_angle.setChecked(cfg.get("use_angle_cls", True))
+        # 可见性
+        self._eng_api_key.setVisible(not is_local)
+        self._eng_base_url.setVisible(not is_local)
+        self._eng_model.setVisible(not is_local)
+        self._eng_model_status.setVisible(not is_local)
+        self._eng_timeout.setVisible(not is_local)
+        self._eng_gpu.setVisible(is_local)
+        self._eng_paddle_version.setVisible(is_paddle)
+        self._eng_angle.setVisible(is_paddle)
+        self._eng_save_preset.setVisible(not is_local)
+
+    def _on_fetch_eng_models(self):
+        """从当前引擎 Base URL 获取可用模型列表。"""
+        base_url = self._eng_base_url.text().strip()
+        if not base_url:
+            self._eng_model_status.setText(_("⚠ 请输入 URL"))
+            return
+        self._eng_model_status.setText(_("⏳ 获取中..."))
+        import threading
+
+        from PyQt5.QtCore import QObject as _QObject
+        class _Bridge(_QObject):
+            done = pyqtSignal(object)
+            err = pyqtSignal(str)
+        bridge = _Bridge(self)
+        bridge.done.connect(self._on_eng_models_done)
+        bridge.err.connect(lambda m: self._eng_model_status.setText(f"❌ {m[:20]}"))
+        api_key = self._eng_api_key.text()
+        def _fetch():
+            try:
+                models = fetch_models_from_url(base_url, api_key)
+                bridge.done.emit(models)
+            except Exception as e:
+                bridge.err.emit(str(e))
+        threading.Thread(target=_fetch, daemon=True).start()
+
+    def _on_eng_models_done(self, models):
+        if models:
+            populate_model_combo(self._eng_model, models)
+            self._eng_model_status.setText(f"✅ {len(models)} 个")
+        else:
+            self._eng_model_status.setText(_("⚠ 未获取到"))
+
+    def _on_save_eng_preset(self):
+        """将当前引擎 API 配置保存为预设。"""
+        from core.api_preset_manager import APIPresetManager
+        mgr = APIPresetManager()
+        name = f"{self._engine_combo.currentText()} 预设"
+        mgr.add_preset(name, {
+            "api_key": self._eng_api_key.text(),
+            "base_url": self._eng_base_url.text(),
+            "model": self._eng_model.currentText(),
+            "timeout": self._eng_timeout.value(),
+        })
+        self._eng_model_status.setText(f"✅ 已保存: {name}")
+
+    def get_engine_config(self) -> tuple[str, dict]:
+        """返回 (engine_name, config_dict) 供主窗口保存。"""
+        name = self._engine_combo.currentText()
+        ver_map = {0: None, 1: "PP-OCRv5_mobile", 2: "PP-OCRv4"}
+        cfg = {
+            "api_key": self._eng_api_key.text(),
+            "base_url": self._eng_base_url.text(),
+            "model": self._eng_model.currentText(),
+            "timeout": self._eng_timeout.value(),
+            "device": "gpu" if self._eng_gpu.isChecked() else "cpu",
+            "ocr_version": ver_map.get(self._eng_paddle_version.currentIndex()),
+            "use_angle_cls": self._eng_angle.isChecked(),
+        }
+        return name, cfg
+
     # ── Tab 构建 ──
     def _build_tabs(self):
         self._tabs.addTab(self._wrap_scroll(self._build_basic_tab()), "⚙ 基础")
@@ -279,13 +384,13 @@ class SettingsDialog(QDialog):
     def _build_basic_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
         layout.setContentsMargins(0, 0, 0, 0)
 
         # ── 处理模式组 ──
         mode_group = CollapsibleGroup(_("处理模式"))
         mf = QFormLayout()
-        mf.setSpacing(6)
+        mf.setSpacing(8)
         self._process_mode = QComboBox()
         self._process_mode.addItems(["OCR + ASR（完整流程）", "仅 OCR", "仅语音识别 (ASR)"])
         self._process_mode.setToolTip("选择开始处理时运行的流程模式")
@@ -301,10 +406,64 @@ class SettingsDialog(QDialog):
         mode_group.addLayout(mf)
         layout.addWidget(mode_group)
 
+        # ── OCR 引擎组 ──
+        engine_group = CollapsibleGroup(_("OCR 引擎"))
+        ef = QFormLayout()
+        ef.setSpacing(8)
+        self._engine_combo = QComboBox()
+        if self._engine_mgr:
+            self._engine_combo.addItems(self._engine_mgr.get_engine_names())
+            if self._current_engine:
+                self._engine_combo.setCurrentText(self._current_engine)
+        self._engine_combo.currentTextChanged.connect(self._on_engine_changed)
+        ef.addRow(_("引擎:"), self._engine_combo)
+        self._eng_api_key = QLineEdit()
+        self._eng_api_key.setPlaceholderText("sk-xxx")
+        self._eng_api_key.setEchoMode(QLineEdit.Password)
+        ef.addRow(_("API Key:"), self._eng_api_key)
+        self._eng_base_url = QLineEdit()
+        self._eng_base_url.setPlaceholderText("https://api.openai.com/v1")
+        ef.addRow(_("Base URL:"), self._eng_base_url)
+        model_row = QHBoxLayout()
+        self._eng_model = QComboBox()
+        self._eng_model.setEditable(True)
+        self._eng_model.setInsertPolicy(QComboBox.NoInsert)
+        self._eng_model.lineEdit().setPlaceholderText("gpt-4o")
+        self._eng_model.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        model_row.addWidget(self._eng_model, 1)
+        self._eng_model_status = QLabel("")
+        self._eng_model_status.setMinimumWidth(80)
+        btn_fetch = QPushButton(_("📋 获取模型"))
+        btn_fetch.clicked.connect(self._on_fetch_eng_models)
+        model_row.addWidget(self._eng_model_status)
+        model_row.addWidget(btn_fetch)
+        ef.addRow(_("模型:"), model_row)
+        self._eng_timeout = QSpinBox()
+        self._eng_timeout.setRange(1, 300)
+        self._eng_timeout.setValue(30)
+        self._eng_timeout.setSuffix(" 秒")
+        ef.addRow(_("超时:"), self._eng_timeout)
+        self._eng_gpu = QCheckBox(_("启用 GPU 加速"))
+        ef.addRow("", self._eng_gpu)
+        self._eng_paddle_version = QComboBox()
+        self._eng_paddle_version.addItems(["PP-OCRv5_server (高精度/慢)", "PP-OCRv5_mobile (平衡)", "PP-OCRv4 (快速)"])
+        ef.addRow(_("模型版本:"), self._eng_paddle_version)
+        self._eng_angle = QCheckBox(_("启用角度检测"))
+        self._eng_angle.setChecked(True)
+        ef.addRow("", self._eng_angle)
+        self._eng_save_preset = QPushButton(_("💾 保存为 API 预设"))
+        self._eng_save_preset.setToolTip("将当前 API 配置保存为预设，供纠错等功能使用")
+        self._eng_save_preset.clicked.connect(self._on_save_eng_preset)
+        ef.addRow("", self._eng_save_preset)
+        engine_group.addLayout(ef)
+        layout.addWidget(engine_group)
+        # 初始化引擎字段可见性
+        self._on_engine_changed(self._engine_combo.currentText())
+
         # ── 输出控制组 ──
         out_group = CollapsibleGroup(_("输出控制"))
         of = QFormLayout()
-        of.setSpacing(6)
+        of.setSpacing(8)
         self._subtitle_duration = QDoubleSpinBox()
         self._subtitle_duration.setRange(0.5, 30.0)
         self._subtitle_duration.setSingleStep(0.5)
@@ -318,19 +477,6 @@ class SettingsDialog(QDialog):
         out_group.addLayout(of)
         layout.addWidget(out_group)
 
-        # ── 后处理组 ──
-        post_group = CollapsibleGroup(_("后处理"))
-        pf = QFormLayout()
-        pf.setSpacing(6)
-        self._post_sim_dedup = QCheckBox("后处理相似度去重")
-        self._post_sim_dedup.setChecked(True)
-        pf.addRow("", self._post_sim_dedup)
-        self._corr_enabled = QCheckBox("启用 AI 纠错")
-        self._corr_enabled.setChecked(False)
-        pf.addRow("", self._corr_enabled)
-        post_group.addLayout(pf)
-        layout.addWidget(post_group)
-
         layout.addStretch()
         return tab
 
@@ -338,13 +484,13 @@ class SettingsDialog(QDialog):
     def _build_asr_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
         layout.setContentsMargins(0, 0, 0, 0)
 
         # ── 字幕模式选择 ──
         mode_group = CollapsibleGroup(_("字幕模式"))
         mode_form = QFormLayout()
-        mode_form.setSpacing(6)
+        mode_form.setSpacing(8)
         self._subtitle_mode = QComboBox()
         self._subtitle_mode.addItems(["流式字幕（去重）", "常规字幕（固定间隔）"])
         self._subtitle_mode.setToolTip("流式：哨兵去重实时输出\n常规：固定间隔采样")
@@ -356,7 +502,7 @@ class SettingsDialog(QDialog):
         # ── 流式参数组 ──
         self._s_group = CollapsibleGroup("流式参数（哨兵去重）")
         s_layout = QFormLayout()
-        s_layout.setSpacing(6)
+        s_layout.setSpacing(8)
         self._s_sentinel = QCheckBox("启用哨兵去重（骤降/缓冲区/相似度）")
         self._s_sentinel.setChecked(True)
         s_layout.addRow("", self._s_sentinel)
@@ -388,7 +534,7 @@ class SettingsDialog(QDialog):
         # ── 常规参数组 ──
         self._r_group = CollapsibleGroup("常规参数（固定间隔）")
         r_layout = QFormLayout()
-        r_layout.setSpacing(6)
+        r_layout.setSpacing(8)
         self._r_dedup = QCheckBox("启用基本去重（相似文本合并）")
         self._r_dedup.setChecked(True)
         r_layout.addRow("", self._r_dedup)
@@ -420,7 +566,7 @@ class SettingsDialog(QDialog):
         # ── ASR 模型配置 ──
         asr_group = CollapsibleGroup(_("ASR 语音识别引擎"))
         asr_form = QFormLayout()
-        asr_form.setSpacing(6)
+        asr_form.setSpacing(8)
         self._asr_model_dir = QLineEdit("models/asr")
         self._asr_model_dir.setPlaceholderText("留空使用默认缓存")
         asr_form.addRow("模型目录:", self._asr_model_dir)
@@ -552,13 +698,16 @@ class SettingsDialog(QDialog):
     def _build_ocr_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
         layout.setContentsMargins(0, 0, 0, 0)
 
         # ── 后处理参数 ──
         post_group = CollapsibleGroup(_("后处理参数"))
         pf = QFormLayout()
-        pf.setSpacing(6)
+        pf.setSpacing(8)
+        self._post_sim_dedup = QCheckBox("启用相似度去重（合并相似文本）")
+        self._post_sim_dedup.setChecked(True)
+        pf.addRow("", self._post_sim_dedup)
         self._post_conf_check = QCheckBox("启用置信度过滤（仅 PaddleOCR）")
         self._post_conf_check.setChecked(False)
         pf.addRow("", self._post_conf_check)
@@ -644,13 +793,17 @@ class SettingsDialog(QDialog):
     def _build_correction_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
         layout.setContentsMargins(0, 0, 0, 0)
 
         # ── 行为模式 ──
         mode_group = CollapsibleGroup(_("纠错模式"))
         mf = QVBoxLayout()
-        mf.setSpacing(4)
+        mf.setSpacing(6)
+        self._corr_enabled = QCheckBox("启用 AI 纠错")
+        self._corr_enabled.setChecked(False)
+        self._corr_enabled.setToolTip("总开关：开启后将使用 LLM 对 OCR 结果进行纠错")
+        mf.addWidget(self._corr_enabled)
         self._corr_translate = QCheckBox("🌐 翻译模式（将结果翻译为中文）")
         self._corr_translate.setToolTip("开启后 LLM 将把 OCR 结果翻译为中文，纠错提示词仅作参考")
         mf.addWidget(self._corr_translate)
@@ -660,24 +813,25 @@ class SettingsDialog(QDialog):
         mf.addWidget(self._corr_json)
         self._corr_extract_env = QCheckBox("提取全文环境（领域/氛围/内容摘要作为参考）")
         mf.addWidget(self._corr_extract_env)
-        self._corr_proofread = QCheckBox("🔍 校对模式（纠错/翻译后二次检查质量）")
-        self._corr_proofread.setToolTip("开启后 LLM 将对纠错/翻译结果进行二次校对，修正语法和术语问题")
-        mf.addWidget(self._corr_proofread)
+        self._corr_polish = QCheckBox("✨ 润色模式（纠错/翻译后二次润色质量）")
+        self._corr_polish.setToolTip("开启后 LLM 将对纠错/翻译结果进行二次润色，使表达更自然流畅")
+        mf.addWidget(self._corr_polish)
         self._btn_extract_env = QPushButton("🔍 立即提取全文环境")
         self._btn_extract_env.clicked.connect(lambda: self._cp.extract_env_clicked.emit())
         mf.addWidget(self._btn_extract_env)
+        self._corr_summary_prompt = QTextEdit()
+        self._corr_summary_prompt.setPlaceholderText("点击上方按钮自动提取环境信息，也可手动编辑...")
+        self._corr_summary_prompt.setMaximumHeight(80)
+        self._corr_summary_prompt.setMinimumHeight(50)
+        self._corr_summary_prompt.setToolTip("自动提取的全文环境信息（领域/氛围/摘要），可手动修改，不随设置保存")
+        mf.addWidget(self._corr_summary_prompt)
         mode_group.addLayout(mf)
         layout.addWidget(mode_group)
 
         # ── 提示词配置 ──
         prompt_group = CollapsibleGroup("提示词配置", collapsed=True)
         pf = QFormLayout()
-        pf.setSpacing(6)
-        self._corr_summary_prompt = QTextEdit()
-        self._corr_summary_prompt.setPlaceholderText("自定义全文总结/概括提示词（可选）")
-        self._corr_summary_prompt.setMaximumHeight(100)
-        self._corr_summary_prompt.setMinimumHeight(60)
-        pf.addRow("总结提示词:", self._corr_summary_prompt)
+        pf.setSpacing(8)
         self._corr_system_prompt = QTextEdit()
         self._corr_system_prompt.setPlaceholderText("自定义纠错系统提示词（可选）")
         self._corr_system_prompt.setMaximumHeight(100)
@@ -697,7 +851,7 @@ class SettingsDialog(QDialog):
         # ── 批量参数 ──
         batch_group = CollapsibleGroup(_("批量参数"))
         bf = QFormLayout()
-        bf.setSpacing(6)
+        bf.setSpacing(8)
         self._corr_preset = QComboBox()
         self._corr_preset.setToolTip("选择纠错使用的 API 连接预设")
         from core.api_preset_manager import APIPresetManager
@@ -722,6 +876,24 @@ class SettingsDialog(QDialog):
         self._corr_retry.setRange(0, 10)
         self._corr_retry.setValue(2)
         bf.addRow("失败重试:", self._corr_retry)
+        self._corr_concurrency = QSpinBox()
+        self._corr_concurrency.setRange(1, 8)
+        self._corr_concurrency.setValue(4)
+        self._corr_concurrency.setSuffix(" 并发")
+        self._corr_concurrency.setToolTip("同时运行的批次数（滑动窗口并发）")
+        bf.addRow("并发数:", self._corr_concurrency)
+        self._corr_rpm = QSpinBox()
+        self._corr_rpm.setRange(0, 120)
+        self._corr_rpm.setValue(30)
+        self._corr_rpm.setSuffix(" RPM")
+        self._corr_rpm.setToolTip("每分钟最大请求数，0 表示不限制")
+        bf.addRow("RPM 限制:", self._corr_rpm)
+        self._seg_time_gap = QDoubleSpinBox()
+        self._seg_time_gap.setRange(0.0, 60.0)
+        self._seg_time_gap.setValue(3.0)
+        self._seg_time_gap.setSuffix(" 秒")
+        self._seg_time_gap.setToolTip("上下文窗口中，跳过时间间隔超过此值的行")
+        bf.addRow("上下文时间间隔:", self._seg_time_gap)
         batch_group.addLayout(bf)
         layout.addWidget(batch_group)
 
@@ -773,7 +945,7 @@ class SettingsDialog(QDialog):
     def _build_sort_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
         layout.setContentsMargins(0, 0, 0, 0)
 
         # ── 排序规则 ──
@@ -946,5 +1118,5 @@ class SettingsDialog(QDialog):
         """确认时：同步数据到 ConfigPanel 并触发应用。"""
         self._sync_values_to_cp()
         self._sync_preset()
-        self._cp.set_proofread_enabled(self._corr_proofread.isChecked())
+        self._cp.set_polish_enabled(self._corr_polish.isChecked())
         self.accept()

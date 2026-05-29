@@ -170,13 +170,12 @@ class BatchCorrectionWorker(QThread):
             if not corrected_map:
                 logger.warning("批量纠错返回空结果: %d 条未纠正", n)
 
-            # 发射每条结果
+            # 发射每条结果（未变化的行也发射，确保表格完整）
             for item in self._texts:
                 row_idx = item[0]
                 raw_text = item[1]
-                if row_idx in corrected_map:
-                    self.correction_ready.emit(row_idx, raw_text,
-                                                corrected_map[row_idx])
+                corrected = corrected_map.get(row_idx, raw_text)
+                self.correction_ready.emit(row_idx, raw_text, corrected)
 
             self.batch_finished.emit()
         except Exception as e:
@@ -184,6 +183,51 @@ class BatchCorrectionWorker(QThread):
             traceback.print_exc()
             self.batch_error.emit(str(e))
             self.batch_finished.emit()  # 不断裂批处理链，剩余批次继续
+
+
+class BatchPolishWorker(QThread):
+    """批量润色线程 —— 逐条调用 corrector.polish()。"""
+
+    polish_ready = pyqtSignal(int, str, str)  # (row, original, polished)
+    batch_finished = pyqtSignal()
+    batch_error = pyqtSignal(str)
+
+    def __init__(self, corrector, items: list[tuple[int, str, str]]):
+        """
+        Args:
+            corrector: AICorrector 实例
+            items: [(row_index, original_text, text_to_polish), ...]
+        """
+        super().__init__()
+        self._corrector = corrector
+        self._items = list(items)
+        self._stop_flag = threading.Event()
+
+    def stop(self):
+        self._stop_flag.set()
+
+    def run(self):
+        try:
+            if self._stop_flag.is_set():
+                return
+
+            n = len(self._items)
+            if n == 0:
+                self.batch_finished.emit()
+                return
+
+            for row_idx, original, text_to_polish in self._items:
+                if self._stop_flag.is_set():
+                    break
+                polished = self._corrector.polish(original, text_to_polish)
+                self.polish_ready.emit(row_idx, original, polished or text_to_polish)
+
+            self.batch_finished.emit()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.batch_error.emit(str(e))
+            self.batch_finished.emit()
 
 
 class VideoProcessWorker(QThread):
@@ -673,75 +717,4 @@ class EnvExtractWorker(QThread):
             env = self._corrector.extract_environment(self._texts)
             self.finished.emit(env or "")
         except Exception as e:
-            self.error.emit(str(e))
-
-
-class SegmentationWorker(QThread):
-    """LLM 分句线程 —— 对全部结果进行语义合并分句，逐行发射分句文本。"""
-
-    segmentation_ready = pyqtSignal(int, str)  # row, segmented_text
-    finished_all = pyqtSignal(object)           # range_map: {segmented_text: (start_batch_idx, end_batch_idx)}
-    error = pyqtSignal(str)
-
-    def __init__(self, corrector, texts: list, max_retries: int = 3):
-        super().__init__()
-        self._corrector = corrector
-        self._texts = list(texts)
-        self._max_retries = max_retries
-        self.range_map: dict[str, tuple[int, int]] = {}
-        self._stop_flag = threading.Event()
-
-    def stop(self):
-        self._stop_flag.set()
-
-    def run(self):
-        try:
-            if not self._texts or self._stop_flag.is_set():
-                self.finished_all.emit({})
-                return
-
-            # [DEBUG] 记录分句输入映射
-            logger.debug("=== 分句输入 ===")
-            for i, t in enumerate(self._texts):
-                logger.debug(f"  batch[{i}] → row[{t[0]}] raw={t[1][:40]} ts={t[2]:.3f}-{t[3]:.3f}")
-
-            text_map, self.range_map = self._corrector.segment_sentences(
-                self._texts, max_retries=self._max_retries,
-            )
-
-            if self._stop_flag.is_set():
-                return
-
-            # [DEBUG] 记录分句输出映射
-            logger.debug("=== 分句输出 ===")
-            logger.debug(f"  text_map: {dict(text_map)}")
-            logger.debug(f"  range_map: {dict(self.range_map)}")
-
-            # 构建 batch_idx → merged_text 的完整映射
-            # text_map 只含每组首行，range_map 含每组范围
-            # 同组所有行共享合并文本（便于后续传播纠错）
-            idx_to_text: dict[int, str] = {}
-            for merged_text, (start_idx, end_idx) in self.range_map.items():
-                for bi in range(start_idx, end_idx + 1):
-                    idx_to_text[bi] = merged_text
-            # text_map 中的条目覆盖 range_map 推导的（更精确）
-            for bi, txt in text_map.items():
-                idx_to_text[bi] = txt
-
-            # 逐行发射分句结果
-            for batch_idx in range(len(self._texts)):
-                if self._stop_flag.is_set():
-                    return
-                row_idx = self._texts[batch_idx][0]
-                if batch_idx in idx_to_text:
-                    seg_text = idx_to_text[batch_idx]
-                else:
-                    # 不在任何 range 中的独立行，用原文
-                    seg_text = self._texts[batch_idx][1].replace("\n", " ").strip()
-                self.segmentation_ready.emit(row_idx, seg_text)
-
-            self.finished_all.emit(self.range_map)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
             self.error.emit(str(e))

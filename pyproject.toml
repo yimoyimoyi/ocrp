@@ -41,8 +41,10 @@ dependencies = [
     "RapidFuzz>=3.0",
     # 音频 / ASR
     "whisperx>=3.3.1",
-    "torchaudio>=2.0,<2.11",
-    "torch>=2.0,<2.11",
+    "torchaudio>=2.0",
+    "torch>=2.0",
+    # UI 主题
+    "qt-material>=2.14",
     # 系统工具
     "psutil>=5.9",
     "tqdm>=4.60",
@@ -72,6 +74,8 @@ ci = [
     "requests>=2.32",
     "RapidFuzz>=3.0",
     "typing_extensions>=4.8",
+    "json-repair>=0.30.0",
+    "openai>=1.0",
 ]
 # ── 文档 ──
 docs = [
@@ -113,13 +117,16 @@ environments = [
     "sys_platform == 'linux'",
 ]
 
-# ── GPU 用户：CUDA 索引源（纯 pip 包 DLL，无系统 CUDA Toolkit 依赖）──
+# ── GPU 索引源（CUDA 12.6）──
 # torch (cu126) 自带全套 CUDA 12.6 DLL，paddlepaddle-gpu 从 nvidia pip 包获取 DLL
-# 取消注释以下行 + setup.bat --gpu 启用 GPU 索引：
-# sources = [
-#     { name = "pytorch-cu126", url = "https://download.pytorch.org/whl/cu126", explicit = true },
-#     { name = "paddle-cu126", url = "https://www.paddlepaddle.org.cn/packages/stable/cu126/", explicit = true },
-# ]
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+[[tool.uv.index]]
+name = "paddle-cu126"
+url = "https://www.paddlepaddle.org.cn/packages/stable/cu126/"
+explicit = true
 
 # ═══════════════════════════════════════════════════════════════════
 # Ruff 代码质量

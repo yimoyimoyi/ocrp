@@ -31,7 +31,7 @@ class ConfigPanel(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._params: dict = dict(MODE_PARAMS_DEFAULTS)
-        self._proofread_enabled: bool = False
+        self._polish_enabled: bool = False
         self._template_names: list[str] = ["通用OCR"]
         self._template_contents: dict[str, str] = {}
         self._region_names: list[str] = []
@@ -48,9 +48,9 @@ class ConfigPanel(QObject):
         self._params.update(params)
         self.mode_changed.emit(dict(self._params))
 
-    def set_proofread_enabled(self, val: bool):
-        self._proofread_enabled = val
-        self._params["corr_proofread"] = val
+    def set_polish_enabled(self, val: bool):
+        self._polish_enabled = val
+        self._params["corr_polish"] = val
 
     # ── 公共属性访问器（替代直接 widget 访问）──
 

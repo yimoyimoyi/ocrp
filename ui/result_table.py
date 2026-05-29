@@ -158,8 +158,8 @@ class ResultTableWidget(QWidget):
     delete_filtered_requested = pyqtSignal()
     cell_edit_activated = pyqtSignal(int)
 
-    COLUMNS = ["✓", "时间戳", "区域", "引擎", "原始结果", "分句结果", "纠错结果", "置信度", ""]
-    COL_WIDTHS = [28, 70, 70, 70, 160, 160, 160, 50, 44]
+    COLUMNS = ["✓", "时间戳", "区域", "引擎", "原始结果", "纠错结果", "润色结果", "置信度", ""]
+    COL_WIDTHS = [32, 65, 65, 65, 200, 200, 200, 55, 40]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -183,15 +183,17 @@ class ResultTableWidget(QWidget):
             return
         total = self._table.viewport().width()
         btn_w = self.COL_WIDTHS[-1]
-        cb_w = self.COL_WIDTHS[0]  # 复选框列固定宽度
+        cb_w = self.COL_WIDTHS[0]
         available = total - btn_w - cb_w - 4
         if available <= 0:
             return
         sum_ratios = sum(self.COL_WIDTHS[1:-1])
         self._table.blockSignals(True)
         self._table.setColumnWidth(0, cb_w)
+        # 前三个固定列（时间戳/区域/引擎）给最小宽度
+        min_widths = {1: 55, 2: 55, 3: 55, 4: 100, 5: 100, 6: 100, 7: 45}
         for i in range(1, n - 1):
-            w = max(int(available * self.COL_WIDTHS[i] / sum_ratios), 50)
+            w = max(int(available * self.COL_WIDTHS[i] / sum_ratios), min_widths.get(i, 50))
             self._table.setColumnWidth(i, w)
         self._table.setColumnWidth(n - 1, btn_w)
         self._table.blockSignals(False)
@@ -200,12 +202,12 @@ class ResultTableWidget(QWidget):
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
         # 标题栏
         header = QHBoxLayout()
-        header.setSpacing(2)
+        header.setSpacing(4)
         title = QLabel(_("📋 识别结果"))
         title.setObjectName("resultTitle")
         header.addWidget(title)
@@ -224,16 +226,18 @@ class ResultTableWidget(QWidget):
             btn.setText(short_label)
             btn.setToolTip(tip)
             btn.setAutoRaise(True)
-            btn.setMinimumHeight(22)
+            btn.setFixedHeight(26)
+            btn.setMinimumWidth(36)
             btn.clicked.connect(lambda checked, f=fmt: self._on_export(f))
             header.addWidget(btn)
 
+        header.addSpacing(6)
         for label, slot in [("清空", self.clear_results),
                             ("🗑 删过滤", self._on_delete_filtered)]:
             btn = QToolButton()
             btn.setText(label)
             btn.setAutoRaise(True)
-            btn.setMinimumHeight(22)
+            btn.setFixedHeight(26)
             btn.clicked.connect(slot)
             header.addWidget(btn)
 
@@ -324,8 +328,8 @@ class ResultTableWidget(QWidget):
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
         self._table.setColumnWidth(0, 28)
         self._table.verticalHeader().setVisible(False)
-        self._table.verticalHeader().setDefaultSectionSize(32)
-        self._table.verticalHeader().setMinimumSectionSize(28)
+        self._table.verticalHeader().setDefaultSectionSize(36)
+        self._table.verticalHeader().setMinimumSectionSize(30)
         # 强制调色板：选中高亮使用极浅蓝色，不遮挡文字
         pal = self._table.palette()
         pal.setColor(QPalette.Highlight, QColor(31, 111, 235, 30))
@@ -393,16 +397,31 @@ class ResultTableWidget(QWidget):
                 if self._table.cellWidget(r, c) is editor:
                     text = editor.text()
                     if 0 <= r < len(self._results):
-                        if c == 4:    # raw (col 3 + 1 offset)
+                        if c == 4:    # raw
                             self._results[r]["raw"] = text
-                        elif c == 5:  # segmented
+                        elif c == 5:  # 纠错结果 (segmented)
                             self._results[r]["segmented"] = text
-                        elif c == 6:  # corrected
+                        elif c == 6:  # 润色结果 (corrected)
                             self._results[r]["corrected"] = text
                     self.cell_edit_activated.emit(r)
                     return
 
     # ── 公共方法 ──
+
+    def _make_filter_btn(self, row: int) -> QWidget:
+        """创建居中对齐的过滤按钮容器。"""
+        btn = QPushButton("+")
+        btn.setToolTip(_("将此条内容加入过滤器"))
+        btn.setFixedSize(28, 22)
+        btn.setStyleSheet("QPushButton { font-size: 11px; padding: 0; margin: 0; }")
+        btn.clicked.connect(lambda checked, r=row: self._on_filter_row(r))
+        wrapper = QWidget()
+        wrapper.setAutoFillBackground(True)
+        lo = QHBoxLayout(wrapper)
+        lo.setContentsMargins(0, 0, 0, 0)
+        lo.setAlignment(Qt.AlignCenter)
+        lo.addWidget(btn)
+        return wrapper
 
     def add_result(self, time_str: str, region: str, engine: str,
                    raw_text: str, confidence: float = 0.0,
@@ -437,31 +456,28 @@ class ResultTableWidget(QWidget):
             editor.set_sync_callback(self._on_cell_committed)
             self._table.setCellWidget(row, col + 1, editor)  # col+1: 偏移复选框列
 
-        btn = QPushButton("+")
-        btn.setToolTip(_("将此条内容加入过滤器"))
-        btn.setFixedSize(28, 22)
-        btn.setStyleSheet("QPushButton { font-size: 11px; padding: 0; margin: 0; }")
-        btn.clicked.connect(lambda checked, r=row: self._on_filter_row(r))
-        self._table.setCellWidget(row, len(self.COLUMNS) - 1, btn)
+        self._table.setCellWidget(row, len(self.COLUMNS) - 1,
+                                  self._make_filter_btn(row))
 
         self._update_count()
         self._table.scrollToBottom()
         return row
 
     def update_correction(self, row: int, corrected_text: str):
+        """更新润色结果列（col 6）。"""
         if 0 <= row < len(self._results):
             self._results[row]["corrected"] = corrected_text
-            editor = self._table.cellWidget(row, 6)  # col+1 for checkbox offset
+            editor = self._table.cellWidget(row, 6)
             if isinstance(editor, _CellEditor):
                 editor.set_text(corrected_text)
 
-    def update_segmentation(self, row: int, segmented_text: str):
-        """更新分句结果列。"""
+    def update_correction_result(self, row: int, corrected_text: str):
+        """更新纠错结果列（col 5）。"""
         if 0 <= row < len(self._results):
-            self._results[row]["segmented"] = segmented_text
-            editor = self._table.cellWidget(row, 5)  # col+1 for checkbox offset
+            self._results[row]["segmented"] = corrected_text
+            editor = self._table.cellWidget(row, 5)
             if isinstance(editor, _CellEditor):
-                editor.set_text(segmented_text)
+                editor.set_text(corrected_text)
 
     def update_confidence(self, row: int, confidence: float):
         if 0 <= row < len(self._results):
@@ -537,12 +553,8 @@ class ResultTableWidget(QWidget):
                 editor.set_sync_callback(self._on_cell_committed)
                 self._table.setCellWidget(row, col + 1, editor)
 
-            btn = QPushButton("+")
-            btn.setToolTip(_("将此条内容加入过滤器"))
-            btn.setFixedSize(28, 22)
-            btn.setStyleSheet("QPushButton { font-size: 11px; padding: 0; margin: 0; }")
-            btn.clicked.connect(lambda checked, r=row: self._on_filter_row(r))
-            self._table.setCellWidget(row, self._table.columnCount() - 1, btn)
+            self._table.setCellWidget(row, self._table.columnCount() - 1,
+                                      self._make_filter_btn(row))
         self._update_count()
 
     def sort_by_time(self):
@@ -773,7 +785,7 @@ class ResultTableWidget(QWidget):
 
     def _do_replace(self, row: int, search: str, replace: str):
         if row < 0 or row >= len(self._results): return
-        for col, key in [(3, "raw"), (4, "segmented"), (5, "corrected")]:
+        for col, key in [(3, "raw"), (4, "segmented"), (5, "corrected")]:  # col4=纠错, col5=润色
             val = self._results[row].get(key, "")
             if search in val:
                 new_val = val.replace(search, replace)

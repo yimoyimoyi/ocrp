@@ -140,24 +140,18 @@ class AICorrector:
             "逐行校对，保持行数不变，只修正明显错误，不要合并或拆分条目。"
             "用户自定义提示词作为额外参考。只返回修正后的结果。")
         self._output_format = self._config.get("output_format", "[纠正后文本]")
-        # ── 分句模式字段 ──
-        self._sentence_segmentation_enabled = self._config.get("enable_sentence_segmentation", False)
-        self._segmentation_prompt = self._config.get("sentence_segmentation_prompt",
-            "你是一个字幕分句专家。请根据语义将以下碎片化的OCR识别文本合并为完整的字幕条目。")
-        self._segmentation_system_prompt = self._config.get("sentence_segmentation_system_prompt",
-            "你是一个字幕分句助手。输入是连续的时间轴文本片段。你的任务是决定哪些连续行应该合并为一句话，并逐字拼接（仅可加标点）。禁止添加、删除或改写任何文字。只输出JSON，不要加任何说明。")
         self._seg_time_gap: float = self._config.get("seg_time_gap", 3.0)
-        # ── 校对模式字段 ──
+        # ── 润色模式字段 ──
         self._use_template: bool = self._config.get("use_template", False)
         self._template_content: str = ""  # 由 ConfigPanel 或 main_window 设置
-        self._proofread_enabled: bool = self._config.get("enable_proofread", False)
-        self._proofread_prompt = self._config.get("proofread_prompt",
-            "你是一个专业的字幕校对审核员。请检查以下已翻译/纠错后的字幕文本，找出并修正：\n"
-            "1. 语法错误或不自然的表达\n2. 术语翻译不一致\n3. 遗漏或多余的信息\n"
-            "4. 不符合上下文语境的用词\n\n"
+        self._polish_enabled: bool = self._config.get("enable_polish", False)
+        self._polish_prompt = self._config.get("polish_prompt",
+            "你是一个专业的字幕润色专家。请对以下已翻译/纠错后的字幕文本进行润色：\n"
+            "1. 调整语序使表达更自然流畅\n2. 统一术语和风格\n3. 精简冗余表达\n"
+            "4. 确保符合中文字幕习惯\n\n"
             "原始文本：{原始结果}\n"
-            "待校对文本：{待校对文本}\n\n"
-            "请直接输出校对后的文本，不要附加说明。")
+            "待润色文本：{待校对文本}\n\n"
+            "请直接输出润色后的文本，不要附加说明。")
 
     @property
     def enabled(self) -> bool:
@@ -202,20 +196,15 @@ class AICorrector:
             "逐行校对，保持行数不变，只修正明显错误，不要合并或拆分条目。"
             "用户自定义提示词作为额外参考。只返回修正后的结果。")
         self._output_format = self._config.get("output_format", "[纠正后文本]")
-        self._sentence_segmentation_enabled = self._config.get("enable_sentence_segmentation", False)
-        self._segmentation_prompt = self._config.get("sentence_segmentation_prompt",
-            "你是一个字幕分句专家。请根据语义将以下碎片化的OCR识别文本合并为完整的字幕条目。")
-        self._segmentation_system_prompt = self._config.get("sentence_segmentation_system_prompt",
-            "你是一个字幕分句助手。输入是连续的时间轴文本片段。你的任务是决定哪些连续行应该合并为一句话，并逐字拼接（仅可加标点）。禁止添加、删除或改写任何文字。只输出JSON，不要加任何说明。")
         self._seg_time_gap = self._config.get("seg_time_gap", 3.0)
-        self._proofread_enabled = self._config.get("enable_proofread", False)
-        self._proofread_prompt = self._config.get("proofread_prompt",
-            "你是一个专业的字幕校对审核员。请检查以下已翻译/纠错后的字幕文本，找出并修正：\n"
-            "1. 语法错误或不自然的表达\n2. 术语翻译不一致\n3. 遗漏或多余的信息\n"
-            "4. 不符合上下文语境的用词\n\n"
+        self._polish_enabled = self._config.get("enable_polish", False)
+        self._polish_prompt = self._config.get("polish_prompt",
+            "你是一个专业的字幕润色专家。请对以下已翻译/纠错后的字幕文本进行润色：\n"
+            "1. 调整语序使表达更自然流畅\n2. 统一术语和风格\n3. 精简冗余表达\n"
+            "4. 确保符合中文字幕习惯\n\n"
             "原始文本：{原始结果}\n"
-            "待校对文本：{待校对文本}\n\n"
-            "请直接输出校对后的文本，不要附加说明。")
+            "待润色文本：{待校对文本}\n\n"
+            "请直接输出润色后的文本，不要附加说明。")
 
         # 恢复运行时状态
         self._translate_mode = _translate
@@ -260,20 +249,12 @@ class AICorrector:
         self._json_mode = val
 
     @property
-    def sentence_segmentation_enabled(self) -> bool:
-        return self._sentence_segmentation_enabled
+    def polish_enabled(self) -> bool:
+        return self._polish_enabled
 
-    @sentence_segmentation_enabled.setter
-    def sentence_segmentation_enabled(self, val: bool):
-        self._sentence_segmentation_enabled = val
-
-    @property
-    def proofread_enabled(self) -> bool:
-        return self._proofread_enabled
-
-    @proofread_enabled.setter
-    def proofread_enabled(self, val: bool):
-        self._proofread_enabled = val
+    @polish_enabled.setter
+    def polish_enabled(self, val: bool):
+        self._polish_enabled = val
 
     @property
     def use_template(self) -> bool:
@@ -320,12 +301,9 @@ class AICorrector:
         env_keywords = ("{环境信息}", "环境上下文", "领域", "氛围", "环境描述")
         combined_prompt = (
             self._prompt_template + self._template_content +
-            self._summary_prompt + self._proofread_prompt
+            self._summary_prompt + self._polish_prompt
         )
-        for kw in env_keywords:
-            if kw in combined_prompt:
-                return True
-        return False
+        return any(kw in combined_prompt for kw in env_keywords)
 
     # ── API 调用辅助方法 ───────────────────────────────────────────
 
@@ -370,8 +348,10 @@ class AICorrector:
         if self._translate_mode:
             system_msg = (
                 "你是一个专业的字幕翻译助手。你接收带有时间轴（起止时间）的OCR识别文本列表，"
-                "将每行 OCR 文本翻译为中文。保持原始行号前缀 [ID:行号]，逐行翻译，"
-                "保持行数不变，不要合并或拆分条目。"
+                "将每行 OCR 文本翻译为中文。保持原始行号前缀 [ID:行号]，逐行翻译。"
+                "如果上下文显示某行是不完整的碎片（与上一行或下一行属于同一句话），"
+                "将完整语义合并到该行的翻译中，使每行译文语义完整自然。"
+                "保持输出行数与输入一致，每个 [ID:行号] 对应一行。"
                 "用户自定义提示词仅作为翻译风格参考。只返回翻译后的结果。"
             )
         else:
@@ -393,7 +373,8 @@ class AICorrector:
                   stream_callback: Callable[[str], None] | None = None,
                   resp_type: str | None = None,
                   log_title: str = "default",
-                  _tag: str = "") -> str | dict | None:
+                  _tag: str = "",
+                  no_cache: bool = False) -> str | dict | None:
         """调用统一 LLM 网关（封装 _get_engine_config → ask_llm）。
 
         这是 _call_api() 的替代方法，所有 LLM 调用统一走此入口。
@@ -425,6 +406,7 @@ class AICorrector:
             base_url=base_url,
             model=model,
             timeout=timeout,
+            no_cache=no_cache,
         )
 
         if result is None:
@@ -458,6 +440,7 @@ class AICorrector:
                 system_prompt="你是一个文本分析助手，擅长总结和归纳。",
                 resp_type=None,
                 log_title="env_extract",
+                no_cache=True,
             )
             if result is None:
                 return ""
@@ -695,7 +678,8 @@ class AICorrector:
             task = (
                 "请将上述文本翻译为中文。\n"
                 "要求：\n"
-                "- 逐行翻译，保持行数不变，不要添加、删除或合并任何条目\n"
+                "- 逐行翻译，输出行数必须与输入行数一致\n"
+                "- 如果上下文显示某行与相邻行是同一句话的碎片，将完整语义合并到该行翻译中，使每行译文语义完整\n"
                 "- 翻译自然流畅，符合中文字幕表达习惯\n"
                 "- 专有名词（人名、地名、作品名）保留原文或采用通用译名\n"
                 "- 中英混排时保留英文原文，仅翻译中文部分\n"
@@ -704,21 +688,41 @@ class AICorrector:
         else:
             task = (
                 "请校对文本中的错误。\n"
-                "要求：逐行校对，保持行数不变，只修正明显错误，不要改写原意。"
+                "要求：\n"
+                "- 逐行校对，输出行数必须与输入行数一致\n"
+                "- 只修正明显错误，不要改写原意\n"
+                "- 如果上下文显示某行是不完整的碎片（与相邻行属于同一句话），"
+                "将完整语义合并到该行中，使每行语义完整"
             )
-        prompt = (
-            f"{context_block}以下是需要处理的内容：\n{batch_text}\n\n"
-            f"{custom_hint}{task}\n\n"
-            f"输出格式（严格遵守，每行一个 [ID:行号]）：\n"
-            f"[ID:0] 处理后的第一行\n[ID:1] 处理后的第二行\n..."
-        )
+        if self._json_mode:
+            prompt = (
+                f"{context_block}以下是需要处理的内容：\n{batch_text}\n\n"
+                f"{custom_hint}{task}\n\n"
+                f'输出格式（严格遵守 JSON）：\n'
+                f'{{"results": [{{"id": 0, "text": "处理后的第一行"}}, {{"id": 1, "text": "处理后的第二行}}, ...]}}'
+            )
+        else:
+            prompt = (
+                f"{context_block}以下是需要处理的内容：\n{batch_text}\n\n"
+                f"{custom_hint}{task}\n\n"
+                f"输出格式（严格遵守，每行一个 [ID:行号]）：\n"
+                f"[ID:0] 处理后的第一行\n[ID:1] 处理后的第二行\n..."
+            )
         return prompt
 
     def _try_parse_json_batch(self, result, id_map, original_map):
-        """尝试从 JSON 响应解析批量结果。成功返回 dict，失败返回 None，全空返回 {}。"""
+        """尝试从 JSON 响应解析批量结果。成功返回 dict，失败返回 None，全空返回 {}。
+
+        JSON 解析失败时回退到 [ID:n] 文本格式解析（流式模式常见）。
+        """
         try:
             data = json.loads(result) if isinstance(result, str) else result
         except (json.JSONDecodeError, TypeError):
+            # 回退：尝试 [ID:n] 文本格式（流式模式 LLM 常返回此格式）
+            if isinstance(result, str):
+                parsed = self._parse_batch_result(result)
+                if parsed:
+                    return self._build_result_map(parsed, id_map, original_map)
             return None
         items = None
         if isinstance(data, dict):
@@ -850,118 +854,25 @@ class AICorrector:
             logger.error("本地引擎识别失败: %s", e)
             return None
 
-    # ── 分句模式 ─────────────────────────────────────────────
+    # ── 润色模式 ─────────────────────────────────────────────
 
-    def segment_sentences(self, texts: list, max_retries: int = 2) -> tuple[dict[int, str], dict[str, tuple[int, int]]]:
-        """对 OCR 碎片文本进行语义分句（Y/N merge 方案）。
-
-        每个 gap 向 LLM 询问 Y/N，代码层拼接原文，零文本风险。
-
-        Args:
-            texts: [(row_idx, raw_text, time_start, time_end), ...]
-            max_retries: 最大重试次数
-
-        Returns:
-            ({batch_idx: segmented_text}, {segmented_text: (start_batch_idx, end_batch_idx)})
-        """
-        if not texts:
-            return {}, {}
-
-        n = len(texts)
-        if n <= 1:
-            text = texts[0][1].replace("\n", " ").strip()
-            return {0: text}, {text: (0, 0)}
-
-        original_texts = [t[1].replace("\n", " ").strip() for t in texts]
-
-        # ── 规则引擎：确定性分句 ──
-        max_words = 15  # 合并组上限词数（超过则拆回独立行）
-        letters = []
-        for i in range(n - 1):
-            line_i = original_texts[i]
-            line_next = original_texts[i + 1]
-
-            # ── 时间轴约束：gap > threshold 强制拆分 ──
-            time_end_i = texts[i][3] if len(texts[i]) > 3 else 0.0
-            time_start_next = texts[i + 1][2] if len(texts[i + 1]) > 2 else 0.0
-            time_gap = time_start_next - time_end_i
-            if time_gap > self._seg_time_gap:
-                letters.append('N')
-                continue
-
-            wc_i = len(line_i.split())
-            wc_next = len(line_next.split())
-            merged_wc = wc_i + wc_next
-
-            # 规则 1：碎片词（< 3 词，无句末标点）→ 无条件合并
-            if wc_i < 3 and not line_i.endswith(('.', '!', '?')):
-                letters.append('Y')
-            # 规则 2：第一行短（< 6 词）且无句号 → 合并（除非过长）
-            elif wc_i < 6 and not line_i.endswith('.'):
-                letters.append('Y' if merged_wc <= max_words + 5 else 'N')
-            # 规则 3：合并后超长 → 拆分
-            elif merged_wc > max_words:
-                letters.append('N')
-            # 规则 4：两行都有完整句末标点且各 6+ 词 → 拆分
-            elif wc_i >= 6 and wc_next >= 6 and line_i.endswith(('.', '!', '?')):
-                letters.append('N')
-            # 默认：拆分
-            else:
-                letters.append('N')
-
-        # Build groups from Y/N
-        groups = [0]
-        for c in letters:
-            groups.append(groups[-1] if c == "Y" else groups[-1] + 1)
-
-        # Determine language joiner
-        joiner = ""
-        sample = "".join(original_texts[: min(3, len(original_texts))])
-        alpha_count = sum(1 for ch in sample if ch.isascii() and ch.isalpha())
-        if alpha_count > len(sample) * 0.5:
-            joiner = " "
-
-        # Build result maps
-        text_map: dict[int, str] = {}
-        range_map: dict[str, tuple[int, int]] = {}
-        for g in range(max(groups) + 1):
-            idxs = [j for j, gr in enumerate(groups) if gr == g]
-            if len(idxs) > 1:
-                merged = joiner.join(original_texts[i] for i in idxs)
-                wc = len(merged.split())
-                if wc > max_words:
-                    for i in idxs:
-                        text_map[i] = original_texts[i]
-                        range_map[original_texts[i]] = (i, i)
-                    continue
-                text_map[idxs[0]] = merged
-                range_map[merged] = (idxs[0], idxs[-1])
-            else:
-                text_map[idxs[0]] = original_texts[idxs[0]]
-                range_map[original_texts[idxs[0]]] = (idxs[0], idxs[-1])
-
-        _alog(f"  SEG RULES YN={''.join(letters)} groups={groups} text_map_len={len(text_map)}")
-        return text_map, range_map
-
-    # ── 校对模式 ─────────────────────────────────────────────
-
-    def proofread(self, original_text: str, corrected_text: str) -> str | None:
-        """对纠错/翻译后的文本进行二次校对。
+    def polish(self, original_text: str, corrected_text: str) -> str | None:
+        """对纠错/翻译后的文本进行润色。
 
         Args:
             original_text: OCR 原始文本
             corrected_text: 已纠错或翻译后的文本
 
         Returns:
-            校对后的文本，失败返回 None
+            润色后的文本，失败返回 None
         """
-        if not self._proofread_enabled:
+        if not self._polish_enabled:
             return corrected_text
         if not original_text.strip() or not corrected_text.strip():
             return corrected_text
 
         prompt = self._resolve_placeholders(
-            self._proofread_prompt,
+            self._polish_prompt,
             raw_text=original_text,
             context="",
             env_context=self._env_context,
@@ -974,10 +885,10 @@ class AICorrector:
 
         result = self._call_llm(
             prompt=prompt,
-            system_prompt="你是一个专业的字幕校对审核员。只输出最终的校对结果文本。",
+            system_prompt="你是一个专业的字幕润色专家。只输出最终的润色结果文本。",
             resp_type=None,
-            log_title="proofread",
-            _tag="proofread",
+            log_title="polish",
+            _tag="polish",
         )
         if result is None:
             return corrected_text
