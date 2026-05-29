@@ -70,13 +70,28 @@ rem -- [4/7] FFmpeg -----------------------------------------------------
 call :step "4/7" "Check FFmpeg"
 if exist "core\ffmpeg.exe" if exist "core\ffprobe.exe" goto :ffdone
 
-set "FURL=https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 set "FZIP=%TEMP%\orcp_ffmpeg.zip"
 set "FEXT=%TEMP%\orcp_ff_extract"
 echo     Downloading FFmpeg...
 if exist "%FEXT%" rmdir /s /q "%FEXT%" >nul 2>&1
-powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%FURL%' -OutFile '%FZIP%' -UseBasicParsing"
-if !errorlevel! neq 0 (
+
+rem Multi-source fallback: GitHub direct -> ghproxy mirror -> alternative mirror
+set "FF_DL_OK=0"
+for %%u in (
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+    "https://mirror.ghproxy.com/https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+    "https://ghproxy.net/https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+) do (
+    if !FF_DL_OK! equ 0 (
+        echo     Trying: %%~u
+        powershell -NoProfile -Command "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; try { Invoke-WebRequest -Uri '%%~u' -OutFile '%FZIP%' -UseBasicParsing -TimeoutSec 120; exit 0 } catch { exit 1 }"
+        if !errorlevel! equ 0 if exist "%FZIP%" (
+            set "FF_DL_OK=1"
+        )
+    )
+)
+
+if !FF_DL_OK! equ 0 (
     echo     [WARN] FFmpeg download failed - install manually
     goto :ffdone
 )
