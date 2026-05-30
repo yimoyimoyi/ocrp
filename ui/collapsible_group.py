@@ -10,7 +10,6 @@
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -96,10 +95,6 @@ class CollapsibleGroup(QWidget):
 
         self._title_label = QLabel(title)
         self._title_label.setObjectName("collapsibleTitle")
-        font = QFont()
-        font.setBold(True)
-        font.setPointSize(font.pointSize() + 1)
-        self._title_label.setFont(font)
         hl.addWidget(self._title_label, 1)
         outer.addWidget(header)
 
