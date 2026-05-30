@@ -1273,6 +1273,28 @@ def _migrate_theme_name(theme_name: str) -> str:
     return DEFAULT_DARK
 
 
+def _apply_dark_palette(app: QApplication):
+    """为 Fusion 设置暗色 QPalette，覆盖所有默认控件的浅色外观。"""
+    from PyQt5.QtGui import QPalette, QColor
+    p = QPalette()
+    p.setColor(QPalette.Window, QColor(30, 30, 30))
+    p.setColor(QPalette.WindowText, QColor(224, 224, 224))
+    p.setColor(QPalette.Base, QColor(35, 35, 35))
+    p.setColor(QPalette.AlternateBase, QColor(42, 42, 42))
+    p.setColor(QPalette.ToolTipBase, QColor(50, 50, 50))
+    p.setColor(QPalette.ToolTipText, QColor(224, 224, 224))
+    p.setColor(QPalette.Text, QColor(224, 224, 224))
+    p.setColor(QPalette.Button, QColor(45, 45, 45))
+    p.setColor(QPalette.ButtonText, QColor(224, 224, 224))
+    p.setColor(QPalette.BrightText, QColor(255, 255, 255))
+    p.setColor(QPalette.Link, QColor(85, 85, 85))
+    p.setColor(QPalette.Highlight, QColor(85, 85, 85))
+    p.setColor(QPalette.HighlightedText, QColor(224, 224, 224))
+    p.setColor(QPalette.Disabled, QPalette.Text, QColor(100, 100, 100))
+    p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(100, 100, 100))
+    app.setPalette(p)
+
+
 def apply_theme(app: QApplication, theme_name: str = "dark_teal",
                 font_family: str = "Microsoft YaHei UI",
                 density_scale: str = "0"):
@@ -1291,6 +1313,8 @@ def apply_theme(app: QApplication, theme_name: str = "dark_teal",
 
     # 经典主题：仅使用 Fusion + 自定义 CSS，不加载 qt-material
     if theme_name in ("default", "default_dark"):
+        if theme_name == "default_dark":
+            _apply_dark_palette(app)
         custom_css = get_custom_css(theme_name)
         app.setStyleSheet(custom_css)
         return
