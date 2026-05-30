@@ -1050,10 +1050,10 @@ class MainWindow(QMainWindow):
             elif scale > 1.2:
                 density = "2"
             apply_theme(app, self._theme, font_family=font_family, density_scale=density)
-            # 追加字体大小覆盖
+            # 追加字体大小覆盖（!important 确保覆盖 qt-material 的选择器）
             if font_size != 13:
                 current = app.styleSheet()
-                font_override = f"* {{ font-size: {font_size}px; }}"
+                font_override = f"* {{ font-size: {font_size}px !important; }}"
                 app.setStyleSheet(current + "\n" + font_override)
             # 动态调整固定尺寸控件
             self._apply_scale_to_fixed_widgets(font_size, scale)

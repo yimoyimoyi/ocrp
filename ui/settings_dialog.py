@@ -179,11 +179,11 @@ class SettingsDialog(QDialog):
             self._add_sort_row(name, prefix, suffix)
 
     @staticmethod
-    def _rev_map(translated: str, *pairs: tuple[str, str]) -> str:
+    def _rev_map(translated: str, *orig_values: str) -> str:
         """将翻译后的文本映射回内部中文值。"""
-        for orig_chinese, _translated in pairs:
-            if translated == (_(orig_chinese) if orig_chinese != translated else orig_chinese):
-                return orig_chinese
+        for orig in orig_values:
+            if translated == _(orig) or translated == orig:
+                return orig
         return translated
 
     def _sync_values_to_cp(self):
