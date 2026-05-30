@@ -808,8 +808,8 @@ class MainWindow(QMainWindow):
         if app:
             scale = self._config_mgr.get_scale()
             font_size = self._config_mgr.get_font_size()
-            # qt-material 不直接支持缩放，通过字体大小间接调整
-            font_family = f"Microsoft YaHei UI, font-size: {font_size}px" if font_size != 13 else "Microsoft YaHei UI"
+            # qt-material 不直接支持缩放，通过 density_scale 间接调整
+            font_family = "Microsoft YaHei UI"
             density = "0"
             if scale < 0.9:
                 density = "-2"

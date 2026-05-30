@@ -24,6 +24,21 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
+# qt-material 的 logging 警告（PyQt5 兼容性问题，无害）
+import logging
+
+
+class _QtMaterialFilter(logging.Filter):
+    """过滤 qt-material 的无害警告。"""
+    _SUPPRESSED = {"qt_material must be imported after", "QFontDatabase", "Could not parse"}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(s in msg for s in self._SUPPRESSED)
+
+
+logging.getLogger().addFilter(_QtMaterialFilter())
+
 # ── Windows 控制台 UTF-8 编码 ──
 if sys.platform == "win32":
     try:
