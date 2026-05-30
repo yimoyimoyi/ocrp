@@ -224,16 +224,18 @@ def _check_cudnn8_gpu_ready() -> bool:
                         found = True
                     except OSError:
                         pass
-            # 3. ctranslate2 包目录
+            # 3. ctranslate2 包目录（用 find_spec 定位，避免 import 触发 CUDA 初始化）
             if not found:
                 try:
-                    import ctranslate2
-                    pkg_dir = os.path.dirname(ctranslate2.__file__)
-                    dll_path = os.path.join(pkg_dir, dll)
-                    if os.path.isfile(dll_path):
-                        os.add_dll_directory(pkg_dir)
-                        ctypes.CDLL(dll)
-                        found = True
+                    import importlib.util
+                    _spec = importlib.util.find_spec("ctranslate2")
+                    if _spec and _spec.origin:
+                        pkg_dir = os.path.dirname(_spec.origin)
+                        dll_path = os.path.join(pkg_dir, dll)
+                        if os.path.isfile(dll_path):
+                            os.add_dll_directory(pkg_dir)
+                            ctypes.CDLL(dll)
+                            found = True
                 except Exception as e:
                     print(f"[ASR_SERVER] cuDNN DLL 加载失败: {e}", file=sys.stderr, flush=True)
             if not found:

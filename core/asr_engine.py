@@ -190,8 +190,22 @@ class WhisperXEngine(BaseASREngine):
         self._hw_accel = e
         self._device = "cuda" if e else "cpu"
         self._compute_type = "float16" if e else "int8"
+        # 同步写回配置文件，确保子进程重启时读到正确值
+        self._save_device_to_config()
         # 需要重启子进程才能生效
         self._stop_server()
+
+    def _save_device_to_config(self):
+        """将当前 device/compute_type 写回 asr_engines.json。"""
+        cfg_path = CONFIG_DIR / "asr_engines.json"
+        try:
+            cfg = _load_json_with_comments(cfg_path) if cfg_path.exists() else {}
+            cfg["device"] = self._device
+            cfg["compute_type"] = self._compute_type
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning("保存 ASR device 配置失败: %s", e)
 
     def _start_server(self) -> bool:
         """启动 ASR 子进程服务器（线程安全，首次调用阻塞直到模型加载完成）。"""
