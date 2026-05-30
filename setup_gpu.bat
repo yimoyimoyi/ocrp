@@ -115,9 +115,6 @@ rem -- [5/7] Sync dependencies (GPU, incremental) -----------------------
 call :step "5/7" "Sync dependencies (GPU - CUDA 12.6)"
 echo     Source: PyTorch CUDA 12.6 + PaddlePaddle CUDA 12.6 + PyPI
 
-set "TORCH_IDX=https://download.pytorch.org/whl/cu126"
-set "PADDLE_IDX=https://www.paddlepaddle.org.cn/packages/stable/cu126/"
-
 rem Step 1: Base sync (CPU deps first, then replace with GPU)
 echo     Syncing base dependencies...
 uv sync --index-strategy unsafe-best-match 2>nul
@@ -132,47 +129,12 @@ if !errorlevel! neq 0 (
     )
 )
 
-rem Step 2: Remove CPU torch (will be replaced with GPU version, same package name)
-rem     Keep paddlepaddle -- paddlepaddle-gpu overwrites its paddle module,
-rem     but PaddleX checks for the paddlepaddle distribution by name.
-echo     Replacing CPU torch with GPU version...
-uv pip uninstall torch torchvision torchaudio 2>nul
-
-rem Step 3: Install GPU torch (CUDA 12.6)
-echo     Installing torch (CUDA 12.6)...
-uv pip install torch torchvision torchaudio --index-url "%TORCH_IDX%"
+rem Step 2: Install GPU packages via Python script (avoids cmd.exe unicode parsing issues)
+echo     Installing GPU packages...
+uv run python "scripts\setup_gpu_pkgs.py"
 if !errorlevel! neq 0 (
-    echo     [ERROR] GPU torch install failed - GPU OCR will not work
-    call :log "GPU torch FAILED"
-    set "GPU_FAILED=1"
-) else (
-    echo     GPU torch installed
-    call :log "GPU torch OK"
-)
-
-rem Step 4: Install paddlepaddle-gpu (CUDA 12.6, pulls nvidia-* runtime DLLs)
-if not defined GPU_FAILED (
-    echo     Installing paddlepaddle-gpu (CUDA 12.6)...
-    rem Remove any prior broken install (e.g. from --no-deps in old script)
-    uv pip uninstall paddlepaddle-gpu 2>nul
-    uv pip install paddlepaddle-gpu --index-url "%PADDLE_IDX%"
-    if !errorlevel! neq 0 (
-        echo     [ERROR] paddlepaddle-gpu install failed
-        call :log "paddlepaddle-gpu FAILED"
-        set "GPU_FAILED=1"
-    ) else (
-        echo     paddlepaddle-gpu installed
-        call :log "paddlepaddle-gpu OK"
-    )
-)
-
-rem Step 5: Verify GPU
-echo     Verifying GPU...
-set "VERIFY_PY=import torch; ok = torch.cuda.is_available(); print(f'GPU: {torch.cuda.get_device_name(0)}') if ok else exit(1)"
-uv run python -c "%VERIFY_PY%" 2>&1
-if !errorlevel! neq 0 (
-    echo     [WARN] GPU verification failed - check GPU driver and CUDA environment
-    call :log "GPU verify FAILED"
+    echo     [WARN] GPU package installation had errors
+    call :log "GPU packages FAILED"
     set "GPU_FAILED=1"
 )
 
