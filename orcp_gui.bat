@@ -24,7 +24,7 @@ if exist ".venv\Scripts\pythonw.exe" (
     set "PYTHON_EXE=%DIR%.venv\Scripts\python.exe"
     echo [INFO] Python: python
 ) else (
-    echo [ERROR] .venv not found. Run setup_gpu.bat or setup_cpu.bat.
+    echo [ERROR] .venv not found. Run setup_gpu.bat, setup_cpu.bat, or setup_pip.bat.
     pause
     exit /b 1
 )
@@ -35,7 +35,7 @@ where ffmpeg >nul 2>&1 && set "HAS_FFMPEG=1"
 if exist "core\ffmpeg.exe" set "HAS_FFMPEG=1"
 if !HAS_FFMPEG! equ 0 (
     echo [WARN] FFmpeg not found - video features limited.
-    echo        Run setup_gpu.bat or setup_cpu.bat to install.
+    echo        Run setup_gpu.bat, setup_cpu.bat, or setup_pip.bat to install.
     echo.
 )
 
@@ -48,7 +48,7 @@ if errorlevel 1 (
     echo.
     echo =========================================
     echo   Startup failed.
-    echo   Try: setup_gpu.bat or setup_cpu.bat
+    echo   Try: setup_gpu.bat, setup_cpu.bat, or setup_pip.bat
     echo =========================================
     echo.
     pause
