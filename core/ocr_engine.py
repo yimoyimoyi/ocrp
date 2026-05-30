@@ -455,6 +455,14 @@ class PaddleOCREngine(BaseOCREngine):
                 kwargs["ocr_version"] = self._ocr_version
             logger.info("PaddleOCR 进程内初始化: device=%s, version=%s", device,
                         self._ocr_version or "latest")
+            # 诊断：检查 paddle 是否识别 CUDA
+            try:
+                import paddle as _pdl
+                logger.info("paddle CUDA compiled: %s, version: %s",
+                            getattr(_pdl.device, "is_compiled_with_cuda", lambda: "?")(),
+                            _pdl.__version__)
+            except Exception as _diag_e:
+                logger.warning("paddle 诊断失败: %s", _diag_e)
             try:
                 self._ocr = PaddleOCR(**kwargs)
             except Exception as e:

@@ -132,9 +132,10 @@ if !errorlevel! neq 0 (
     )
 )
 
-rem Step 2: Remove CPU versions (avoid namespace conflict with GPU packages)
-echo     Replacing CPU packages with GPU...
-uv pip uninstall paddlepaddle 2>nul
+rem Step 2: Remove CPU torch (will be replaced with GPU version, same package name)
+rem     Keep paddlepaddle -- paddlepaddle-gpu overwrites its paddle module,
+rem     but PaddleX checks for the paddlepaddle distribution by name.
+echo     Replacing CPU torch with GPU version...
 uv pip uninstall torch torchvision torchaudio 2>nul
 
 rem Step 3: Install GPU torch (CUDA 12.6)
@@ -152,6 +153,8 @@ if !errorlevel! neq 0 (
 rem Step 4: Install paddlepaddle-gpu (CUDA 12.6, pulls nvidia-* runtime DLLs)
 if not defined GPU_FAILED (
     echo     Installing paddlepaddle-gpu (CUDA 12.6)...
+    rem Remove any prior broken install (e.g. from --no-deps in old script)
+    uv pip uninstall paddlepaddle-gpu 2>nul
     uv pip install paddlepaddle-gpu --index-url "%PADDLE_IDX%"
     if !errorlevel! neq 0 (
         echo     [ERROR] paddlepaddle-gpu install failed
@@ -165,7 +168,8 @@ if not defined GPU_FAILED (
 
 rem Step 5: Verify GPU
 echo     Verifying GPU...
-uv run python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print(f'    GPU OK: {torch.cuda.get_device_name(0)} (CUDA {torch.version.cuda})')" 2>&1
+set "VERIFY_PY=import torch; ok = torch.cuda.is_available(); print(f'GPU: {torch.cuda.get_device_name(0)}') if ok else exit(1)"
+uv run python -c "%VERIFY_PY%" 2>&1
 if !errorlevel! neq 0 (
     echo     [WARN] GPU verification failed - check GPU driver and CUDA environment
     call :log "GPU verify FAILED"
