@@ -93,15 +93,28 @@ def _detect_status_color(text: str) -> str:
 
 
 class ColoredStatusLabel(QLabel):
-    """自动根据消息前缀着色的状态标签。"""
+    """自动根据消息前缀着色的状态标签，超长文本自动省略。"""
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
-        self.setTextFormat(Qt.RichText)  # type: ignore[attr-defined]
+        self._plain = text
+        self._color = "#b0bec5"
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
     def setText(self, text: str):  # type: ignore[override]
-        color = _detect_status_color(text)
-        super().setText(f'<span style="color:{color}">{text}</span>')
+        self._plain = text
+        self._color = _detect_status_color(text)
+        self._update_elided()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_elided()
+
+    def _update_elided(self):
+        fm = self.fontMetrics()
+        elided = fm.elidedText(self._plain, Qt.ElideRight, self.width() - 4)
+        safe = elided.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        super().setText(f'<span style="color:{self._color}">{safe}</span>')
 
 
 class MainWindow(QMainWindow):
@@ -934,7 +947,7 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("bottomBar")
         bbl = QHBoxLayout(bar)
-        bbl.setContentsMargins(10, 8, 10, 8)
+        bbl.setContentsMargins(10, 4, 10, 4)
         bbl.setSpacing(6)
 
         # ── 处理控制组 ──

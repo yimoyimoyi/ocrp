@@ -101,13 +101,15 @@ class DisplayDialog(QDialog):
         layout.addWidget(theme_label)
 
         # 经典主题（独立一行）
-        default_colors = THEME_COLORS.get("default", ["#555555", "#888888", "#f0f0f0"])
-        default_card = _ThemeCard("default", THEME_DISPLAY_NAMES.get("default", "经典"),
-                                  default_colors, selected=(theme == "default"))
-        default_card.clicked.connect(self._on_card_clicked)
-        self._cards["default"] = default_card
         default_row = QHBoxLayout()
-        default_row.addWidget(default_card)
+        default_row.setSpacing(6)
+        for key in ("default", "default_dark"):
+            colors = THEME_COLORS.get(key, ["#808080", "#606060", "#1e1e1e"])
+            card = _ThemeCard(key, THEME_DISPLAY_NAMES.get(key, key),
+                              colors, selected=(theme == key))
+            card.clicked.connect(self._on_card_clicked)
+            self._cards[key] = card
+            default_row.addWidget(card)
         default_row.addStretch()
         layout.addLayout(default_row)
 
