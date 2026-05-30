@@ -33,10 +33,11 @@ class _DecoderThread(QThread):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, path: str, hw_accel: bool = False, parent=None):
+    def __init__(self, path: str, hw_accel: bool = False, start_sec: float = 0.0, parent=None):
         super().__init__(parent)
         self._path = path
         self._hw_accel = hw_accel
+        self._start_sec = start_sec
         self._stop_flag = threading.Event()
         self._pause_flag = threading.Event()  # set = 暂停中
         self._seek_request: float | None = None  # 秒数
@@ -131,12 +132,14 @@ class _DecoderThread(QThread):
             return False
 
     def run(self):
-        if not self._start_ffmpeg(0):
+        if not self._start_ffmpeg(self._start_sec):
             return
 
         frame_size = self._width * self._height * 3
         next_frame_time = time.monotonic()
         frame_idx = 0
+        # 初始化 seek 偏移为起始位置（确保时间戳从正确位置开始）
+        self._seek_offset = max(0.0, self._start_sec)
 
         try:
             while not self._stop_flag.is_set():
@@ -253,7 +256,7 @@ class FFmpegPlayer:
     def play(self, start_sec: float = 0.0):
         """开始播放。"""
         self.stop()
-        self._decoder = _DecoderThread(self._path, self._hw_accel)
+        self._decoder = _DecoderThread(self._path, self._hw_accel, start_sec=start_sec)
         self._decoder.frame_ready.connect(self._on_frame)
         self._decoder.finished.connect(self._on_finished)
         self._decoder.error.connect(self._on_error)

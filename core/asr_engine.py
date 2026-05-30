@@ -646,14 +646,7 @@ class ASREngineManager:
 
     def reload_config(self):
         """重新加载配置并重启引擎（如有运行中的子进程会先停止）。"""
-        # 先停止所有运行中的子进程
-        for eng in list(self._engines.values()):
-            if hasattr(eng, '_stop_server'):
-                try:
-                    eng._stop_server()
-                except Exception as e:
-                    logger.debug("停止 ASR 引擎失败: %s", e)
-        self._engines.clear()
+        self.release_all_engines()
         self._config = load_asr_config()
         self._default_name = self._config.get("engine", "whisperx")
 
@@ -674,12 +667,39 @@ class ASREngineManager:
             eng.warm_up()
         return eng
 
+    def release_engine(self, name: str | None = None):
+        """释放指定的 ASR 引擎（停止子进程并清理资源）。"""
+        en = name or self._default_name
+        eng = self._engines.pop(en, None)
+        if eng and hasattr(eng, '_stop_server'):
+            try:
+                eng._stop_server()
+                logger.info("ASR 引擎已释放: %s", en)
+            except Exception as e:
+                logger.debug("释放 ASR 引擎失败: %s", e)
+
+    def release_all_engines(self):
+        """释放所有 ASR 引擎。"""
+        for eng in list(self._engines.values()):
+            if hasattr(eng, '_stop_server'):
+                try:
+                    eng._stop_server()
+                except Exception as e:
+                    logger.debug("停止 ASR 引擎失败: %s", e)
+        self._engines.clear()
+        logger.info("所有 ASR 引擎已释放")
+
     def get_current_engine(self):
         return self.get_engine()
 
     @property
     def engine_name(self):
         return self._default_name
+
+    @property
+    def has_engine(self) -> bool:
+        """检查是否有已加载的引擎。"""
+        return len(self._engines) > 0
 
 
 def _send_json(fp, obj: dict):

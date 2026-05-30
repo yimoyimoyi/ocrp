@@ -1745,33 +1745,7 @@ class MainWindow(QMainWindow):
 
     # ── 统一处理入口（单文件 / 批量）──
     def _on_start_processing(self):
-        if self._batch_files:
-            # 批量处理模式
-            first_file = self._batch_files[0]
-            ext = Path(first_file).suffix.lower()
-            if ext in ('.mp4', '.mkv', '.avi', '.mov', '.webm'):
-                self._video_preview.load_video(first_file)
-            elif ext in ('.png', '.jpg', '.jpeg', '.bmp'):
-                self._video_preview.load_image(first_file)
-            from PyQt5.QtCore import QCoreApplication
-            QCoreApplication.processEvents()
-            # 自动创建区域
-            regions = [r for r in self._video_preview.regions if r.get("enabled", True)]
-            if not regions:
-                pix = self._video_preview._display_pixmap
-                if pix and not pix.isNull():
-                    w, h = pix.width(), pix.height()
-                    self._video_preview.add_region(0, 0, w, h, "全帧")
-                    regions = [self._video_preview.regions[-1]]
-                else:
-                    QMessageBox.warning(self, "提示", "无法获取视频帧，请先打开一个视频文件。")
-                    return
-            self._video_preview.regions = regions
-            self._region_manager.regions = regions
-            self._progress_bar.setValue(0)
-            self._workflow.start_batch()
-        else:
-            self._workflow.start_processing()
+        self._workflow.start_processing()
         self._btn_pause.setEnabled(True)
         self._btn_pause.setText("⏸ 暂停")
 
@@ -1908,8 +1882,11 @@ class MainWindow(QMainWindow):
         # 过滤器：包含任一关键词则跳过（WorkflowManager 已过滤，此处为双重保险）
         if self._filter_mgr.matches(raw):
             return
+        # 视频模式下按时间顺序插入，图片模式下追加到末尾
+        is_image = self._video_preview.is_image if hasattr(self, '_video_preview') else False
         self._result_table.add_result(time_str=t_str, region=rname, engine=ename,
-                                            raw_text=raw, time_sec=ts, confidence=conf, end_sec=end_sec)
+                                            raw_text=raw, time_sec=ts, confidence=conf, end_sec=end_sec,
+                                            sorted_insert=not is_image)
 
     def _on_correction_ready(self, row, raw, corrected):
         self._result_table.update_correction_result(row, corrected)  # 纠错→col5

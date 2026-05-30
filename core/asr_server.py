@@ -69,8 +69,37 @@ if sys.platform == "win32":
                     except Exception as e:
                         print(f"[ASR_SERVER] CDLL 加载失败 ({_fp}): {e}", file=sys.stderr, flush=True)
 
-# 屏蔽 PaddleOCR 联网检查（虽然此进程不跑 PaddleOCR，但 config_manager 可能会触发）
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
+# HuggingFace 源测速（选择最快的源）
+def _test_hf_endpoint(url: str, timeout: float = 3.0) -> float:
+    """测试 HuggingFace 端点响应时间，返回秒数（失败返回 inf）。"""
+    import time
+    import urllib.request
+    try:
+        start = time.monotonic()
+        req = urllib.request.Request(url, method="HEAD")
+        urllib.request.urlopen(req, timeout=timeout)
+        return time.monotonic() - start
+    except Exception:
+        return float("inf")
+
+
+def _select_fastest_hf_endpoint() -> str:
+    """测速并选择最快的 HuggingFace 源。"""
+    candidates = [
+        "https://hf-mirror.com",
+        "https://huggingface.co",
+    ]
+    results = []
+    for url in candidates:
+        t = _test_hf_endpoint(url)
+        results.append((t, url))
+        print(f"[ASR_SERVER] HF endpoint test: {url} -> {t:.2f}s", file=sys.stderr, flush=True)
+
+    # 选择最快的源
+    results.sort()
+    fastest = results[0][1]
+    print(f"[ASR_SERVER] Selected HF endpoint: {fastest}", file=sys.stderr, flush=True)
+    return fastest
 
 from pathlib import Path
 
@@ -267,6 +296,24 @@ def main():
     vad_min_silence = cfg.get("vad_min_silence_ms", 500)
     _vad_threshold = cfg.get("vad_threshold", 0.5)
     word_timestamps = cfg.get("word_timestamps", True)
+    hf_endpoint = cfg.get("hf_endpoint", "") or None
+
+    # 先检查本地模型是否存在（避免不必要的测速和下载）
+    _local_model = _resolve_local_model_path(model_dir, model_size)
+    if _local_model:
+        # 本地模型存在，强制离线模式，跳过测速
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ.pop("HF_ENDPOINT", None)
+        print(f"[ASR_SERVER] local model found: {_local_model}, using offline mode", file=sys.stderr, flush=True)
+    else:
+        # 本地模型不存在，测速选择最快的源
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        if hf_endpoint:
+            os.environ["HF_ENDPOINT"] = hf_endpoint
+            print(f"[ASR_SERVER] HF_ENDPOINT (configured): {hf_endpoint}", file=sys.stderr, flush=True)
+        else:
+            fastest = _select_fastest_hf_endpoint()
+            os.environ["HF_ENDPOINT"] = fastest
 
     # ── cuDNN 8 预检（GPU 模式）──
     # ctranslate2 < 5 的 CUDA 推理依赖 cuDNN 8 DLL。
@@ -283,15 +330,14 @@ def main():
     model_arg = None
     dl_root = None
     try:
-        local = _resolve_local_model_path(model_dir, model_size)
-        if local:
-            model_arg = local
+        if _local_model:
+            model_arg = _local_model
             dl_root = None
-            print(f"[ASR_SERVER] local model: {local}", file=sys.stderr, flush=True)
+            print(f"[ASR_SERVER] using local model: {_local_model}", file=sys.stderr, flush=True)
         else:
             model_arg = model_size
             dl_root = model_dir if model_dir and os.path.isdir(model_dir) else None
-            print(f"[ASR_SERVER] model: {model_size}", file=sys.stderr, flush=True)
+            print(f"[ASR_SERVER] model: {model_size} (downloading from {os.environ.get('HF_ENDPOINT', 'default')})", file=sys.stderr, flush=True)
 
         from faster_whisper import WhisperModel
         model = WhisperModel(

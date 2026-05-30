@@ -425,14 +425,30 @@ class ResultTableWidget(QWidget):
 
     def add_result(self, time_str: str, region: str, engine: str,
                    raw_text: str, confidence: float = 0.0,
-                   time_sec: float = 0.0, end_sec: float = 0.0) -> int:
-        self._results.append({
+                   time_sec: float = 0.0, end_sec: float = 0.0,
+                   sorted_insert: bool = False) -> int:
+        result_item = {
             "time_sec": time_sec, "end_sec": end_sec,
             "time": time_str, "region": region, "engine": engine,
             "raw": raw_text, "segmented": "", "corrected": "", "confidence": confidence,
-        })
-        row = self._table.rowCount()
-        self._table.insertRow(row)
+        }
+
+        if sorted_insert:
+            # 按时间顺序插入：找到正确的位置
+            insert_pos = len(self._results)
+            for i, existing in enumerate(self._results):
+                existing_time = existing.get("time_sec", 0.0) or 0.0
+                if time_sec < existing_time:
+                    insert_pos = i
+                    break
+            self._results.insert(insert_pos, result_item)
+            row = insert_pos
+            self._table.insertRow(row)
+        else:
+            # 追加到末尾
+            self._results.append(result_item)
+            row = self._table.rowCount()
+            self._table.insertRow(row)
 
         # 第0列：复选框
         cb = QCheckBox()

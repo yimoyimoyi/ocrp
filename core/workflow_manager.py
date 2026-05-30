@@ -13,6 +13,7 @@ from typing import Any
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from core.asr_engine import SUPPORTED_AUDIO_EXTS
 from core.frame_processor import FrameProcessor
 from core.logger import get_logger
 from core.utils import ENGINE_WHISPERX, MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
@@ -313,15 +314,15 @@ class WorkflowManager(QObject):
             return
         is_audio = self._get_is_audio_file()
 
-        # 🔥 仅清除 ASR 结果
-        asr_region = self._get_mode_params().get("asr_region_name", "语音")
-        self._clear_results_by_type(asr_region, ENGINE_WHISPERX)
-
         self._correction_pending.clear()
 
         self._pending_vp = vp
         self._pending_regions = []
         self._pending_ename = self._get_current_engine()
+
+        # 释放 OCR 引擎（OCR 与 ASR 互斥）
+        if self._engine_mgr:
+            self._engine_mgr.release_all_engines()
 
         asr_engine = self._asr_mgr.get_engine() if self._asr_mgr else None
         if not asr_engine:
@@ -358,6 +359,10 @@ class WorkflowManager(QObject):
             self._show_error("提示", "请先加载视频或图片文件。")
             return
 
+        # 释放 ASR 引擎（OCR 与 ASR 互斥）
+        if self._asr_mgr:
+            self._asr_mgr.release_all_engines()
+
         regions = [r for r in self._get_regions() if r.get("enabled", True)]
         if not regions:
             regions = [{
@@ -368,10 +373,6 @@ class WorkflowManager(QObject):
                 "enabled": True,
             }]
             self._set_regions(regions)
-
-        # 🔥 仅清除 OCR 区域结果
-        for r in regions:
-            self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
 
         self._correction_pending.clear()
 
@@ -427,18 +428,12 @@ class WorkflowManager(QObject):
         # 执行流程
         if do_asr and do_ocr:
             logger.info("流程: ASR + OCR 串行")
-            self._clear_results_by_type(asr_region_name, ENGINE_WHISPERX)
-            for r in regions:
-                self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
             self._start_asr_worker(vp)
         elif do_asr and not do_ocr:
             logger.info("流程: 仅 ASR")
-            self._clear_results_by_type(asr_region_name, ENGINE_WHISPERX)
             self._start_asr_worker(vp)
         elif not do_asr and do_ocr:
             logger.info("流程: 仅 OCR")
-            for r in regions:
-                self._clear_results_by_type(r.get("name", ""), r.get("engine", ""))
             self._do_ocr_pass(vp)
         else:
             self._show_error("提示", "未启用任何处理（请启用 ASR 或定义 OCR 区域）")
@@ -502,6 +497,10 @@ class WorkflowManager(QObject):
             QTimer.singleShot(100, lambda: self._on_asr_finished(cached))
             return
 
+        # 释放 OCR 引擎（OCR 与 ASR 互斥）
+        if self._engine_mgr:
+            self._engine_mgr.release_all_engines()
+
         asr_engine = self._asr_mgr.get_engine() if self._asr_mgr else None
         if not asr_engine:
             self.status_msg.emit("⚠ ASR 引擎未加载")
@@ -537,6 +536,11 @@ class WorkflowManager(QObject):
         if results and self._pending_vp:
             self._save_asr_cache(self._pending_vp, results)
         n = len(results)
+
+        # 释放 ASR 引擎（用完销毁，为 OCR 腾出资源）
+        if self._asr_mgr:
+            self._asr_mgr.release_all_engines()
+
         ocr_regions = [r for r in self._pending_regions if r.get("enabled", True)]
         if ocr_regions:
             self.status_msg.emit(f"✅ 语音识别完成: {n} 段，开始 OCR...")
@@ -548,6 +552,10 @@ class WorkflowManager(QObject):
             QTimer.singleShot(100, lambda: self._on_process_finished([]))
 
     def _on_asr_error(self, err):
+        # 释放 ASR 引擎（用完销毁，为 OCR 腾出资源）
+        if self._asr_mgr:
+            self._asr_mgr.release_all_engines()
+
         ocr_regions = [r for r in self._pending_regions if r.get("enabled", True)]
         if ocr_regions:
             self.status_msg.emit(f"⚠ 语音识别失败: {err}，继续 OCR...")
@@ -614,13 +622,15 @@ class WorkflowManager(QObject):
             msg += f" | 过滤: {self._filtered_count} 条"
         self._filtered_count = 0
 
-        # 全量处理：直接纠错
+        # 全量处理：直接纠错（纠错完成后会自动触发下一个文件）
         corr_enabled = mp.get("corr_enabled", False)
         if corr_enabled and n > 0:
             self._run_full_correction(is_auto=True)
             self.status_msg.emit(f"{msg} | 全量 AI 纠错中...")
         else:
             self.status_msg.emit(msg)
+            # 没有纠错时，直接进入下一个文件
+            self._maybe_start_next_batch_file()
 
     def _on_process_error(self, err):
         self._set_buttons(start=True, stop=False, correction=True, correction_all=True,
@@ -990,6 +1000,61 @@ class WorkflowManager(QObject):
             self._batch_correction_workers.clear()
         n = self._get_table_row_count()
         self.status_msg.emit(f"✅ 完成: {n} 条结果 | 批量纠错完成")
+        # 纠错完成后，进入下一个文件
+        self._maybe_start_next_batch_file()
+
+    def _maybe_start_next_batch_file(self):
+        """如果有批量队列，处理下一个文件。"""
+        if not self._batch_files or len(self._batch_files) <= 1:
+            return
+        # 保存当前文件结果到缓存
+        current_results = self._get_results()
+        if current_results:
+            current_vp = self._get_video_path()
+            if current_vp:
+                self._save_asr_cache(current_vp, current_results)
+        # 移除已处理的第一个文件
+        self._batch_files.pop(0)
+        self._update_batch_label()
+        if not self._batch_files:
+            self._set_buttons(start=True, stop=False)
+            self.status_msg.emit("✅ 所有文件处理完成")
+            return
+        # 加载下一个文件
+        next_file = self._batch_files[0]
+        ext = Path(next_file).suffix.lower()
+        if ext in ('.mp4', '.mkv', '.avi', '.mov', '.webm'):
+            self._load_video_for_batch(next_file)
+        elif ext in ('.png', '.jpg', '.jpeg', '.bmp'):
+            self._load_image_for_batch(next_file)
+        elif ext in SUPPORTED_AUDIO_EXTS:
+            self._load_audio_for_batch(next_file)
+        else:
+            logger.warning("不支持的文件格式: %s, 跳过", ext)
+            self._maybe_start_next_batch_file()
+            return
+        # 清理结果表格，开始处理
+        self._clear_results_table()
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(500, lambda: self.start_processing())
+
+    def _load_video_for_batch(self, path: str):
+        """批量模式加载视频（阻塞等待完成）。"""
+        from PyQt5.QtCore import QCoreApplication
+        self._video_preview.load_video(path)
+        QCoreApplication.processEvents()
+
+    def _load_image_for_batch(self, path: str):
+        """批量模式加载图片（阻塞等待完成）。"""
+        from PyQt5.QtCore import QCoreApplication
+        self._video_preview.load_image(path)
+        QCoreApplication.processEvents()
+
+    def _load_audio_for_batch(self, path: str):
+        """批量模式加载音频（阻塞等待完成）。"""
+        from PyQt5.QtCore import QCoreApplication
+        self._video_preview.load_audio(path)
+        QCoreApplication.processEvents()
 
     # ═══════════════════════════════════════════════════════════════
     # AI 纠错 —— 单条提交
@@ -1234,6 +1299,8 @@ class WorkflowManager(QObject):
 
     def _on_batch_finished_one(self, file_path: str, results: list):
         self.status_msg.emit(f"✅ 完成: {Path(file_path).name} ({len(results)} 条)")
+        # 切换到下一个文件时清理结果
+        self._clear_results_table()
 
     def _on_batch_finished_all(self, _=None):
         self._set_buttons(start=True, stop=False, correction=True)

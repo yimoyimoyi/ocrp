@@ -413,6 +413,7 @@ class VideoPreviewWidget(QWidget):
         self._video_duration: float = 0.0
         self._slider_dragging = False
         self._is_audio: bool = False
+        self._audio_seek_pending: bool = False  # 标记音频正在 seek，忽略初始位置更新
 
         # 拖拽防抖定时器（实时预览帧）
         self._drag_seek_timer = QTimer()
@@ -719,10 +720,14 @@ class VideoPreviewWidget(QWidget):
             self._audio_player.positionChanged.connect(self._on_audio_position)
             self._audio_player.durationChanged.connect(self._on_audio_duration)
             self._audio_player.stateChanged.connect(self._on_audio_state)
+        # 标记正在 seek，忽略初始的位置更新
+        self._audio_seek_pending = True
         url = QUrl.fromLocalFile(self._video_path)
         self._audio_player.setMedia(QMediaContent(url))
         self._audio_player.setPosition(int(self._current_position * 1000))
         self._audio_player.play()
+        # 延迟重置标记，给 QMediaPlayer 时间完成 seek
+        QTimer.singleShot(200, lambda: setattr(self, '_audio_seek_pending', False))
 
     def _start_video_audio(self):
         """用 FFmpeg 解码视频完整音轨到临时 WAV，通过 QMediaPlayer 播放。"""
@@ -735,10 +740,14 @@ class VideoPreviewWidget(QWidget):
             return  # 等待提取完成后再播放
         if not self._audio_temp:
             return
+        # 标记正在 seek，忽略初始的位置更新
+        self._audio_seek_pending = True
         url = QUrl.fromLocalFile(self._audio_temp)
         self._audio_player.setMedia(QMediaContent(url))
         self._audio_player.setPosition(int(self._current_position * 1000))
         self._audio_player.play()
+        # 延迟重置标记，给 QMediaPlayer 时间完成 seek
+        QTimer.singleShot(200, lambda: setattr(self, '_audio_seek_pending', False))
 
     def _extract_full_audio_async(self):
         """异步抽取视频完整音轨到临时 WAV 文件（不阻塞 UI）。"""
@@ -752,10 +761,14 @@ class VideoPreviewWidget(QWidget):
         """音频提取完成回调。"""
         self._audio_temp = path
         if self._is_playing:
+            # 标记正在 seek，忽略初始的位置更新
+            self._audio_seek_pending = True
             url = QUrl.fromLocalFile(self._audio_temp)
             self._audio_player.setMedia(QMediaContent(url))
             self._audio_player.setPosition(int(self._current_position * 1000))
             self._audio_player.play()
+            # 延迟重置标记，给 QMediaPlayer 时间完成 seek
+            QTimer.singleShot(200, lambda: setattr(self, '_audio_seek_pending', False))
 
     def _on_audio_extract_error(self, err: str):
         """音频提取失败回调。"""
@@ -781,6 +794,9 @@ class VideoPreviewWidget(QWidget):
 
     def _on_audio_position(self, ms: int):
         """QMediaPlayer 位置更新 → 同步滑块。"""
+        # 忽略 seek 期间的初始位置更新（防止进度条跳到开头）
+        if self._audio_seek_pending:
+            return
         if self._is_playing and not self._slider_dragging:
             self._current_position = ms / 1000.0
             self._set_slider(self._current_position)

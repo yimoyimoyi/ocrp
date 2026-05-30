@@ -773,3 +773,31 @@ class OCREngineManager:
 
     def get_default_engine_name(self) -> str:
         return self._default_name
+
+    def release_engine(self, name: str | None = None):
+        """释放指定的 OCR 引擎（清理资源）。"""
+        en = name or self._current_name
+        eng = self._engines.pop(en, None)
+        if eng:
+            if hasattr(eng, 'close'):
+                try:
+                    eng.close()
+                except Exception as e:
+                    logger.debug("关闭 OCR 引擎失败: %s", e)
+            logger.info("OCR 引擎已释放: %s", en)
+
+    def release_all_engines(self):
+        """释放所有 OCR 引擎。"""
+        for eng in list(self._engines.values()):
+            if hasattr(eng, 'close'):
+                try:
+                    eng.close()
+                except Exception as e:
+                    logger.debug("关闭 OCR 引擎失败: %s", e)
+        self._engines.clear()
+        logger.info("所有 OCR 引擎已释放")
+
+    @property
+    def has_engine(self) -> bool:
+        """检查是否有已加载的引擎。"""
+        return len(self._engines) > 0
