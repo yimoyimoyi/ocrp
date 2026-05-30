@@ -1315,6 +1315,8 @@ def apply_theme(app: QApplication, theme_name: str = "dark_teal",
     if theme_name in ("default", "default_dark"):
         if theme_name == "default_dark":
             _apply_dark_palette(app)
+        else:
+            app.setPalette(app.style().standardPalette())
         custom_css = get_custom_css(theme_name)
         app.setStyleSheet(custom_css)
         return
