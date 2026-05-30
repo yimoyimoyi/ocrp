@@ -220,9 +220,14 @@ class WhisperXEngine(BaseASREngine):
             _CONFIG_PATH = str(CONFIG_DIR / "asr_engines.json")
             _PYTHON = sys.executable
 
+            # 将当前 device/compute_type 通过命令行传给子进程，确保 hw_accel 状态生效
+            _cmd = [_PYTHON, _ASR_SERVER, "--config", _CONFIG_PATH,
+                    "--device", self._device,
+                    "--compute-type", self._compute_type]
+
             try:
                 self._proc = subprocess.Popen(
-                    [_PYTHON, _ASR_SERVER, "--config", _CONFIG_PATH],
+                    _cmd,
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -303,6 +308,12 @@ class WhisperXEngine(BaseASREngine):
             except Exception as e2:
                 logger.debug("ASR 子进程强制 kill 失败: %s", e2)
         finally:
+            # 关闭 stdin 管道，避免垃圾回收时 TextIOWrapper 报 OSError
+            if self._proc and self._proc.stdin:
+                try:
+                    self._proc.stdin.close()
+                except OSError:
+                    pass
             self._proc = None
             self._stderr_lines.clear()
             self._closed = True
@@ -314,6 +325,11 @@ class WhisperXEngine(BaseASREngine):
         if self._proc and self._proc.poll() is not None:
             code = self._proc.poll()
             err = "\n".join(self._stderr_lines[-20:]) if self._stderr_lines else "(no stderr)"
+            if self._proc.stdin:
+                try:
+                    self._proc.stdin.close()
+                except OSError:
+                    pass
             self._proc = None
             self._ready = False
             self._ready_event.clear()

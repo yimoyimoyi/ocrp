@@ -276,6 +276,8 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None, help="Path to ASR config JSON")
+    parser.add_argument("--device", default=None, help="Override device (cpu/cuda)")
+    parser.add_argument("--compute-type", default=None, help="Override compute type")
     args = parser.parse_args()
 
     cfg = _load_config(args.config)
@@ -283,8 +285,8 @@ def main():
     model_size = cfg.get("model_size", "large-v3")
     model_dir = cfg.get("model_dir", "")
     language = cfg.get("language", "zh")
-    device = cfg.get("device", "cuda")
-    compute_type = cfg.get("compute_type", "float16")
+    device = args.device or cfg.get("device", "cuda")
+    compute_type = args.compute_type or cfg.get("compute_type", "float16")
     beam_size = cfg.get("beam_size", 5)
     initial_prompt = cfg.get("initial_prompt", "") or None
     condition_on_prev = cfg.get("condition_on_previous_text", True)
