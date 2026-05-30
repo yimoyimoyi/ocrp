@@ -151,10 +151,7 @@ def _verify_startup_environment():
 
 from PyQt5.QtWidgets import QApplication
 
-from core.i18n import setup_i18n
-
-setup_i18n()
-
+from core.i18n import LanguageManager
 from core.logger import get_logger
 from ui.main_window import MainWindow
 
@@ -191,8 +188,14 @@ _install_crash_handler()
 
 def main():
     """应用入口。"""
-    from core.config_manager import ensure_config_files
+    from core.config_manager import ConfigManager, ensure_config_files
     ensure_config_files()
+
+    # ── 初始化国际化：优先从配置读取语言设置 ──
+    _config_mgr_lang = ConfigManager()
+    _saved_lang = _config_mgr_lang.get_language()
+    LanguageManager.initialize(_saved_lang if _saved_lang else "")
+
     logger.info("ORCP 启动中...")
     logger.info("Python %s | 平台 %s", sys.version.split()[0], sys.platform)
 

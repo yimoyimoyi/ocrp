@@ -47,7 +47,7 @@ class TemplateEditorDialog(QDialog):
 
         layout.addWidget(QLabel(_("提示词内容（点击下方按钮插入占位符）:")))
         self._prompt_edit = QTextEdit()
-        self._prompt_edit.setPlaceholderText("输入提示词...")
+        self._prompt_edit.setPlaceholderText(_("输入提示词..."))
         self._prompt_edit.textChanged.connect(
             lambda: self.prompt_changed.emit(self._prompt_edit.toPlainText()))
         layout.addWidget(self._prompt_edit, 1)
@@ -76,10 +76,10 @@ class TemplateEditorDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
         for text, slot in [
-            ("➕ 新建", self._on_new),
-            ("💾 保存", self._on_save),
-            ("✏ 重命名", self._on_rename),
-            ("🗑 删除", self._on_delete),
+            (_("➕ 新建"), self._on_new),
+            (_("💾 保存"), self._on_save),
+            (_("✏ 重命名"), self._on_rename),
+            (_("🗑 删除"), self._on_delete),
         ]:
             b = QPushButton(text)
             b.clicked.connect(slot)
@@ -115,7 +115,7 @@ class TemplateEditorDialog(QDialog):
         self._prompt_edit.setPlainText(default)
 
     def _on_new(self):
-        name, ok = QInputDialog.getText(self, "新建模板", "模板名称:")
+        name, ok = QInputDialog.getText(self, _("新建模板"), _("模板名称:"))
         if ok and name.strip():
             if name not in self._names:
                 self._names.append(name)
@@ -136,10 +136,10 @@ class TemplateEditorDialog(QDialog):
         old = self._combo.currentText()
         if not old:
             return
-        new, ok = QInputDialog.getText(self, "重命名模板", "新名称:", text=old)
+        new, ok = QInputDialog.getText(self, _("重命名模板"), _("新名称:"), text=old)
         if ok and new.strip() and new != old:
             if new in self._names:
-                QMessageBox.warning(self, "重命名失败", f"模板名称 '{new}' 已存在。")
+                QMessageBox.warning(self, _("重命名失败"), _("模板名称 '{}' 已存在。").format(new))
                 return
             idx = self._names.index(old)
             self._names[idx] = new
@@ -153,7 +153,7 @@ class TemplateEditorDialog(QDialog):
         if not name:
             return
         if QMessageBox.question(
-            self, "确认删除", f"确定要删除模板 '{name}' 吗？",
+            self, _("确认删除"), _("确定要删除模板 '{}' 吗？").format(name),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         ) == QMessageBox.Yes:
             idx = self._combo.currentIndex()

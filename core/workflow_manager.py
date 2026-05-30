@@ -15,6 +15,7 @@ from PyQt5.QtCore import QObject, pyqtSignal
 
 from core.asr_engine import SUPPORTED_AUDIO_EXTS
 from core.frame_processor import FrameProcessor
+from core.i18n import _
 from core.logger import get_logger
 from core.utils import ENGINE_WHISPERX, MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
 from ui.workers import (
@@ -347,7 +348,7 @@ class WorkflowManager(QObject):
 
         self._set_buttons(start=False, correction=False, pause=True, stop=True)
         self.progress_val.emit(0)
-        self.status_msg.emit("语音识别中...")
+        self.status_msg.emit(_("语音识别中..."))
 
     # ═══════════════════════════════════════════════════════════════
     # OCR only
@@ -387,7 +388,7 @@ class WorkflowManager(QObject):
 
         self._set_buttons(start=False, correction=False, pause=True, stop=True)
         self.progress_val.emit(0)
-        self.status_msg.emit("OCR 处理中...")
+        self.status_msg.emit(_("OCR 处理中..."))
 
     # ═══════════════════════════════════════════════════════════════
     # 视频处理（ASR + OCR 串行）
@@ -476,7 +477,7 @@ class WorkflowManager(QObject):
         self._video_worker.finished_all.connect(self._on_process_finished)
         self._video_worker.error.connect(self._on_process_error)
         self._video_worker.start()
-        self.status_msg.emit("OCR 处理中...")
+        self.status_msg.emit(_("OCR 处理中..."))
 
     def _start_asr_worker(self, video_path: str):
         mp = self._get_mode_params()
@@ -503,7 +504,7 @@ class WorkflowManager(QObject):
 
         asr_engine = self._asr_mgr.get_engine() if self._asr_mgr else None
         if not asr_engine:
-            self.status_msg.emit("⚠ ASR 引擎未加载")
+            self.status_msg.emit(_("⚠ ASR 引擎未加载"))
             return
 
         region_name = mp.get("asr_region_name", "语音")
@@ -519,7 +520,7 @@ class WorkflowManager(QObject):
         self._audio_worker.finished_all.connect(self._on_asr_finished)
         self._audio_worker.error.connect(self._on_asr_error)
         self._audio_worker.start()
-        self.status_msg.emit("语音识别中...")
+        self.status_msg.emit(_("语音识别中..."))
 
     # ═══════════════════════════════════════════════════════════════
     # ASR 回调
@@ -705,7 +706,7 @@ class WorkflowManager(QObject):
                     else:
                         w.quit()
 
-        self.status_msg.emit("已停止")
+        self.status_msg.emit(_("已停止"))
         self._set_buttons(start=True, stop=False, correction=True, correction_all=True,
                           polish=True, polish_all=True)
         self.progress_val.emit(0)
@@ -730,7 +731,7 @@ class WorkflowManager(QObject):
                 self._batch_worker.pause()
                 paused = True
         if paused:
-            self.status_msg.emit("已暂停")
+            self.status_msg.emit(_("已暂停"))
         else:
             self.status_msg.emit("当前无正在运行的任务")
 
@@ -754,7 +755,7 @@ class WorkflowManager(QObject):
                 self._batch_worker.resume()
                 resumed = True
         if resumed:
-            self.status_msg.emit("继续处理")
+            self.status_msg.emit(_("继续处理"))
         else:
             self.status_msg.emit("当前无暂停的任务")
 
@@ -785,7 +786,7 @@ class WorkflowManager(QObject):
                     texts.append((row, raw, ts, te))
 
         if not texts:
-            self.status_msg.emit("⚠ 选中的行无有效文本可纠错")
+            self.status_msg.emit(_("⚠ 选中的行无有效文本可纠错"))
             return
 
         mp = self._get_mode_params()
@@ -914,7 +915,7 @@ class WorkflowManager(QObject):
 
         # 滑动窗口并发
         concurrency = min(concurrency, len(batches))
-        for _ in range(concurrency):
+        for _i in range(concurrency):
             self._launch_next_correction_batch(context_window, max_retries)
 
     def _launch_next_correction_batch(self, context_window: int, max_retries: int):
@@ -1191,7 +1192,7 @@ class WorkflowManager(QObject):
         self.status_msg.emit(f"润色中: {total} 条 [{len(batches)} 批]")
 
         concurrency = min(concurrency, len(batches))
-        for _ in range(concurrency):
+        for _i in range(concurrency):
             self._launch_next_polish_batch()
 
     def _launch_next_polish_batch(self):

@@ -42,9 +42,11 @@ THEME_MAP = {
 # 默认主题
 DEFAULT_DARK = "dark_teal"
 DEFAULT_LIGHT = "light_teal"
+DEFAULT_THEME = "default"
 
 # 主题显示名（中文）
 THEME_DISPLAY_NAMES = {
+    "default":      "经典",
     "dark_teal":    "深色 · 青绿",
     "dark_blue":    "深色 · 蓝",
     "dark_cyan":    "深色 · 天蓝",
@@ -69,6 +71,7 @@ THEME_DISPLAY_NAMES = {
 # ─── 主题预览色（用于卡片选择器）───
 # 每个主题 3 个代表色：[主色, 次色, 背景色]
 THEME_COLORS = {
+    "default":         ["#555555", "#888888", "#f0f0f0"],
     "dark_teal":       ["#26a69a", "#00796b", "#1e1e1e"],
     "dark_blue":       ["#42a5f5", "#1565c0", "#1e1e1e"],
     "dark_cyan":       ["#26c6da", "#00838f", "#1e1e1e"],
@@ -167,8 +170,23 @@ QPushButton#btnStart:disabled { background-color: #1b3a4d; color: #4a6a7a; }
 
 /* ── 暂停/停止按钮 ── */
 QPushButton#btnPause, QPushButton#btnStop {
+    background-color: #383838;
+    color: #e0e0e0;
+    border: 1px solid #505050;
     border-radius: 8px;
     padding: 8px 18px;
+}
+QPushButton#btnPause:hover, QPushButton#btnStop:hover {
+    background-color: #454545;
+    border: 1px solid #666666;
+}
+QPushButton#btnPause:pressed, QPushButton#btnStop:pressed {
+    background-color: #2a2a2a;
+}
+QPushButton#btnPause:disabled, QPushButton#btnStop:disabled {
+    background-color: #252525;
+    color: #555555;
+    border: 1px solid #333333;
 }
 
 /* ── 纠错/润色按钮 ── */
@@ -375,9 +393,6 @@ QPushButton#btnCorrection:hover, QPushButton#btnCorrectionAll:hover {
 QPushButton#btnPolish:hover, QPushButton#btnPolishAll:hover {
     border: 1px solid #7c4dff;
 }
-QPushButton#btnPause:hover, QPushButton#btnStop:hover {
-    border: 1px solid #505050;
-}
 
 """
 
@@ -445,8 +460,23 @@ QPushButton#btnStart:pressed { background-color: #006cbd; }
 QPushButton#btnStart:disabled { background-color: #cce4f7; color: #6a9ec2; }
 
 QPushButton#btnPause, QPushButton#btnStop {
+    background-color: #e8e8e8;
+    color: #333333;
+    border: 1px solid #cccccc;
     border-radius: 8px;
     padding: 8px 18px;
+}
+QPushButton#btnPause:hover, QPushButton#btnStop:hover {
+    background-color: #d8d8d8;
+    border: 1px solid #aaaaaa;
+}
+QPushButton#btnPause:pressed, QPushButton#btnStop:pressed {
+    background-color: #c0c0c0;
+}
+QPushButton#btnPause:disabled, QPushButton#btnStop:disabled {
+    background-color: #f0f0f0;
+    color: #aaaaaa;
+    border: 1px solid #e0e0e0;
 }
 QPushButton#btnCorrection, QPushButton#btnCorrectionAll,
 QPushButton#btnPolish, QPushButton#btnPolishAll {
@@ -632,8 +662,295 @@ QPushButton#btnCorrection:hover, QPushButton#btnCorrectionAll:hover {
 QPushButton#btnPolish:hover, QPushButton#btnPolishAll:hover {
     border: 1px solid #7c4dff;
 }
+
+"""
+
+_CUSTOM_CSS_DEFAULT = """
+/* ═══ 项目自定义样式 (经典) ═══ */
+
+/* ── 可折叠分组 ── */
+QWidget#collapsibleGroup {
+    background: transparent;
+    border: 1px solid #d0d0d0;
+    border-radius: 10px;
+    margin: 3px 0;
+}
+QWidget#collapsibleHeader {
+    background-color: #f5f5f5;
+    border: none;
+    border-radius: 10px 10px 0 0;
+    min-height: 34px;
+}
+QWidget#collapsibleHeader:hover {
+    background-color: #eaeaea;
+}
+QWidget#collapsibleContent {
+    background-color: transparent;
+    border: none;
+}
+QLabel#collapsibleTitle {
+    color: #333333;
+    font-weight: 600;
+    font-size: 13px;
+}
+QToolButton#collapsibleToggle {
+    background: transparent;
+    border: none;
+}
+
+/* ── 右侧面板 ── */
+QFrame#rightPanel {
+    background-color: #f8f8f8;
+    border-left: 1px solid #d0d0d0;
+}
+
+/* ── 模板栏 ── */
+QFrame#tplBar {
+    background-color: #f0f0f0;
+    border-radius: 8px;
+    padding: 4px;
+}
+
+/* ── 底部栏 ── */
+QFrame#bottomBar {
+    background-color: #ffffff;
+    border-top: 1px solid #d0d0d0;
+}
+
+/* ── 底部栏分隔线 ── */
+QFrame#barSeparator {
+    background-color: #d0d0d0;
+    width: 1px;
+    margin: 4px 6px;
+}
+
+/* ── 主操作按钮 (开始处理) ── */
+QPushButton#btnStart {
+    background-color: #0078d4;
+    color: #ffffff;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 28px;
+}
+QPushButton#btnStart:hover { background-color: #1a8ae8; }
+QPushButton#btnStart:pressed { background-color: #006cbd; }
+QPushButton#btnStart:disabled { background-color: #cce4f7; color: #6a9ec2; }
+
+/* ── 暂停/停止按钮 ── */
+QPushButton#btnPause, QPushButton#btnStop {
+    background-color: #e8e8e8;
+    color: #333333;
+    border: 1px solid #cccccc;
+    border-radius: 8px;
+    padding: 8px 18px;
+}
 QPushButton#btnPause:hover, QPushButton#btnStop:hover {
-    border: 1px solid #c0c0c0;
+    background-color: #d8d8d8;
+    border: 1px solid #aaaaaa;
+}
+QPushButton#btnPause:pressed, QPushButton#btnStop:pressed {
+    background-color: #c0c0c0;
+}
+QPushButton#btnPause:disabled, QPushButton#btnStop:disabled {
+    background-color: #f0f0f0;
+    color: #aaaaaa;
+    border: 1px solid #e0e0e0;
+}
+
+/* ── 纠错/润色按钮 ── */
+QPushButton#btnCorrection, QPushButton#btnCorrectionAll,
+QPushButton#btnPolish, QPushButton#btnPolishAll {
+    border-radius: 8px;
+    padding: 8px 16px;
+}
+
+/* ── 删除区域按钮 ── */
+QPushButton#btnRemoveRegion {
+    color: #c62828;
+}
+
+/* ── 结果标题 ── */
+QLabel#resultTitle {
+    color: #333333;
+    font-weight: 600;
+    font-size: 14px;
+}
+QLabel#countLabel {
+    color: #0078d4;
+    font-size: 12px;
+    font-weight: 500;
+}
+QLabel#hintLabel {
+    color: #808080;
+    font-size: 12px;
+}
+QLabel#regionTitle {
+    color: #333333;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+/* ── 搜索栏 ── */
+QFrame#searchBar {
+    background-color: #f5f5f5;
+    border: none;
+    border-radius: 8px;
+    padding: 6px;
+}
+
+/* ── 选中行栏 ── */
+QFrame#selectionBar {
+    background-color: #f8f8f8;
+    border: none;
+    border-radius: 6px;
+}
+
+/* ── 设置对话框 ── */
+QDialog#settingsDialog {
+    background-color: #f3f3f3;
+}
+
+/* ── 表格增强 ── */
+QTableWidget {
+    border-radius: 8px;
+    font-size: 14px;
+}
+QTableWidget::item {
+    padding: 3px 6px;
+    border-bottom: 1px solid #eeeeee;
+}
+QHeaderView::section {
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 10px;
+    border-bottom: 2px solid #0078d4;
+    border-right: 1px solid #d0d0d0;
+}
+QListWidget::item {
+    padding: 6px 10px;
+    border-radius: 6px;
+    margin: 1px 2px;
+}
+QListWidget::item:hover {
+    background-color: rgba(0, 0, 0, 0.04);
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    border: none;
+    margin: 4px 0;
+}
+QScrollBar::handle:vertical {
+    background: #c0c0c0;
+    min-height: 40px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover { background: #a0a0a0; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0; border: none;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 8px;
+    border: none;
+    margin: 0 4px;
+}
+QScrollBar::handle:horizontal {
+    background: #c0c0c0;
+    min-width: 40px;
+    border-radius: 4px;
+}
+QScrollBar::handle:horizontal:hover { background: #a0a0a0; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0; border: none;
+}
+
+QSplitter::handle {
+    background-color: #d0d0d0;
+}
+QSplitter::handle:hover {
+    background-color: #0078d4;
+}
+
+QStatusBar {
+    background-color: #ffffff;
+    color: #808080;
+    border-top: 1px solid #d0d0d0;
+    padding: 2px 10px;
+    font-size: 12px;
+    min-height: 26px;
+}
+
+QProgressBar#progressAnimated {
+    border: none;
+    border-radius: 4px;
+}
+
+QToolBar {
+    spacing: 6px;
+    padding: 6px 10px;
+}
+QToolBar::separator {
+    width: 1px;
+    background: #d0d0d0;
+    margin: 4px 6px;
+}
+
+/* ── Tab 指示条 ── */
+QTabBar::tab {
+    padding: 8px 16px;
+    background: transparent;
+    color: #808080;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+}
+QTabBar::tab:selected {
+    color: #333333;
+    border-bottom: 2px solid #0078d4;
+}
+QTabBar::tab:hover {
+    color: #505050;
+    background: rgba(0, 0, 0, 0.03);
+}
+
+/* ── 输入控件聚焦态 ── */
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
+QComboBox:focus, QTimeEdit:focus {
+    border: 1px solid #0078d4;
+    border-radius: 4px;
+}
+QTextEdit:focus {
+    border: 1px solid #0078d4;
+    border-radius: 4px;
+}
+
+/* ── 表格行悬浮 ── */
+QTableWidget::item:hover {
+    background-color: rgba(0, 120, 212, 0.06);
+}
+QTableWidget::item:selected {
+    background-color: rgba(0, 120, 212, 0.15);
+}
+
+/* ── 工具提示 ── */
+QToolTip {
+    background-color: #333333;
+    color: #e0e0e0;
+    border: 1px solid #505050;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+}
+
+/* ── 纠错/润色按钮悬浮 ── */
+QPushButton#btnCorrection:hover, QPushButton#btnCorrectionAll:hover {
+    border: 1px solid #0078d4;
+}
+QPushButton#btnPolish:hover, QPushButton#btnPolishAll:hover {
+    border: 1px solid #7c4dff;
 }
 
 """
@@ -641,11 +958,15 @@ QPushButton#btnPause:hover, QPushButton#btnStop:hover {
 
 def is_dark_theme(theme_name: str) -> bool:
     """判断主题名是否为深色主题。"""
+    if theme_name == "default":
+        return False
     return theme_name.startswith("dark")
 
 
 def get_custom_css(theme_name: str) -> str:
     """根据主题名返回对应的自定义 CSS。"""
+    if theme_name == "default":
+        return _CUSTOM_CSS_DEFAULT
     if is_dark_theme(theme_name):
         return _CUSTOM_CSS_DARK
     return _CUSTOM_CSS_LIGHT
@@ -653,7 +974,7 @@ def get_custom_css(theme_name: str) -> str:
 
 def _migrate_theme_name(theme_name: str) -> str:
     """兼容旧版 "dark" / "light" 主题名，映射到 qt-material 主题。"""
-    if theme_name in THEME_MAP:
+    if theme_name in THEME_MAP or theme_name == "default":
         return theme_name
     if theme_name == "dark":
         return DEFAULT_DARK
@@ -669,11 +990,21 @@ def apply_theme(app: QApplication, theme_name: str = "dark_teal",
 
     Args:
         app: QApplication 实例
-        theme_name: 主题名（如 "dark_teal", "light_blue"）
+        theme_name: 主题名（如 "dark_teal", "light_blue", "default"）
         font_family: 字体族
         density_scale: 密度缩放 ("-2" 最紧凑, "0" 默认, "2" 最宽松)
     """
     theme_name = _migrate_theme_name(theme_name)
+
+    # 设置 Fusion 风格
+    app.setStyle("Fusion")
+
+    # 经典主题：仅使用 Fusion + 自定义 CSS，不加载 qt-material
+    if theme_name == "default":
+        custom_css = get_custom_css(theme_name)
+        app.setStyleSheet(custom_css)
+        return
+
     xml_name = THEME_MAP.get(theme_name, "dark_teal.xml")
 
     extra = {
@@ -681,14 +1012,16 @@ def apply_theme(app: QApplication, theme_name: str = "dark_teal",
         'density_scale': density_scale,
     }
 
-    # 设置 Fusion 风格（qt-material 的基础要求）
-    app.setStyle("Fusion")
-
     # 使用 build_stylesheet 构建基础样式，避免 qt-material 内部 open(css_file) 的 GBK 编码问题
     from qt_material import build_stylesheet
     stylesheet = build_stylesheet(xml_name, invert_secondary=False, extra=extra, parent="theme")
     if stylesheet is None:
         return
+
+    # qt_material 只对 PySide6/PyQt6 注册 icon: 搜索路径；
+    # PyQt5 下 GUI=False，需要手动注册，否则 Qt 无法解析样式表中的 icon:/ 引用
+    from PyQt5.QtCore import QDir
+    QDir.addSearchPath("icon", str(Path.home() / ".qt_material" / "theme"))
 
     # 手动追加自定义 CSS
     custom_css = get_custom_css(theme_name)

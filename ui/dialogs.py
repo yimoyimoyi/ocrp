@@ -37,7 +37,7 @@ class EngineConfigDialog(QDialog):
         super().__init__(parent)
         self._engine_name = engine_name
         self._engine_mgr = engine_manager
-        self.setWindowTitle(f"引擎配置 - {engine_name}")
+        self.setWindowTitle(_("引擎配置 - {}").format(engine_name))
         self.setMinimumWidth(440)
         self._result = dict(config)
 
@@ -46,7 +46,7 @@ class EngineConfigDialog(QDialog):
         form.setSpacing(6)
 
         self._api_key_edit = QLineEdit()
-        self._api_key_edit.setPlaceholderText("sk-xxx")
+        self._api_key_edit.setPlaceholderText(_("sk-xxx"))
         self._api_key_edit.setEchoMode(QLineEdit.Password)
         self._api_key_edit.setText(config.get("api_key", ""))
         form.addRow(_("API Key:"), self._api_key_edit)
@@ -76,7 +76,7 @@ class EngineConfigDialog(QDialog):
 
         # PaddleOCR 模型版本选择（仅本地引擎显示）
         self._paddle_version_combo = QComboBox()
-        self._paddle_version_combo.addItems(["PP-OCRv5_server (高精度/慢)", "PP-OCRv5_mobile (平衡)", "PP-OCRv4 (快速)"])
+        self._paddle_version_combo.addItems([_("PP-OCRv5_server (高精度/慢)"), _("PP-OCRv5_mobile (平衡)"), _("PP-OCRv4 (快速)")])
         self._paddle_version_combo.setVisible(is_local and engine_name == "paddleocr")
         ver = config.get("ocr_version") or ""
         if "v4" in ver:
@@ -98,7 +98,7 @@ class EngineConfigDialog(QDialog):
         # 保存预设按钮
         save_preset_row = QHBoxLayout()
         btn_save_preset = QPushButton(_("💾 保存为 API 预设"))
-        btn_save_preset.setToolTip("将当前 API Key / Base URL / 模型/超时保存为预设，供纠错等功能快速使用")
+        btn_save_preset.setToolTip(_("将当前 API Key / Base URL / 模型/超时保存为预设，供纠错等功能快速使用"))
         btn_save_preset.clicked.connect(self._on_save_preset)
         save_preset_row.addWidget(btn_save_preset)
         save_preset_row.addStretch()
@@ -136,14 +136,14 @@ class EngineConfigDialog(QDialog):
         }
         name = f"{self._engine_name} 预设"
         mgr.add_preset(name, cfg)
-        self._status_label.setText(f"✅ 已保存预设: {name}")
+        self._status_label.setText(_("✅ 已保存预设: {}").format(name))
 
     def _on_check(self):
-        self._status_label.setText("⏳ 检测中...")
+        self._status_label.setText(_("⏳ 检测中..."))
         self._run_http_action("check")
 
     def _on_get_models(self):
-        self._status_label.setText("⏳ 获取模型列表...")
+        self._status_label.setText(_("⏳ 获取模型列表..."))
         self._run_http_action("models")
 
     def _run_http_action(self, action: str):
@@ -152,10 +152,10 @@ class EngineConfigDialog(QDialog):
             eng = self._engine_mgr.get_engine(self._engine_name) if self._engine_mgr else None
         except Exception as e:
             logger.warning("获取引擎失败: %s", e)
-            self._status_label.setText("⚠ 引擎未初始化")
+            self._status_label.setText(_("⚠ 引擎未初始化"))
             return
         if not eng:
-            self._status_label.setText("⚠ 引擎未初始化")
+            self._status_label.setText(_("⚠ 引擎未初始化"))
             return
 
         from ui.workers import HttpCheckWorker
@@ -166,14 +166,14 @@ class EngineConfigDialog(QDialog):
 
     def _on_http_result(self, result: dict):
         if result["type"] == "check":
-            self._status_label.setText("✅ 可用" if result["data"] else "❌ 不可用")
+            self._status_label.setText(_("✅ 可用") if result["data"] else _("❌ 不可用"))
         elif result["type"] == "models":
             models = result["data"]
             if models:
                 self.set_models(models)
-                self._status_label.setText(f"✅ {len(models)} 个模型")
+                self._status_label.setText(_("✅ {n} 个").format(n=len(models)))
             else:
-                self._status_label.setText("⚠ 未获取到模型")
+                self._status_label.setText(_("⚠ 未获取到模型"))
 
     def _on_accept(self):
         ver_map = {0: None, 1: "PP-OCRv5_mobile", 2: "PP-OCRv4"}
@@ -250,7 +250,7 @@ class PresetManageDialog(QDialog):
         self._model_status = QLabel("")
         self._model_status.setMinimumWidth(100)
         btn_models = QPushButton(_("📋 获取模型"))
-        btn_models.setToolTip("从 Base URL 获取可用模型列表")
+        btn_models.setToolTip(_("从 Base URL 获取可用模型列表"))
         btn_models.clicked.connect(self._on_get_models)
         model_row.addWidget(self._model_status)
         model_row.addWidget(btn_models)

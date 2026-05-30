@@ -1,77 +1,222 @@
-# ORCP Translation Template
 msgid ""
 msgstr ""
-"Language: zh_CN
-"
-"Project-Id-Version: ORCP 0.2.0
-"
-"MIME-Version: 1.0
-"
-"Content-Type: text/plain; charset=UTF-8
-"
-
-msgid "  |  引擎: paddleocr"
-msgstr "  |  引擎: paddleocr"
-
-msgid "(0 条)"
-msgstr "(0 条)"
-
-msgid "(空)"
-msgstr "(空)"
-
-msgid "+ 新建"
-msgstr "+ 新建"
-
-msgid "+ 添加"
-msgstr "+ 添加"
-
-msgid "- 删除"
-msgstr "- 删除"
-
-msgid "- 删除此区域"
-msgstr "- 删除此区域"
-
-msgid "AI 纠错"
-msgstr "AI 纠错"
-
-msgid "API Key:"
-msgstr "API Key:"
-
-msgid "API Key（可选）"
-msgstr "API Key（可选）"
-
-msgid "API 连接"
-msgstr "API 连接"
-
-msgid "API 预设管理"
-msgstr "API 预设管理"
-
-msgid "ASR 语音识别引擎"
-msgstr "ASR 语音识别引擎"
-
-msgid "Base URL:"
-msgstr "Base URL:"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
 
 msgid "ORCP - OCR 处理工具"
 msgstr "ORCP - OCR 处理工具"
 
-msgid "gpt-4o"
-msgstr "gpt-4o"
+msgid "  |  引擎: paddleocr"
+msgstr "  |  引擎: paddleocr"
 
-msgid "gpt-4o / gemma 等"
-msgstr "gpt-4o / gemma 等"
+msgid "就绪"
+msgstr "就绪"
 
-msgid "http://127.0.0.1:8080"
-msgstr "http://127.0.0.1:8080"
+msgid "🔤 AI纠错"
+msgstr "🔤 AI纠错"
 
-msgid "https://api.openai.com/v1"
-msgstr "https://api.openai.com/v1"
+msgid "启用/关闭 AI 纠错"
+msgstr "启用/关闭 AI 纠错"
 
-msgid "sk-xxx（可选）"
-msgstr "sk-xxx（可选）"
+msgid "⚡ GPU"
+msgstr "⚡ GPU"
 
-msgid "⏳ 获取中..."
-msgstr "⏳ 获取中..."
+msgid "启用/关闭 GPU 硬件加速"
+msgstr "启用/关闭 GPU 硬件加速"
+
+msgid "🔍 去重"
+msgstr "🔍 去重"
+
+msgid "启用/关闭后处理相似度去重"
+msgstr "启用/关闭后处理相似度去重"
+
+msgid "🌐 翻译"
+msgstr "🌐 翻译"
+
+msgid "翻译模式：将 OCR 结果翻译为中文"
+msgstr "翻译模式：将 OCR 结果翻译为中文"
+
+msgid "🛡 哨兵"
+msgstr "🛡 哨兵"
+
+msgid "启用/关闭哨兵去重（字数骤降检测触发输出）"
+msgstr "启用/关闭哨兵去重（字数骤降检测触发输出）"
+
+msgid "🗑 清缓存"
+msgstr "🗑 清缓存"
+
+msgid "清除所有缓存（LLM 响应缓存 + ASR 结果缓存）"
+msgstr "清除所有缓存（LLM 响应缓存 + ASR 结果缓存）"
+
+msgid "✅ 参数设置已更新"
+msgstr "✅ 参数设置已更新"
+
+msgid "✅ 显示设置已更新"
+msgstr "✅ 显示设置已更新"
+
+msgid "✅ GPU 加速已启用"
+msgstr "✅ GPU 加速已启用"
+
+msgid "🔲 GPU 加速已关闭"
+msgstr "🔲 GPU 加速已关闭"
+
+msgid "✅ 已添加过滤器: {}"
+msgstr "✅ 已添加过滤器: {}"
+
+msgid "🗑 已移除过滤器: {}"
+msgstr "🗑 已移除过滤器: {}"
+
+msgid "⚠ 移除失败: 关键词 '{}' 不存在"
+msgstr "⚠ 移除失败: 关键词 '{}' 不存在"
+
+msgid "✅ 模板 [{}] 已保存"
+msgstr "✅ 模板 [{}] 已保存"
+
+msgid "🗑 模板 [{}] 已删除"
+msgstr "🗑 模板 [{}] 已删除"
+
+msgid "✅ API 预设已更新"
+msgstr "✅ API 预设已更新"
+
+msgid "已加载: {}"
+msgstr "已加载: {}"
+
+msgid "已加载音频: {}（仅支持 ASR 和纠错）"
+msgstr "已加载音频: {}（仅支持 ASR 和纠错）"
+
+msgid "测试帧已截取，在预览图上拖拽绘制矩形区域"
+msgstr "测试帧已截取，在预览图上拖拽绘制矩形区域"
+
+msgid "在视频预览上拖拽鼠标绘制矩形区域"
+msgstr "在视频预览上拖拽鼠标绘制矩形区域"
+
+msgid "已跳转到 {}"
+msgstr "已跳转到 {}"
+
+msgid "已清空队列和预览"
+msgstr "已清空队列和预览"
+
+msgid "✅ 已导出: {}"
+msgstr "✅ 已导出: {}"
+
+msgid "✅ 完成: {} ({} 条)"
+msgstr "✅ 完成: {} ({} 条)"
+
+msgid "✅ 批量处理完成: {} 个文件 → output/"
+msgstr "✅ 批量处理完成: {} 个文件 → output/"
+
+msgid "批量处理 [{}/{}]: {}"
+msgstr "批量处理 [{}/{}]: {}"
+
+msgid "✅ 已导入 {} 个模板"
+msgstr "✅ 已导入 {} 个模板"
+
+msgid "✅ 已导出模板到: {}"
+msgstr "✅ 已导出模板到: {}"
+
+msgid "处理中... {}s / {}s | 哨兵: {}"
+msgstr "处理中... {}s / {}s | 哨兵: {}"
+
+msgid "❌ 处理失败: {}"
+msgstr "❌ 处理失败: {}"
+
+msgid "✅ 完成: {} 条结果 | 批量纠错完成"
+msgstr "✅ 完成: {} 条结果 | 批量纠错完成"
+
+msgid "⚠ 批量纠错出错: {}"
+msgstr "⚠ 批量纠错出错: {}"
+
+msgid "⏳ 正在提取全文环境..."
+msgstr "⏳ 正在提取全文环境..."
+
+msgid "✅ 全文环境已提取并回填"
+msgstr "✅ 全文环境已提取并回填"
+
+msgid "⚠ 环境提取失败，请检查 API 配置"
+msgstr "⚠ 环境提取失败，请检查 API 配置"
+
+msgid "⚠ 无有效文本可提取环境"
+msgstr "⚠ 无有效文本可提取环境"
+
+msgid "⚠ 环境提取失败: {}"
+msgstr "⚠ 环境提取失败: {}"
+
+msgid "参数设置(&P)"
+msgstr "参数设置(&P)"
+
+msgid "显示(&V)"
+msgstr "显示(&V)"
+
+msgid "纠错(&C)"
+msgstr "纠错(&C)"
+
+msgid "模板(&T)"
+msgstr "模板(&T)"
+
+msgid "批量(&B)"
+msgstr "批量(&B)"
+
+msgid "语言(&L)"
+msgstr "语言(&L)"
+
+msgid "⚙ 全部参数..."
+msgstr "⚙ 全部参数..."
+
+msgid "基础设置..."
+msgstr "基础设置..."
+
+msgid "语音识别..."
+msgstr "语音识别..."
+
+msgid "OCR 字幕处理..."
+msgstr "OCR 字幕处理..."
+
+msgid "AI 纠错..."
+msgstr "AI 纠错..."
+
+msgid "结果输出..."
+msgstr "结果输出..."
+
+msgid "切换主题 (亮色/暗色)"
+msgstr "切换主题 (亮色/暗色)"
+
+msgid "显示设置..."
+msgstr "显示设置..."
+
+msgid "API 预设管理..."
+msgstr "API 预设管理..."
+
+msgid "📝 编辑模板..."
+msgstr "📝 编辑模板..."
+
+msgid "📥 导入模板..."
+msgstr "📥 导入模板..."
+
+msgid "📤 导出模板..."
+msgstr "📤 导出模板..."
+
+msgid "🗑 清空队列"
+msgstr "🗑 清空队列"
+
+msgid "📸 截取帧"
+msgstr "📸 截取帧"
+
+msgid "截取当前视频帧用于预览和区域绘制"
+msgstr "截取当前视频帧用于预览和区域绘制"
+
+msgid "📂 打开文件"
+msgstr "📂 打开文件"
+
+msgid "打开视频、音频或图片文件"
+msgstr "打开视频、音频或图片文件"
+
+msgid "🗑 清空"
+msgstr "🗑 清空"
+
+msgid "▶ 开始处理"
+msgstr "▶ 开始处理"
 
 msgid "⏸ 暂停"
 msgstr "⏸ 暂停"
@@ -79,23 +224,158 @@ msgstr "⏸ 暂停"
 msgid "⏹ 停止"
 msgstr "⏹ 停止"
 
-msgid "── 关键词过滤 ──"
-msgstr "── 关键词过滤 ──"
+msgid "✏ 纠错选中"
+msgstr "✏ 纠错选中"
 
-msgid "── 常规参数（基本去重） ──"
-msgstr "── 常规参数（基本去重） ──"
+msgid "✏ 纠错全部"
+msgstr "✏ 纠错全部"
 
-msgid "── 流式参数（哨兵去重） ──"
-msgstr "── 流式参数（哨兵去重） ──"
+msgid "✨ 润色选中"
+msgstr "✨ 润色选中"
 
-msgid "── 流程失败重试 ──"
-msgstr "── 流程失败重试 ──"
+msgid "✨ 润色全部"
+msgstr "✨ 润色全部"
 
-msgid "▶ 开始处理"
-msgstr "▶ 开始处理"
+msgid "▶ 继续"
+msgstr "▶ 继续"
+
+msgid "📐 区域参数"
+msgstr "📐 区域参数"
+
+msgid "📝 字幕设置"
+msgstr "📝 字幕设置"
+
+msgid "🎤 ASR 选项"
+msgstr "🎤 ASR 选项"
+
+msgid "🔧 后处理"
+msgstr "🔧 后处理"
+
+msgid "模式:"
+msgstr "模式:"
+
+msgid "帧间隔:"
+msgstr "帧间隔:"
+
+msgid "模型:"
+msgstr "模型:"
+
+msgid "语言:"
+msgstr "语言:"
+
+msgid "区域名:"
+msgstr "区域名:"
+
+msgid "ASR 模型选择"
+msgstr "ASR 模型选择"
+
+msgid "识别语言"
+msgstr "识别语言"
+
+msgid "ASR 结果在表格中的区域名"
+msgstr "ASR 结果在表格中的区域名"
+
+msgid "语音"
+msgstr "语音"
+
+msgid "相似度阈值:"
+msgstr "相似度阈值:"
+
+msgid "最小文字长度:"
+msgstr "最小文字长度:"
+
+msgid "置信度阈值:"
+msgstr "置信度阈值:"
+
+msgid "相似度高于此阈值的结果将被去重合并"
+msgstr "相似度高于此阈值的结果将被去重合并"
+
+msgid "小于此长度的结果将被过滤"
+msgstr "小于此长度的结果将被过滤"
+
+msgid "仅 PaddleOCR：置信度低于此阈值的结果将被过滤"
+msgstr "仅 PaddleOCR：置信度低于此阈值的结果将被过滤"
 
 msgid "⚙ 参数设置"
 msgstr "⚙ 参数设置"
+
+msgid "处理模式"
+msgstr "处理模式"
+
+msgid "OCR 引擎"
+msgstr "OCR 引擎"
+
+msgid "输出控制"
+msgstr "输出控制"
+
+msgid "字幕模式"
+msgstr "字幕模式"
+
+msgid "ASR 语音识别引擎"
+msgstr "ASR 语音识别引擎"
+
+msgid "后处理参数"
+msgstr "后处理参数"
+
+msgid "关键词过滤"
+msgstr "关键词过滤"
+
+msgid "纠错模式"
+msgstr "纠错模式"
+
+msgid "批量参数"
+msgstr "批量参数"
+
+msgid "API 连接"
+msgstr "API 连接"
+
+msgid "排序规则"
+msgstr "排序规则"
+
+msgid "引擎:"
+msgstr "引擎:"
+
+msgid "API Key:"
+msgstr "API Key:"
+
+msgid "Base URL:"
+msgstr "Base URL:"
+
+msgid "超时:"
+msgstr "超时:"
+
+msgid "模型版本:"
+msgstr "模型版本:"
+
+msgid "启用 GPU 加速"
+msgstr "启用 GPU 加速"
+
+msgid "启用角度检测"
+msgstr "启用角度检测"
+
+msgid "📋 获取模型"
+msgstr "📋 获取模型"
+
+msgid "💾 保存为 API 预设"
+msgstr "💾 保存为 API 预设"
+
+msgid "⚠ 请输入 URL"
+msgstr "⚠ 请输入 URL"
+
+msgid "⏳ 获取中..."
+msgstr "⏳ 获取中..."
+
+msgid "⚠ 未获取到"
+msgstr "⚠ 未获取到"
+
+msgid "🔄 刷新模型列表"
+msgstr "🔄 刷新模型列表"
+
+msgid "🔄 检测可用性"
+msgstr "🔄 检测可用性"
+
+msgid "✅ {n} 个"
+msgstr "✅ {n} 个"
 
 msgid "⚠ 未获取到模型"
 msgstr "⚠ 未获取到模型"
@@ -103,23 +383,44 @@ msgstr "⚠ 未获取到模型"
 msgid "⚠ 请先输入 Base URL"
 msgstr "⚠ 请先输入 Base URL"
 
-msgid "⚡ GPU"
-msgstr "⚡ GPU"
-
-msgid "✅ {n} 个"
-msgstr "✅ {n} 个"
-
-msgid "✏ 纠正全部"
-msgstr "✏ 纠正全部"
-
-msgid "✏ 纠错选中"
-msgstr "✏ 纠错选中"
-
-msgid "✕"
-msgstr "✕"
-
 msgid "➕ 添加"
 msgstr "➕ 添加"
+
+msgid "🗑 删除选中"
+msgstr "🗑 删除选中"
+
+msgid "清空全部"
+msgstr "清空全部"
+
+msgid "输入要过滤的关键词，回车添加..."
+msgstr "输入要过滤的关键词，回车添加..."
+
+msgid "📋 识别结果"
+msgstr "📋 识别结果"
+
+msgid "(0 条)"
+msgstr "(0 条)"
+
+msgid "📋 队列:"
+msgstr "📋 队列:"
+
+msgid "(空)"
+msgstr "(空)"
+
+msgid "全选"
+msgstr "全选"
+
+msgid "未选中任何行"
+msgstr "未选中任何行"
+
+msgid "打开/关闭搜索替换"
+msgstr "打开/关闭搜索替换"
+
+msgid "搜索..."
+msgstr "搜索..."
+
+msgid "替换为..."
+msgstr "替换为..."
 
 msgid "上一个匹配"
 msgstr "上一个匹配"
@@ -127,65 +428,569 @@ msgstr "上一个匹配"
 msgid "下一个匹配"
 msgstr "下一个匹配"
 
-msgid "保留最长文本"
-msgstr "保留最长文本"
+msgid "将此条内容加入过滤器"
+msgstr "将此条内容加入过滤器"
 
-msgid "停止播放"
-msgstr "停止播放"
+msgid "暂无识别结果可导出。"
+msgstr "暂无识别结果可导出。"
 
-msgid "关键词过滤"
-msgstr "关键词过滤"
+msgid "提示"
+msgstr "提示"
 
-msgid "删除所有包含过滤器关键词的结果行"
-msgstr "删除所有包含过滤器关键词的结果行"
+msgid "导出为 TXT"
+msgstr "导出为 TXT"
 
-msgid "前进 5 秒 (→)"
-msgstr "前进 5 秒 (→)"
+msgid "导出为 JSON"
+msgstr "导出为 JSON"
 
-msgid "区域"
-msgstr "区域"
+msgid "导出为 CSV"
+msgstr "导出为 CSV"
 
-msgid "区域名称"
-msgstr "区域名称"
+msgid "导出为 SRT 字幕"
+msgstr "导出为 SRT 字幕"
+
+msgid "API 预设管理"
+msgstr "API 预设管理"
+
+msgid "+ 新建"
+msgstr "+ 新建"
+
+msgid "- 删除"
+msgstr "- 删除"
 
 msgid "名称:"
 msgstr "名称:"
 
-msgid "后处理"
-msgstr "后处理"
+msgid "💾 保存"
+msgstr "💾 保存"
 
-msgid "后处理参数"
-msgstr "后处理参数"
+msgid "预设名称"
+msgstr "预设名称"
 
-msgid "后处理相似度去重"
-msgstr "后处理相似度去重"
+msgid "API Key（可选）"
+msgstr "API Key（可选）"
 
-msgid "后退 5 秒 (←)"
-msgstr "后退 5 秒 (←)"
+msgid "http://127.0.0.1:8080"
+msgstr "http://127.0.0.1:8080"
+
+msgid "模型名（可选）"
+msgstr "模型名（可选）"
+
+msgid "确认删除"
+msgstr "确认删除"
+
+msgid "请输入预设名称。"
+msgstr "请输入预设名称。"
+
+msgid "https://api.openai.com/v1"
+msgstr "https://api.openai.com/v1"
+
+msgid "gpt-4o"
+msgstr "gpt-4o"
+
+msgid "gpt-4o / gemma 等"
+msgstr "gpt-4o / gemma 等"
+
+msgid "sk-xxx（可选）"
+msgstr "sk-xxx（可选）"
+
+msgid "引擎配置 - {}"
+msgstr "引擎配置 - {}"
+
+msgid "📐 区域"
+msgstr "📐 区域"
+
+msgid "+ 添加"
+msgstr "+ 添加"
+
+msgid "清空"
+msgstr "清空"
+
+msgid "在预览图上拖拽绘制矩形区域"
+msgstr "在预览图上拖拽绘制矩形区域"
+
+msgid "模板:"
+msgstr "模板:"
 
 msgid "启用"
 msgstr "启用"
 
+msgid "区域名称"
+msgstr "区域名称"
+
+msgid "X:"
+msgstr "X:"
+
+msgid "Y:"
+msgstr "Y:"
+
+msgid "W:"
+msgstr "W:"
+
+msgid "H:"
+msgstr "H:"
+
+msgid "膨胀:"
+msgstr "膨胀:"
+
+msgid "ROI 区域向外膨胀的比例"
+msgstr "ROI 区域向外膨胀的比例"
+
+msgid "裁剪 L:"
+msgstr "裁剪 L:"
+
+msgid "R:"
+msgstr "R:"
+
+msgid "T:"
+msgstr "T:"
+
+msgid "B:"
+msgstr "B:"
+
+msgid "OCR 提示词:"
+msgstr "OCR 提示词:"
+
+msgid "自定义 OCR 提示词（覆盖模板）"
+msgstr "自定义 OCR 提示词（覆盖模板）"
+
+msgid "纠错提示词:"
+msgstr "纠错提示词:"
+
+msgid "此区域专用的纠错提示词（留空用全局）"
+msgstr "此区域专用的纠错提示词（留空用全局）"
+
+msgid "- 删除此区域"
+msgstr "- 删除此区域"
+
+msgid "📝 提示词模板编辑器"
+msgstr "📝 提示词模板编辑器"
+
+msgid "提示词内容（点击下方按钮插入占位符）:"
+msgstr "提示词内容（点击下方按钮插入占位符）:"
+
+msgid "插入:"
+msgstr "插入:"
+
+msgid "默认结构"
+msgstr "默认结构"
+
+msgid "关闭"
+msgstr "关闭"
+
+msgid "新建模板"
+msgstr "新建模板"
+
+msgid "模板名称:"
+msgstr "模板名称:"
+
+msgid "重命名模板"
+msgstr "重命名模板"
+
+msgid "新名称:"
+msgstr "新名称:"
+
+msgid "重命名失败"
+msgstr "重命名失败"
+
+msgid "显示设置"
+msgstr "显示设置"
+
+msgid "主题配色"
+msgstr "主题配色"
+
+msgid "字体大小:"
+msgstr "字体大小:"
+
+msgid "UI 缩放:"
+msgstr "UI 缩放:"
+
+msgid "整体 UI 缩放比例（影响密度和字体）"
+msgstr "整体 UI 缩放比例（影响密度和字体）"
+
+msgid "点击主题卡片即时预览，关闭窗口自动保存。"
+msgstr "点击主题卡片即时预览，关闭窗口自动保存。"
+
+msgid "停止播放"
+msgstr "停止播放"
+
+msgid "播放/暂停 (Space)"
+msgstr "播放/暂停 (Space)"
+
+msgid "前进 5 秒 (→)"
+msgstr "前进 5 秒 (→)"
+
+msgid "后退 5 秒 (←)"
+msgstr "后退 5 秒 (←)"
+
+msgid "播放速度：点击切换"
+msgstr "播放速度：点击切换"
+
+msgid "开始:"
+msgstr "开始:"
+
+msgid "结束:"
+msgstr "结束:"
+
+msgid "处理中..."
+msgstr "处理中..."
+
+msgid "语音识别中..."
+msgstr "语音识别中..."
+
+msgid "OCR 处理中..."
+msgstr "OCR 处理中..."
+
+msgid "✅ 已清除 {count} 个缓存文件"
+msgstr "✅ 已清除 {count} 个缓存文件"
+
+msgid "⚠ ASR 引擎未加载"
+msgstr "⚠ ASR 引擎未加载"
+
+msgid "✅ ASR 缓存命中: {n} 段"
+msgstr "✅ ASR 缓存命中: {n} 段"
+
+msgid "✅ 语音识别完成: {n} 段，开始 OCR..."
+msgstr "✅ 语音识别完成: {n} 段，开始 OCR..."
+
+msgid "⚠ 语音识别失败: {err}，继续 OCR..."
+msgstr "⚠ 语音识别失败: {err}，继续 OCR..."
+
+msgid "✅ 处理完成: {n} 条结果"
+msgstr "✅ 处理完成: {n} 条结果"
+
+msgid "已停止"
+msgstr "已停止"
+
+msgid "已暂停"
+msgstr "已暂停"
+
+msgid "继续处理"
+msgstr "继续处理"
+
+msgid "⏳ AI 纠错: 提取全文环境中..."
+msgstr "⏳ AI 纠错: 提取全文环境中..."
+
+msgid "已提交 {n} 条批量纠错 [{m} 批]"
+msgstr "已提交 {n} 条批量纠错 [{m} 批]"
+
+msgid "⏳ 检测中..."
+msgstr "⏳ 检测中..."
+
+msgid "⏳ 获取模型列表..."
+msgstr "⏳ 获取模型列表..."
+
+msgid "⚠ 引擎未初始化"
+msgstr "⚠ 引擎未初始化"
+
+msgid "✅ 可用"
+msgstr "✅ 可用"
+
+msgid "❌ 不可用"
+msgstr "❌ 不可用"
+
+msgid "✅ 已保存预设: {}"
+msgstr "✅ 已保存预设: {}"
+
+msgid "字幕"
+msgstr "字幕"
+
+msgid "模式"
+msgstr "模式"
+
+msgid "流式"
+msgstr "流式"
+
+msgid "常规"
+msgstr "常规"
+
+msgid "OCR+ASR"
+msgstr "OCR+ASR"
+
+msgid "仅OCR"
+msgstr "仅OCR"
+
+msgid "仅ASR"
+msgstr "仅ASR"
+
+msgid "流式字幕（去重）"
+msgstr "流式字幕（去重）"
+
+msgid "常规字幕（固定间隔）"
+msgstr "常规字幕（固定间隔）"
+
+msgid "OCR + ASR（完整流程）"
+msgstr "OCR + ASR（完整流程）"
+
+msgid "仅 OCR"
+msgstr "仅 OCR"
+
+msgid "仅语音识别 (ASR)"
+msgstr "仅语音识别 (ASR)"
+
+msgid "仅纠正结果"
+msgstr "仅纠正结果"
+
+msgid "仅原文"
+msgstr "仅原文"
+
+msgid "双语对照（原文+纠正）"
+msgstr "双语对照（原文+纠正）"
+
+msgid "原文 换行 纠正"
+msgstr "原文 换行 纠正"
+
+msgid "清除缓存"
+msgstr "清除缓存"
+
+msgid "确定清除所有缓存？\n（LLM 响应缓存 + ASR 结果缓存）"
+msgstr "确定清除所有缓存？\n（LLM 响应缓存 + ASR 结果缓存）"
+
+msgid "请先在表格中选中需要纠错的行（可多选）。"
+msgstr "请先在表格中选中需要纠错的行（可多选）。"
+
+msgid "请先在表格中选中需要润色的行（可多选）。"
+msgstr "请先在表格中选中需要润色的行（可多选）。"
+
+msgid "过滤后无有效结果可导出。"
+msgstr "过滤后无有效结果可导出。"
+
+msgid "请先在「后处理」标签页中添加需要过滤的关键词。"
+msgstr "请先在「后处理」标签页中添加需要过滤的关键词。"
+
+msgid "暂无识别结果可提取环境。"
+msgstr "暂无识别结果可提取环境。"
+
+msgid "SRT 导出:"
+msgstr "SRT 导出:"
+
+msgid "字幕时长:"
+msgstr "字幕时长:"
+
+msgid "流式参数（哨兵去重）"
+msgstr "流式参数（哨兵去重）"
+
+msgid "常规参数（固定间隔）"
+msgstr "常规参数（固定间隔）"
+
+msgid "解码参数"
+msgstr "解码参数"
+
+msgid "VAD (语音活动检测)"
+msgstr "VAD (语音活动检测)"
+
+msgid "拖动调整顺序，编辑前缀/后缀，点 ✕ 删除行"
+msgstr "拖动调整顺序，编辑前缀/后缀，点 ✕ 删除行"
+
+msgid "前缀"
+msgstr "前缀"
+
+msgid "后缀"
+msgstr "后缀"
+
+msgid "提示词配置"
+msgstr "提示词配置"
+
+msgid "字数骤降比:"
+msgstr "字数骤降比:"
+
+msgid "连续缓冲区:"
+msgstr "连续缓冲区:"
+
+msgid "输出间隔:"
+msgstr "输出间隔:"
+
+msgid "去重相似度阈值:"
+msgstr "去重相似度阈值:"
+
+msgid "无语音阈值:"
+msgstr "无语音阈值:"
+
+msgid "压缩比阈值:"
+msgstr "压缩比阈值:"
+
+msgid "温度:"
+msgstr "温度:"
+
+msgid "热词:"
+msgstr "热词:"
+
+msgid "初始提示:"
+msgstr "初始提示:"
+
+msgid "最小静音:"
+msgstr "最小静音:"
+
+msgid "VAD 阈值:"
+msgstr "VAD 阈值:"
+
+msgid "模型目录:"
+msgstr "模型目录:"
+
+msgid "可用模型:"
+msgstr "可用模型:"
+
+msgid "系统提示词:"
+msgstr "系统提示词:"
+
+msgid "用户提示词:"
+msgstr "用户提示词:"
+
+msgid "输出格式:"
+msgstr "输出格式:"
+
+msgid "API 预设:"
+msgstr "API 预设:"
+
+msgid "批量条数:"
+msgstr "批量条数:"
+
+msgid "上下文窗口:"
+msgstr "上下文窗口:"
+
+msgid "失败重试:"
+msgstr "失败重试:"
+
+msgid "并发数:"
+msgstr "并发数:"
+
+msgid "RPM 限制:"
+msgstr "RPM 限制:"
+
+msgid "上下文时间间隔:"
+msgstr "上下文时间间隔:"
+
+msgid "重试次数:"
+msgstr "重试次数:"
+
+msgid "处理模式:"
+msgstr "处理模式:"
+
+msgid "帧间隔:"
+msgstr "帧间隔:"
+
+msgid "Beam Size:"
+msgstr "Beam Size:"
+
+msgid "选择开始处理时运行的流程模式"
+msgstr "选择开始处理时运行的流程模式"
+
+msgid "每隔多少秒处理一帧"
+msgstr "每隔多少秒处理一帧"
+
+msgid "流式：哨兵去重实时输出\n常规：固定间隔采样"
+msgstr "流式：哨兵去重实时输出\n常规：固定间隔采样"
+
+msgid "文本长度骤降到上一帧的此比例时强制触发输出"
+msgstr "文本长度骤降到上一帧的此比例时强制触发输出"
+
+msgid "连续相同文本的缓冲区大小，超过后强制输出"
+msgstr "连续相同文本的缓冲区大小，超过后强制输出"
+
+msgid "每隔多少秒输出一次当前帧的全部识别结果"
+msgstr "每隔多少秒输出一次当前帧的全部识别结果"
+
+msgid "SRT 导出时的字幕内容模式"
+msgstr "SRT 导出时的字幕内容模式"
+
+msgid "总开关：开启后将使用 LLM 对 OCR 结果进行纠错"
+msgstr "总开关：开启后将使用 LLM 对 OCR 结果进行纠错"
+
+msgid "开启后 LLM 将把 OCR 结果翻译为中文，纠错提示词仅作参考"
+msgstr "开启后 LLM 将把 OCR 结果翻译为中文，纠错提示词仅作参考"
+
+msgid "开启后 LLM 将对纠错/翻译结果进行二次润色，使表达更自然流畅"
+msgstr "开启后 LLM 将对纠错/翻译结果进行二次润色，使表达更自然流畅"
+
+msgid "自动提取的全文环境信息（领域/氛围/摘要），可手动修改，不随设置保存"
+msgstr "自动提取的全文环境信息（领域/氛围/摘要），可手动修改，不随设置保存"
+
+msgid "选择纠错使用的 API 连接预设"
+msgstr "选择纠错使用的 API 连接预设"
+
+msgid "同时运行的批次数（滑动窗口并发）"
+msgstr "同时运行的批次数（滑动窗口并发）"
+
+msgid "每分钟最大请求数，0 表示不限制"
+msgstr "每分钟最大请求数，0 表示不限制"
+
+msgid "上下文窗口中，跳过时间间隔超过此值的行"
+msgstr "上下文窗口中，跳过时间间隔超过此值的行"
+
+msgid "将当前 API 配置保存为预设，供纠错等功能使用"
+msgstr "将当前 API 配置保存为预设，供纠错等功能使用"
+
+msgid "将当前 API Key / Base URL / 模型/超时保存为预设，供纠错等功能快速使用"
+msgstr "将当前 API Key / Base URL / 模型/超时保存为预设，供纠错等功能快速使用"
+
+msgid "从 Base URL 获取可用模型列表"
+msgstr "从 Base URL 获取可用模型列表"
+
+msgid "ASR 结果在表格中显示的区域名称"
+msgstr "ASR 结果在表格中显示的区域名称"
+
+msgid "自动检测并跳过静音部分，加速处理"
+msgstr "自动检测并跳过静音部分，加速处理"
+
+msgid "Beam size，越大精度越高但越慢"
+msgstr "Beam size，越大精度越高但越慢"
+
+msgid "越高越容易跳过无声音片段"
+msgstr "越高越容易跳过无声音片段"
+
+msgid "温度参数（逗号分隔），越低越确定"
+msgstr "温度参数（逗号分隔），越低越确定"
+
+msgid "提升特定词汇的识别率"
+msgstr "提升特定词汇的识别率"
+
+msgid "自定义纠错系统提示词（可选）"
+msgstr "自定义纠错系统提示词（可选）"
+
+msgid "自定义纠错提示词（可选）"
+msgstr "自定义纠错提示词（可选）"
+
+msgid "确定要清空所有过滤关键词吗？"
+msgstr "确定要清空所有过滤关键词吗？"
+
+msgid "确认清空"
+msgstr "确认清空"
+
+msgid "留空使用默认缓存"
+msgstr "留空使用默认缓存"
+
+msgid "热词，逗号分隔"
+msgstr "热词，逗号分隔"
+
+msgid "初始提示词，如: 以下是普通话的转录"
+msgstr "初始提示词，如: 以下是普通话的转录"
+
+msgid "点击上方按钮自动提取环境信息，也可手动编辑..."
+msgstr "点击上方按钮自动提取环境信息，也可手动编辑..."
+
+msgid "🔍 立即提取全文环境"
+msgstr "🔍 立即提取全文环境"
+
 msgid "启用 AI 纠错"
 msgstr "启用 AI 纠错"
 
-msgid "启用 GPU 加速"
-msgstr "启用 GPU 加速"
+msgid "🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"
+msgstr "🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"
+
+msgid "🔴 流式输出模式（实时逐字显示 API 响应）"
+msgstr "🔴 流式输出模式（实时逐字显示 API 响应）"
+
+msgid "📋 JSON 输出模式（API 返回结构化 JSON 格式）"
+msgstr "📋 JSON 输出模式（API 返回结构化 JSON 格式）"
+
+msgid "提取全文环境（领域/氛围/内容摘要作为纠错参考）"
+msgstr "提取全文环境（领域/氛围/内容摘要作为纠错参考）"
+
+msgid "✨ 润色模式（纠错/翻译后二次润色质量）"
+msgstr "✨ 润色模式（纠错/翻译后二次润色质量）"
 
 msgid "启用 VAD（跳过静音段）"
 msgstr "启用 VAD（跳过静音段）"
-
-msgid "启用/关闭 AI 纠错"
-msgstr "启用/关闭 AI 纠错"
-
-msgid "启用/关闭 GPU 硬件加速"
-msgstr "启用/关闭 GPU 硬件加速"
-
-msgid "启用/关闭后处理相似度去重"
-msgstr "启用/关闭后处理相似度去重"
-
-msgid "启用/关闭哨兵去重（字数骤降检测触发输出）"
-msgstr "启用/关闭哨兵去重（字数骤降检测触发输出）"
 
 msgid "启用哨兵去重（骤降/缓冲区/相似度）"
 msgstr "启用哨兵去重（骤降/缓冲区/相似度）"
@@ -196,216 +1001,59 @@ msgstr "启用基本去重（相似文本合并）"
 msgid "启用置信度过滤（仅 PaddleOCR）"
 msgstr "启用置信度过滤（仅 PaddleOCR）"
 
-msgid "基于上文条件解码"
-msgstr "基于上文条件解码"
-
-msgid "处理参数"
-msgstr "处理参数"
-
-msgid "处理模式"
-msgstr "处理模式"
-
-msgid "外观"
-msgstr "外观"
-
-msgid "字幕模式"
-msgstr "字幕模式"
-
-msgid "字幕模式:"
-msgstr "字幕模式:"
-
-msgid "字幕设置"
-msgstr "字幕设置"
-
 msgid "字级时间戳"
 msgstr "字级时间戳"
 
-msgid "容错重试"
-msgstr "容错重试"
+msgid "基于上文条件解码"
+msgstr "基于上文条件解码"
 
-msgid "将此条内容加入过滤器"
-msgstr "将此条内容加入过滤器"
+msgid "模糊匹配"
+msgstr "模糊匹配"
 
-msgid "就绪"
-msgstr "就绪"
+msgid "PP-OCRv5_server (高精度/慢)"
+msgstr "PP-OCRv5_server (高精度/慢)"
 
-msgid "应用后处理设置"
-msgstr "应用后处理设置"
+msgid "PP-OCRv5_mobile (平衡)"
+msgstr "PP-OCRv5_mobile (平衡)"
 
-msgid "应用处理参数"
-msgstr "应用处理参数"
+msgid "PP-OCRv4 (快速)"
+msgstr "PP-OCRv4 (快速)"
 
-msgid "应用字幕参数"
-msgstr "应用字幕参数"
+msgid "导入模板"
+msgstr "导入模板"
 
-msgid "应用排序规则"
-msgstr "应用排序规则"
+msgid "导出模板"
+msgstr "导出模板"
 
-msgid "应用纠错设置"
-msgstr "应用纠错设置"
+msgid "打开文件"
+msgstr "打开文件"
 
-msgid "应用语音识别设置"
-msgstr "应用语音识别设置"
+msgid "导入失败"
+msgstr "导入失败"
 
-msgid "开始:"
-msgstr "开始:"
+msgid "导出失败"
+msgstr "导出失败"
 
-msgid "打开/关闭搜索替换"
-msgstr "打开/关闭搜索替换"
+msgid "错误"
+msgstr "错误"
 
-msgid "批量参数"
-msgstr "批量参数"
+msgid "警告"
+msgstr "警告"
 
-msgid "排序规则"
-msgstr "排序规则"
+msgid "完成"
+msgstr "完成"
+
+msgid "模板导入失败"
+msgstr "模板导入失败"
+
+msgid "模板导出失败"
+msgstr "模板导出失败"
+
+msgid "SRT 导出"
+msgstr "SRT 导出"
 
 msgid "排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:"
 msgstr "排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:"
 
-msgid "提取全文环境（领域/氛围/内容摘要作为纠错参考）"
-msgstr "提取全文环境（领域/氛围/内容摘要作为纠错参考）"
-
-msgid "提示"
-msgstr "提示"
-
-msgid "提示词内容:"
-msgstr "提示词内容:"
-
-msgid "提示词模板"
-msgstr "提示词模板"
-
-msgid "搜索..."
-msgstr "搜索..."
-
-msgid "播放/暂停 (Space)"
-msgstr "播放/暂停 (Space)"
-
-msgid "播放速度：点击切换"
-msgstr "播放速度：点击切换"
-
-msgid "暂无识别结果可导出。"
-msgstr "暂无识别结果可导出。"
-
-msgid "替换为..."
-msgstr "替换为..."
-
-msgid "替换当前选中结果"
-msgstr "替换当前选中结果"
-
-msgid "替换所有匹配结果"
-msgstr "替换所有匹配结果"
-
-msgid "模型:"
-msgstr "模型:"
-
-msgid "模型名（可选）"
-msgstr "模型名（可选）"
-
-msgid "模板:"
-msgstr "模板:"
-
-msgid "此区域专用的纠错提示词（留空用全局）"
-msgstr "此区域专用的纠错提示词（留空用全局）"
-
-msgid "清空"
-msgstr "清空"
-
-msgid "清空全部"
-msgstr "清空全部"
-
-msgid "清空所有识别结果"
-msgstr "清空所有识别结果"
-
-msgid "硬件加速 (GPU)"
-msgstr "硬件加速 (GPU)"
-
-msgid "确认删除"
-msgstr "确认删除"
-
-msgid "纠错模式"
-msgstr "纠错模式"
-
-msgid "结束:"
-msgstr "结束:"
-
-msgid "结果排序"
-msgstr "结果排序"
-
-msgid "翻译模式：将 OCR 结果翻译为中文"
-msgstr "翻译模式：将 OCR 结果翻译为中文"
-
-msgid "自定义 OCR 提示词（覆盖模板）"
-msgstr "自定义 OCR 提示词（覆盖模板）"
-
-msgid "语音识别"
-msgstr "语音识别"
-
-msgid "请输入预设名称。"
-msgstr "请输入预设名称。"
-
-msgid "超时:"
-msgstr "超时:"
-
-msgid "输出控制"
-msgstr "输出控制"
-
-msgid "预设名称"
-msgstr "预设名称"
-
-msgid "🌐 翻译"
-msgstr "🌐 翻译"
-
-msgid "🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"
-msgstr "🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"
-
-msgid "🎨 应用预览"
-msgstr "🎨 应用预览"
-
-msgid "💾 保存"
-msgstr "💾 保存"
-
-msgid "💾 保存为 API 预设"
-msgstr "💾 保存为 API 预设"
-
-msgid "📋 JSON 输出模式（API 返回结构化 JSON 格式）"
-msgstr "📋 JSON 输出模式（API 返回结构化 JSON 格式）"
-
-msgid "📋 获取模型"
-msgstr "📋 获取模型"
-
-msgid "📋 识别结果"
-msgstr "📋 识别结果"
-
-msgid "📋 队列:"
-msgstr "📋 队列:"
-
-msgid "📐 区域"
-msgstr "📐 区域"
-
-msgid "🔄 刷新模型列表"
-msgstr "🔄 刷新模型列表"
-
-msgid "🔄 检测可用性"
-msgstr "🔄 检测可用性"
-
-msgid "🔍 去重"
-msgstr "🔍 去重"
-
-msgid "🔍 立即提取全文环境"
-msgstr "🔍 立即提取全文环境"
-
-msgid "🔤 AI纠错"
-msgstr "🔤 AI纠错"
-
-msgid "🔴 流式输出模式（实时逐字显示 API 响应）"
-msgstr "🔴 流式输出模式（实时逐字显示 API 响应）"
-
-msgid "🖥 显示设置"
-msgstr "🖥 显示设置"
-
-msgid "🗑 删除选中"
-msgstr "🗑 删除选中"
-
-msgid "🛡 哨兵"
-msgstr "🛡 哨兵"
-
+msgid "原版"
+msgstr "原版"

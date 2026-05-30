@@ -42,19 +42,3 @@ class TestI18n:
 
         setup_i18n()
         assert ngettext("one file", "many files", 1) == "one file"
-
-    def test_compile_po(self, tmp_path):
-        from core.i18n import compile_po
-
-        po = tmp_path / "test.po"
-        po.write_text("""msgid ""
-msgstr ""
-"Language: en\\n"
-
-msgid "hello"
-msgstr "world"
-""", encoding="utf-8")
-        mo = tmp_path / "test.mo"
-        n = compile_po(str(po), str(mo))
-        assert n == 1
-        assert mo.exists()

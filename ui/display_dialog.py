@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import _
 from ui.style_loader import THEME_COLORS, THEME_DISPLAY_NAMES
 
 
@@ -83,7 +84,7 @@ class DisplayDialog(QDialog):
 
     def __init__(self, theme: str, font_size: int, ui_scale: float, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("显示设置")
+        self.setWindowTitle(_("显示设置"))
         self.setMinimumWidth(520)
         self.resize(560, 480)
         self._theme = theme
@@ -95,9 +96,20 @@ class DisplayDialog(QDialog):
         layout.setSpacing(10)
 
         # ── 主题卡片选择 ──
-        theme_label = QLabel("主题配色")
+        theme_label = QLabel(_("主题配色"))
         theme_label.setStyleSheet("font-weight: 600; font-size: 13px;")
         layout.addWidget(theme_label)
+
+        # 经典主题（独立一行）
+        default_colors = THEME_COLORS.get("default", ["#555555", "#888888", "#f0f0f0"])
+        default_card = _ThemeCard("default", THEME_DISPLAY_NAMES.get("default", "经典"),
+                                  default_colors, selected=(theme == "default"))
+        default_card.clicked.connect(self._on_card_clicked)
+        self._cards["default"] = default_card
+        default_row = QHBoxLayout()
+        default_row.addWidget(default_card)
+        default_row.addStretch()
+        layout.addLayout(default_row)
 
         # 深色/浅色分组
         for section_name, prefix in [("深色", "dark_"), ("浅色", "light_")]:
@@ -135,7 +147,7 @@ class DisplayDialog(QDialog):
         self._font_spin.setRange(10, 24)
         self._font_spin.setValue(font_size)
         self._font_spin.setSuffix(" px")
-        form.addRow("字体大小:", self._font_spin)
+        form.addRow(_("字体大小:"), self._font_spin)
 
         self._scale_spin = QDoubleSpinBox()
         self._scale_spin.setRange(0.8, 1.5)
@@ -143,12 +155,12 @@ class DisplayDialog(QDialog):
         self._scale_spin.setDecimals(1)
         self._scale_spin.setValue(ui_scale)
         self._scale_spin.setSuffix("x")
-        self._scale_spin.setToolTip("整体 UI 缩放比例（影响密度和字体）")
-        form.addRow("UI 缩放:", self._scale_spin)
+        self._scale_spin.setToolTip(_("整体 UI 缩放比例（影响密度和字体）"))
+        form.addRow(_("UI 缩放:"), self._scale_spin)
 
         layout.addLayout(form)
 
-        hint = QLabel("点击主题卡片即时预览，关闭窗口自动保存。")
+        hint = QLabel(_("点击主题卡片即时预览，关闭窗口自动保存。"))
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)

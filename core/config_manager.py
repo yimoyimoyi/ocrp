@@ -21,6 +21,7 @@ DEFAULT_SETTINGS = {
     "ai_correction_enabled": False,
     "hw_accel": False,
     "mode_params": {},
+    "language": "",
 }
 
 
@@ -344,6 +345,13 @@ class ConfigManager:
 
     def get_hw_accel(self) -> bool:
         return self.settings.get("hw_accel", False)
+
+    def get_language(self) -> str:
+        return self.settings.get("language", "")
+
+    def set_language(self, lang: str):
+        self.settings["language"] = lang
+        self.save_settings()
 
     def get_recent_videos(self) -> list:
         return self.settings.get("recent_videos", [])

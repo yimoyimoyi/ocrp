@@ -20,6 +20,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from core.i18n import _
+
 
 class RegionManagerWidget(QWidget):
     """区域管理面板（紧凑版）。
@@ -72,21 +74,21 @@ class RegionManagerWidget(QWidget):
         # ── 标题栏 ──
         header = QHBoxLayout()
         header.setSpacing(6)
-        title = QLabel("📐 区域")
-        title.setObjectName("regionTitle")
-        header.addWidget(title)
+        self._title_label = QLabel(_("📐 区域"))
+        self._title_label.setObjectName("regionTitle")
+        header.addWidget(self._title_label)
         header.addStretch()
 
-        btn_add = QPushButton("+ 添加")
-        btn_add.setToolTip("在预览图上拖拽绘制矩形区域")
-        btn_add.clicked.connect(self.region_add_requested.emit)
-        btn_add.setFixedHeight(28)
-        header.addWidget(btn_add)
+        self._btn_add = QPushButton(_("+ 添加"))
+        self._btn_add.setToolTip(_("在预览图上拖拽绘制矩形区域"))
+        self._btn_add.clicked.connect(self.region_add_requested.emit)
+        self._btn_add.setFixedHeight(28)
+        header.addWidget(self._btn_add)
 
-        btn_clear = QPushButton("清空")
-        btn_clear.setFixedHeight(28)
-        btn_clear.clicked.connect(self._on_clear_all)
-        header.addWidget(btn_clear)
+        self._btn_clear = QPushButton(_("清空"))
+        self._btn_clear.setFixedHeight(28)
+        self._btn_clear.clicked.connect(self._on_clear_all)
+        header.addWidget(self._btn_clear)
         layout.addLayout(header)
 
         # ── 区域列表 ──
@@ -104,16 +106,45 @@ class RegionManagerWidget(QWidget):
 
         self._set_editor_enabled(False)
 
+    def _retranslate_ui(self):
+        """重新翻译所有用户可见字符串。"""
+        from core.i18n import _
+        self._title_label.setText(_("📐 区域"))
+        self._btn_add.setText(_("+ 添加"))
+        self._btn_add.setToolTip(_("在预览图上拖拽绘制矩形区域"))
+        self._btn_clear.setText(_("清空"))
+        self._lbl_name.setText(_("名称:"))
+        self._name_edit.setPlaceholderText(_("区域名称"))
+        self._enabled_check.setText(_("启用"))
+        self._lbl_engine.setText(_("引擎:"))
+        self._lbl_template.setText(_("模板:"))
+        self._lbl_x.setText(_("X:"))
+        self._lbl_y.setText(_("Y:"))
+        self._lbl_w.setText(_("W:"))
+        self._lbl_h.setText(_("H:"))
+        self._lbl_expand.setText(_("膨胀:"))
+        self._expand_ratio_spin.setToolTip(_("ROI 区域向外膨胀的比例"))
+        self._lbl_crop_l.setText(_("裁剪 L:"))
+        self._lbl_crop_r.setText(_("R:"))
+        self._lbl_crop_t.setText(_("T:"))
+        self._lbl_crop_b.setText(_("B:"))
+        self._lbl_ocr_prompt.setText(_("OCR 提示词:"))
+        self._prompt_edit.setPlaceholderText(_("自定义 OCR 提示词（覆盖模板）"))
+        self._lbl_corr_prompt.setText(_("纠错提示词:"))
+        self._corr_prompt_edit.setPlaceholderText(_("此区域专用的纠错提示词（留空用全局）"))
+        self._btn_remove.setText(_("- 删除此区域"))
+
     def _build_prop_editor(self, vl):
         """构建滑动窗口内的属性编辑区域。"""
         # 第1行：名称 + 启用
         row1 = QHBoxLayout(); row1.setSpacing(6)
-        row1.addWidget(QLabel("名称:"))
+        self._lbl_name = QLabel(_("名称:"))
+        row1.addWidget(self._lbl_name)
         self._name_edit = QLineEdit()
-        self._name_edit.setPlaceholderText("区域名称")
+        self._name_edit.setPlaceholderText(_("区域名称"))
         self._name_edit.textChanged.connect(self._on_prop_changed)
         row1.addWidget(self._name_edit, 1)
-        self._enabled_check = QCheckBox("启用")
+        self._enabled_check = QCheckBox(_("启用"))
         self._enabled_check.setChecked(True)
         self._enabled_check.toggled.connect(self._on_prop_changed)
         row1.addWidget(self._enabled_check)
@@ -121,12 +152,14 @@ class RegionManagerWidget(QWidget):
 
         # 第2行：引擎 + 模板
         row2 = QHBoxLayout(); row2.setSpacing(6)
-        row2.addWidget(QLabel("引擎:"))
+        self._lbl_engine = QLabel(_("引擎:"))
+        row2.addWidget(self._lbl_engine)
         self._engine_combo = QComboBox()
         self._engine_combo.addItems(self._engine_names)
         self._engine_combo.currentTextChanged.connect(self._on_prop_changed)
         row2.addWidget(self._engine_combo, 1)
-        row2.addWidget(QLabel("模板:"))
+        self._lbl_template = QLabel(_("模板:"))
+        row2.addWidget(self._lbl_template)
         self._template_combo = QComboBox()
         self._template_combo.addItems(self._template_names)
         self._template_combo.currentTextChanged.connect(self._on_prop_changed)
@@ -136,19 +169,23 @@ class RegionManagerWidget(QWidget):
         # 第3-4行：X/Y/W/H 网格
         grid = QGridLayout()
         grid.setSpacing(6)
-        grid.addWidget(QLabel("X:"), 0, 0)
+        self._lbl_x = QLabel(_("X:"))
+        grid.addWidget(self._lbl_x, 0, 0)
         self._x_spin = QSpinBox(); self._x_spin.setRange(0, 9999)
         self._x_spin.valueChanged.connect(self._on_prop_changed)
         grid.addWidget(self._x_spin, 0, 1)
-        grid.addWidget(QLabel("Y:"), 0, 2)
+        self._lbl_y = QLabel(_("Y:"))
+        grid.addWidget(self._lbl_y, 0, 2)
         self._y_spin = QSpinBox(); self._y_spin.setRange(0, 9999)
         self._y_spin.valueChanged.connect(self._on_prop_changed)
         grid.addWidget(self._y_spin, 0, 3)
-        grid.addWidget(QLabel("W:"), 1, 0)
+        self._lbl_w = QLabel(_("W:"))
+        grid.addWidget(self._lbl_w, 1, 0)
         self._w_spin = QSpinBox(); self._w_spin.setRange(0, 9999)
         self._w_spin.valueChanged.connect(self._on_prop_changed)
         grid.addWidget(self._w_spin, 1, 1)
-        grid.addWidget(QLabel("H:"), 1, 2)
+        self._lbl_h = QLabel(_("H:"))
+        grid.addWidget(self._lbl_h, 1, 2)
         self._h_spin = QSpinBox(); self._h_spin.setRange(0, 9999)
         self._h_spin.valueChanged.connect(self._on_prop_changed)
         grid.addWidget(self._h_spin, 1, 3)
@@ -156,10 +193,11 @@ class RegionManagerWidget(QWidget):
 
         # 第5行：膨胀比例
         row5 = QHBoxLayout(); row5.setSpacing(6)
-        row5.addWidget(QLabel("膨胀:"))
+        self._lbl_expand = QLabel(_("膨胀:"))
+        row5.addWidget(self._lbl_expand)
         self._expand_ratio_spin = QSpinBox()
         self._expand_ratio_spin.setRange(0, 200); self._expand_ratio_spin.setSuffix("%")
-        self._expand_ratio_spin.setToolTip("ROI 区域向外膨胀的比例")
+        self._expand_ratio_spin.setToolTip(_("ROI 区域向外膨胀的比例"))
         self._expand_ratio_spin.valueChanged.connect(self._on_prop_changed)
         row5.addWidget(self._expand_ratio_spin)
         row5.addStretch()
@@ -167,42 +205,48 @@ class RegionManagerWidget(QWidget):
 
         # 第6行：裁剪四边
         row6 = QHBoxLayout(); row6.setSpacing(6)
-        row6.addWidget(QLabel("裁剪 L:"))
+        self._lbl_crop_l = QLabel(_("裁剪 L:"))
+        row6.addWidget(self._lbl_crop_l)
         self._crop_left_spin = QSpinBox(); self._crop_left_spin.setRange(0, 9999)
         self._crop_left_spin.valueChanged.connect(self._on_prop_changed)
         row6.addWidget(self._crop_left_spin)
-        row6.addWidget(QLabel("R:"))
+        self._lbl_crop_r = QLabel(_("R:"))
+        row6.addWidget(self._lbl_crop_r)
         self._crop_right_spin = QSpinBox(); self._crop_right_spin.setRange(0, 9999)
         self._crop_right_spin.valueChanged.connect(self._on_prop_changed)
         row6.addWidget(self._crop_right_spin)
-        row6.addWidget(QLabel("T:"))
+        self._lbl_crop_t = QLabel(_("T:"))
+        row6.addWidget(self._lbl_crop_t)
         self._crop_top_spin = QSpinBox(); self._crop_top_spin.setRange(0, 9999)
         self._crop_top_spin.valueChanged.connect(self._on_prop_changed)
         row6.addWidget(self._crop_top_spin)
-        row6.addWidget(QLabel("B:"))
+        self._lbl_crop_b = QLabel(_("B:"))
+        row6.addWidget(self._lbl_crop_b)
         self._crop_bottom_spin = QSpinBox(); self._crop_bottom_spin.setRange(0, 9999)
         self._crop_bottom_spin.valueChanged.connect(self._on_prop_changed)
         row6.addWidget(self._crop_bottom_spin)
         vl.addLayout(row6)
 
         # 第7行：OCR 提示词
-        vl.addWidget(QLabel("OCR 提示词:"))
+        self._lbl_ocr_prompt = QLabel(_("OCR 提示词:"))
+        vl.addWidget(self._lbl_ocr_prompt)
         self._prompt_edit = QTextEdit()
-        self._prompt_edit.setPlaceholderText("自定义 OCR 提示词（覆盖模板）")
+        self._prompt_edit.setPlaceholderText(_("自定义 OCR 提示词（覆盖模板）"))
         self._prompt_edit.setMaximumHeight(60)
         self._prompt_edit.textChanged.connect(self._on_prop_changed)
         vl.addWidget(self._prompt_edit)
 
         # 第8行：纠错提示词
-        vl.addWidget(QLabel("纠错提示词:"))
+        self._lbl_corr_prompt = QLabel(_("纠错提示词:"))
+        vl.addWidget(self._lbl_corr_prompt)
         self._corr_prompt_edit = QTextEdit()
-        self._corr_prompt_edit.setPlaceholderText("此区域专用的纠错提示词（留空用全局）")
+        self._corr_prompt_edit.setPlaceholderText(_("此区域专用的纠错提示词（留空用全局）"))
         self._corr_prompt_edit.setMaximumHeight(60)
         self._corr_prompt_edit.textChanged.connect(self._on_prop_changed)
         vl.addWidget(self._corr_prompt_edit)
 
         # 删除按钮
-        self._btn_remove = QPushButton("- 删除此区域")
+        self._btn_remove = QPushButton(_("- 删除此区域"))
         self._btn_remove.setObjectName("btnRemoveRegion")
         self._btn_remove.setFixedHeight(28)
         self._btn_remove.clicked.connect(self._on_remove_current)
@@ -302,7 +346,7 @@ class RegionManagerWidget(QWidget):
 
     def _on_clear_all(self):
         reply = QMessageBox.question(
-            self, "确认清空", "确定要清空所有区域吗？",
+            self, _("确认清空"), _("确定要清空所有区域吗？"),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply == QMessageBox.Yes:

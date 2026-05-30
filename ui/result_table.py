@@ -714,6 +714,19 @@ class ResultTableWidget(QWidget):
     def _update_count(self):
         self._count_label.setText(f"({self._table.rowCount()} 条)")
 
+    def _retranslate_strings(self):
+        """重新翻译所有用户可见字符串（语言切换时调用）。"""
+        self.COLUMNS = [_("✓"), _("时间戳"), _("区域"), _("引擎"), _("原始结果"),
+                        _("纠错结果"), _("润色结果"), _("置信度"), ""]
+        self._table.setHorizontalHeaderLabels(self.COLUMNS)
+        self._select_all_cb.setText(_("全选"))
+        self._count_label.setText(_("(0 条)"))
+        self._search_edit.setPlaceholderText(_("搜索..."))
+        self._replace_edit.setPlaceholderText(_("替换为..."))
+        self._selection_label.setText(_("未选中任何行"))
+        self._btn_toggle_search.setToolTip(_("打开/关闭搜索替换"))
+        self._batch_label.setText(_("📋 队列:"))
+
     def set_batch_count(self, count: int, total_size: int = 0):
         visible = count > 0
         self._batch_sep.setVisible(visible)

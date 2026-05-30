@@ -1,74 +1,143 @@
 msgid ""
 msgstr ""
-"Language: en_US
-"
-"MIME-Version: 1.0
-"
-"Content-Type: text/plain; charset=UTF-8
-"
+"Language: en_US\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+# ── Main Window ──
+msgid "ORCP - OCR 处理工具"
+msgstr "ORCP - OCR Processing Tool"
 
 msgid "  |  引擎: paddleocr"
 msgstr "  |  Engine: paddleocr"
 
-msgid "(0 条)"
-msgstr "(0 条)"
+msgid "就绪"
+msgstr "Ready"
 
-msgid "(空)"
-msgstr "(空)"
+msgid "🔤 AI纠错"
+msgstr "🔤 AI Correction"
 
-msgid "+ 新建"
-msgstr "+ 新建"
+msgid "启用/关闭 AI 纠错"
+msgstr "Enable/Disable AI Correction"
 
-msgid "+ 添加"
-msgstr "+ 添加"
+msgid "⚡ GPU"
+msgstr "⚡ GPU"
 
-msgid "- 删除"
-msgstr "- 删除"
+msgid "启用/关闭 GPU 硬件加速"
+msgstr "Enable/Disable GPU Hardware Acceleration"
 
-msgid "- 删除此区域"
-msgstr "- 删除此区域"
+msgid "🔍 去重"
+msgstr "🔍 Dedup"
 
-msgid "AI 纠错"
-msgstr "AI 纠错"
+msgid "启用/关闭后处理相似度去重"
+msgstr "Enable/Disable Post-Processing Similarity Dedup"
 
-msgid "API Key:"
-msgstr "API Key:"
+msgid "🌐 翻译"
+msgstr "🌐 Translate"
 
-msgid "API Key（可选）"
-msgstr "API Key（可选）"
+msgid "翻译模式：将 OCR 结果翻译为中文"
+msgstr "Translation Mode: Translate OCR Results to Chinese"
 
-msgid "API 连接"
-msgstr "API 连接"
+msgid "🛡 哨兵"
+msgstr "🛡 Sentinel"
 
-msgid "API 预设管理"
-msgstr "API 预设管理"
+msgid "启用/关闭哨兵去重（字数骤降检测触发输出）"
+msgstr "Enable/Disable Sentinel Dedup (Word Count Drop Triggers Output)"
 
-msgid "ASR 语音识别引擎"
-msgstr "ASR 语音识别引擎"
+msgid "🗑 清缓存"
+msgstr "🗑 Clear Cache"
 
-msgid "Base URL:"
-msgstr "Base URL:"
+msgid "清除所有缓存（LLM 响应缓存 + ASR 结果缓存）"
+msgstr "Clear all caches (LLM response cache + ASR result cache)"
 
-msgid "ORCP - OCR 处理工具"
-msgstr "ORCP - OCR Processing Tool"
+msgid "✅ 参数设置已更新"
+msgstr "✅ Settings updated"
 
-msgid "gpt-4o"
-msgstr "gpt-4o"
+msgid "✅ 显示设置已更新"
+msgstr "✅ Display settings updated"
 
-msgid "gpt-4o / gemma 等"
-msgstr "gpt-4o / gemma 等"
+msgid "✅ GPU 加速已启用"
+msgstr "✅ GPU acceleration enabled"
 
-msgid "http://127.0.0.1:8080"
-msgstr "http://127.0.0.1:8080"
+msgid "🔲 GPU 加速已关闭"
+msgstr "🔲 GPU acceleration disabled"
 
-msgid "https://api.openai.com/v1"
-msgstr "https://api.openai.com/v1"
+# ── Menu Bar ──
+msgid "参数设置(&P)"
+msgstr "Settings(&P)"
 
-msgid "sk-xxx（可选）"
-msgstr "sk-xxx（可选）"
+msgid "显示(&V)"
+msgstr "View(&V)"
 
-msgid "⏳ 获取中..."
-msgstr "⏳ 获取中..."
+msgid "纠错(&C)"
+msgstr "Correction(&C)"
+
+msgid "模板(&T)"
+msgstr "Templates(&T)"
+
+msgid "批量(&B)"
+msgstr "Batch(&B)"
+
+msgid "语言(&L)"
+msgstr "Language(&L)"
+
+msgid "⚙ 全部参数..."
+msgstr "⚙ All Settings..."
+
+msgid "基础设置..."
+msgstr "Basic..."
+
+msgid "语音识别..."
+msgstr "Speech Recognition..."
+
+msgid "OCR 字幕处理..."
+msgstr "OCR Subtitle..."
+
+msgid "AI 纠错..."
+msgstr "AI Correction..."
+
+msgid "结果输出..."
+msgstr "Output..."
+
+msgid "切换主题 (亮色/暗色)"
+msgstr "Toggle Theme (Light/Dark)"
+
+msgid "显示设置..."
+msgstr "Display Settings..."
+
+msgid "API 预设管理..."
+msgstr "API Preset Management..."
+
+msgid "📝 编辑模板..."
+msgstr "📝 Edit Templates..."
+
+msgid "📥 导入模板..."
+msgstr "📥 Import Templates..."
+
+msgid "📤 导出模板..."
+msgstr "📤 Export Templates..."
+
+msgid "🗑 清空队列"
+msgstr "🗑 Clear Queue"
+
+msgid "📸 截取帧"
+msgstr "📸 Capture Frame"
+
+msgid "截取当前视频帧用于预览和区域绘制"
+msgstr "Capture current frame for preview and region drawing"
+
+msgid "📂 打开文件"
+msgstr "📂 Open File"
+
+msgid "打开视频、音频或图片文件"
+msgstr "Open video, audio or image file"
+
+msgid "🗑 清空"
+msgstr "🗑 Clear"
+
+msgid "▶ 开始处理"
+msgstr "▶ Start Processing"
 
 msgid "⏸ 暂停"
 msgstr "⏸ Pause"
@@ -76,333 +145,946 @@ msgstr "⏸ Pause"
 msgid "⏹ 停止"
 msgstr "⏹ Stop"
 
-msgid "── 关键词过滤 ──"
-msgstr "── 关键词过滤 ──"
-
-msgid "── 常规参数（基本去重） ──"
-msgstr "── 常规参数（基本去重） ──"
-
-msgid "── 流式参数（哨兵去重） ──"
-msgstr "── 流式参数（哨兵去重） ──"
-
-msgid "── 流程失败重试 ──"
-msgstr "── 流程失败重试 ──"
-
-msgid "▶ 开始处理"
-msgstr "▶ Start Processing"
-
-msgid "⚙ 参数设置"
-msgstr "⚙ 参数设置"
-
-msgid "⚠ 未获取到模型"
-msgstr "⚠ 未获取到模型"
-
-msgid "⚠ 请先输入 Base URL"
-msgstr "⚠ 请先输入 Base URL"
-
-msgid "⚡ GPU"
-msgstr "⚡ GPU"
-
-msgid "✅ {n} 个"
-msgstr "✅ {n} 个"
-
-msgid "✏ 纠正全部"
-msgstr "✏ Correct All"
-
 msgid "✏ 纠错选中"
 msgstr "✏ Correct Selected"
 
-msgid "✕"
-msgstr "✕"
+msgid "✏ 纠错全部"
+msgstr "✏ Correct All"
 
-msgid "➕ 添加"
-msgstr "➕ 添加"
+msgid "✨ 润色选中"
+msgstr "✨ Polish Selected"
 
-msgid "上一个匹配"
-msgstr "上一个匹配"
+msgid "✨ 润色全部"
+msgstr "✨ Polish All"
 
-msgid "下一个匹配"
-msgstr "下一个匹配"
+msgid "▶ 继续"
+msgstr "▶ Resume"
 
-msgid "保留最长文本"
-msgstr "保留最长文本"
+# ── Right Panel ──
+msgid "📐 区域参数"
+msgstr "📐 Region Settings"
 
-msgid "停止播放"
-msgstr "停止播放"
+msgid "📝 字幕设置"
+msgstr "📝 Subtitle Settings"
 
-msgid "关键词过滤"
-msgstr "关键词过滤"
+msgid "🎤 ASR 选项"
+msgstr "🎤 ASR Options"
 
-msgid "删除所有包含过滤器关键词的结果行"
-msgstr "删除所有包含过滤器关键词的结果行"
+msgid "🔧 后处理"
+msgstr "🔧 Post-Processing"
 
-msgid "前进 5 秒 (→)"
-msgstr "前进 5 秒 (→)"
+msgid "模式:"
+msgstr "Mode:"
 
-msgid "区域"
-msgstr "区域"
-
-msgid "区域名称"
-msgstr "区域名称"
-
-msgid "名称:"
-msgstr "名称:"
-
-msgid "后处理"
-msgstr "后处理"
-
-msgid "后处理参数"
-msgstr "后处理参数"
-
-msgid "后处理相似度去重"
-msgstr "后处理相似度去重"
-
-msgid "后退 5 秒 (←)"
-msgstr "后退 5 秒 (←)"
-
-msgid "启用"
-msgstr "启用"
-
-msgid "启用 AI 纠错"
-msgstr "启用 AI 纠错"
-
-msgid "启用 GPU 加速"
-msgstr "启用 GPU 加速"
-
-msgid "启用 VAD（跳过静音段）"
-msgstr "启用 VAD（跳过静音段）"
-
-msgid "启用/关闭 AI 纠错"
-msgstr "Enable/Disable AI Correction"
-
-msgid "启用/关闭 GPU 硬件加速"
-msgstr "Enable/Disable GPU Hardware Acceleration"
-
-msgid "启用/关闭后处理相似度去重"
-msgstr "Enable/Disable Post-Processing Similarity Dedup"
-
-msgid "启用/关闭哨兵去重（字数骤降检测触发输出）"
-msgstr "Enable/Disable Sentinel Dedup (Word Count Drop Triggers Output)"
-
-msgid "启用哨兵去重（骤降/缓冲区/相似度）"
-msgstr "启用哨兵去重（骤降/缓冲区/相似度）"
-
-msgid "启用基本去重（相似文本合并）"
-msgstr "启用基本去重（相似文本合并）"
-
-msgid "启用置信度过滤（仅 PaddleOCR）"
-msgstr "启用置信度过滤（仅 PaddleOCR）"
-
-msgid "基于上文条件解码"
-msgstr "基于上文条件解码"
-
-msgid "处理参数"
-msgstr "处理参数"
-
-msgid "处理模式"
-msgstr "处理模式"
-
-msgid "外观"
-msgstr "外观"
-
-msgid "字幕模式"
-msgstr "字幕模式"
-
-msgid "字幕模式:"
-msgstr "字幕模式:"
-
-msgid "字幕设置"
-msgstr "字幕设置"
-
-msgid "字级时间戳"
-msgstr "字级时间戳"
-
-msgid "容错重试"
-msgstr "容错重试"
-
-msgid "将此条内容加入过滤器"
-msgstr "将此条内容加入过滤器"
-
-msgid "就绪"
-msgstr "Ready"
-
-msgid "应用后处理设置"
-msgstr "应用后处理设置"
-
-msgid "应用处理参数"
-msgstr "应用处理参数"
-
-msgid "应用字幕参数"
-msgstr "应用字幕参数"
-
-msgid "应用排序规则"
-msgstr "应用排序规则"
-
-msgid "应用纠错设置"
-msgstr "应用纠错设置"
-
-msgid "应用语音识别设置"
-msgstr "应用语音识别设置"
-
-msgid "开始:"
-msgstr "开始:"
-
-msgid "打开/关闭搜索替换"
-msgstr "打开/关闭搜索替换"
-
-msgid "批量参数"
-msgstr "批量参数"
-
-msgid "排序规则"
-msgstr "排序规则"
-
-msgid "排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:"
-msgstr "排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:"
-
-msgid "提取全文环境（领域/氛围/内容摘要作为纠错参考）"
-msgstr "提取全文环境（领域/氛围/内容摘要作为纠错参考）"
-
-msgid "提示"
-msgstr "提示"
-
-msgid "提示词内容:"
-msgstr "提示词内容:"
-
-msgid "提示词模板"
-msgstr "提示词模板"
-
-msgid "搜索..."
-msgstr "搜索..."
-
-msgid "播放/暂停 (Space)"
-msgstr "播放/暂停 (Space)"
-
-msgid "播放速度：点击切换"
-msgstr "播放速度：点击切换"
-
-msgid "暂无识别结果可导出。"
-msgstr "暂无识别结果可导出。"
-
-msgid "替换为..."
-msgstr "替换为..."
-
-msgid "替换当前选中结果"
-msgstr "替换当前选中结果"
-
-msgid "替换所有匹配结果"
-msgstr "替换所有匹配结果"
+msgid "帧间隔:"
+msgstr "Frame Interval:"
 
 msgid "模型:"
-msgstr "模型:"
+msgstr "Model:"
 
-msgid "模型名（可选）"
-msgstr "模型名（可选）"
+msgid "语言:"
+msgstr "Language:"
 
-msgid "模板:"
-msgstr "模板:"
+msgid "区域名:"
+msgstr "Region Name:"
 
-msgid "此区域专用的纠错提示词（留空用全局）"
-msgstr "此区域专用的纠错提示词（留空用全局）"
+msgid "ASR 模型选择"
+msgstr "ASR Model Selection"
 
-msgid "清空"
-msgstr "清空"
+msgid "识别语言"
+msgstr "Recognition Language"
 
-msgid "清空全部"
-msgstr "清空全部"
+msgid "ASR 结果在表格中的区域名"
+msgstr "Region name for ASR results in the table"
 
-msgid "清空所有识别结果"
-msgstr "清空所有识别结果"
+msgid "语音"
+msgstr "Speech"
 
-msgid "硬件加速 (GPU)"
-msgstr "硬件加速 (GPU)"
+msgid "相似度阈值:"
+msgstr "Similarity Threshold:"
 
-msgid "确认删除"
-msgstr "确认删除"
+msgid "最小文字长度:"
+msgstr "Min Text Length:"
 
-msgid "纠错模式"
-msgstr "纠错模式"
+msgid "置信度阈值:"
+msgstr "Confidence Threshold:"
 
-msgid "结束:"
-msgstr "结束:"
+msgid "相似度高于此阈值的结果将被去重合并"
+msgstr "Results above this similarity threshold will be deduplicated"
 
-msgid "结果排序"
-msgstr "结果排序"
+msgid "小于此长度的结果将被过滤"
+msgstr "Results shorter than this will be filtered"
 
-msgid "翻译模式：将 OCR 结果翻译为中文"
-msgstr "Translation Mode: Translate OCR Results to Chinese"
+msgid "仅 PaddleOCR：置信度低于此阈值的结果将被过滤"
+msgstr "PaddleOCR only: results below this confidence will be filtered"
 
-msgid "自定义 OCR 提示词（覆盖模板）"
-msgstr "自定义 OCR 提示词（覆盖模板）"
+# ── Settings Dialog ──
+msgid "⚙ 参数设置"
+msgstr "⚙ Settings"
 
-msgid "语音识别"
-msgstr "语音识别"
+msgid "处理模式"
+msgstr "Processing Mode"
 
-msgid "请输入预设名称。"
-msgstr "请输入预设名称。"
-
-msgid "超时:"
-msgstr "超时:"
+msgid "OCR 引擎"
+msgstr "OCR Engine"
 
 msgid "输出控制"
-msgstr "输出控制"
+msgstr "Output Control"
 
-msgid "预设名称"
-msgstr "预设名称"
+msgid "字幕模式"
+msgstr "Subtitle Mode"
 
-msgid "🌐 翻译"
-msgstr "🌐 Translate"
+msgid "ASR 语音识别引擎"
+msgstr "ASR Speech Recognition Engine"
 
-msgid "🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"
-msgstr "🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"
+msgid "后处理参数"
+msgstr "Post-Processing Parameters"
 
-msgid "🎨 应用预览"
-msgstr "🎨 应用预览"
+msgid "关键词过滤"
+msgstr "Keyword Filter"
 
-msgid "💾 保存"
-msgstr "💾 保存"
+msgid "纠错模式"
+msgstr "Correction Mode"
 
-msgid "💾 保存为 API 预设"
-msgstr "💾 保存为 API 预设"
+msgid "批量参数"
+msgstr "Batch Parameters"
 
-msgid "📋 JSON 输出模式（API 返回结构化 JSON 格式）"
-msgstr "📋 JSON 输出模式（API 返回结构化 JSON 格式）"
+msgid "API 连接"
+msgstr "API Connection"
+
+msgid "排序规则"
+msgstr "Sort Rules"
+
+msgid "引擎:"
+msgstr "Engine:"
+
+msgid "API Key:"
+msgstr "API Key:"
+
+msgid "Base URL:"
+msgstr "Base URL:"
+
+msgid "超时:"
+msgstr "Timeout:"
+
+msgid "模型版本:"
+msgstr "Model Version:"
+
+msgid "启用 GPU 加速"
+msgstr "Enable GPU Acceleration"
+
+msgid "启用角度检测"
+msgstr "Enable Angle Detection"
 
 msgid "📋 获取模型"
-msgstr "📋 获取模型"
+msgstr "📋 Fetch Models"
 
-msgid "📋 识别结果"
-msgstr "📋 识别结果"
+msgid "💾 保存为 API 预设"
+msgstr "💾 Save as API Preset"
 
-msgid "📋 队列:"
-msgstr "📋 队列:"
+msgid "⚠ 请输入 URL"
+msgstr "⚠ Please enter URL"
 
-msgid "📐 区域"
-msgstr "📐 区域"
+msgid "⏳ 获取中..."
+msgstr "⏳ Fetching..."
+
+msgid "⚠ 未获取到"
+msgstr "⚠ None found"
 
 msgid "🔄 刷新模型列表"
-msgstr "🔄 刷新模型列表"
+msgstr "🔄 Refresh Model List"
 
 msgid "🔄 检测可用性"
-msgstr "🔄 检测可用性"
+msgstr "🔄 Check Availability"
 
-msgid "🔍 去重"
-msgstr "🔍 Dedup"
+msgid "✅ {n} 个"
+msgstr "✅ {n} found"
 
-msgid "🔍 立即提取全文环境"
-msgstr "🔍 立即提取全文环境"
+msgid "⚠ 未获取到模型"
+msgstr "⚠ No models found"
 
-msgid "🔤 AI纠错"
-msgstr "🔤 AI Correction"
+msgid "⚠ 请先输入 Base URL"
+msgstr "⚠ Please enter Base URL"
 
-msgid "🔴 流式输出模式（实时逐字显示 API 响应）"
-msgstr "🔴 流式输出模式（实时逐字显示 API 响应）"
-
-msgid "🖥 显示设置"
-msgstr "🖥 显示设置"
+msgid "➕ 添加"
+msgstr "➕ Add"
 
 msgid "🗑 删除选中"
-msgstr "🗑 删除选中"
+msgstr "🗑 Delete Selected"
 
-msgid "🛡 哨兵"
-msgstr "🛡 Sentinel"
+msgid "清空全部"
+msgstr "Clear All"
 
+msgid "输入要过滤的关键词，回车添加..."
+msgstr "Enter keywords to filter, press Enter to add..."
+
+# ── Result Table ──
+msgid "📋 识别结果"
+msgstr "📋 Recognition Results"
+
+msgid "(0 条)"
+msgstr "(0 items)"
+
+msgid "📋 队列:"
+msgstr "📋 Queue:"
+
+msgid "(空)"
+msgstr "(empty)"
+
+msgid "全选"
+msgstr "Select All"
+
+msgid "未选中任何行"
+msgstr "No rows selected"
+
+msgid "打开/关闭搜索替换"
+msgstr "Open/Close Search & Replace"
+
+msgid "搜索..."
+msgstr "Search..."
+
+msgid "替换为..."
+msgstr "Replace with..."
+
+msgid "上一个匹配"
+msgstr "Previous Match"
+
+msgid "下一个匹配"
+msgstr "Next Match"
+
+msgid "将此条内容加入过滤器"
+msgstr "Add this content to filter"
+
+msgid "暂无识别结果可导出。"
+msgstr "No results to export."
+
+msgid "提示"
+msgstr "Info"
+
+msgid "导出为 TXT"
+msgstr "Export as TXT"
+
+msgid "导出为 JSON"
+msgstr "Export as JSON"
+
+msgid "导出为 CSV"
+msgstr "Export as CSV"
+
+msgid "导出为 SRT 字幕"
+msgstr "Export as SRT Subtitles"
+
+# ── Dialogs ──
+msgid "API 预设管理"
+msgstr "API Preset Management"
+
+msgid "+ 新建"
+msgstr "+ New"
+
+msgid "- 删除"
+msgstr "- Delete"
+
+msgid "名称:"
+msgstr "Name:"
+
+msgid "💾 保存"
+msgstr "💾 Save"
+
+msgid "预设名称"
+msgstr "Preset Name"
+
+msgid "API Key（可选）"
+msgstr "API Key (optional)"
+
+msgid "http://127.0.0.1:8080"
+msgstr "http://127.0.0.1:8080"
+
+msgid "模型名（可选）"
+msgstr "Model Name (optional)"
+
+msgid "确认删除"
+msgstr "Confirm Delete"
+
+msgid "请输入预设名称。"
+msgstr "Please enter a preset name."
+
+msgid "https://api.openai.com/v1"
+msgstr "https://api.openai.com/v1"
+
+msgid "gpt-4o"
+msgstr "gpt-4o"
+
+msgid "gpt-4o / gemma 等"
+msgstr "gpt-4o / gemma etc."
+
+msgid "sk-xxx（可选）"
+msgstr "sk-xxx (optional)"
+
+msgid "引擎配置 - {}"
+msgstr "Engine Config - {}"
+
+# ── Region Manager ──
+msgid "📐 区域"
+msgstr "📐 Regions"
+
+msgid "+ 添加"
+msgstr "+ Add"
+
+msgid "清空"
+msgstr "Clear"
+
+msgid "在预览图上拖拽绘制矩形区域"
+msgstr "Drag on the preview to draw a rectangular region"
+
+msgid "引擎:"
+msgstr "Engine:"
+
+msgid "模板:"
+msgstr "Template:"
+
+msgid "启用"
+msgstr "Enabled"
+
+msgid "区域名称"
+msgstr "Region Name"
+
+msgid "X:"
+msgstr "X:"
+
+msgid "Y:"
+msgstr "Y:"
+
+msgid "W:"
+msgstr "W:"
+
+msgid "H:"
+msgstr "H:"
+
+msgid "膨胀:"
+msgstr "Expand:"
+
+msgid "ROI 区域向外膨胀的比例"
+msgstr "ROI expansion ratio"
+
+msgid "裁剪 L:"
+msgstr "Crop L:"
+
+msgid "R:"
+msgstr "R:"
+
+msgid "T:"
+msgstr "T:"
+
+msgid "B:"
+msgstr "B:"
+
+msgid "OCR 提示词:"
+msgstr "OCR Prompt:"
+
+msgid "自定义 OCR 提示词（覆盖模板）"
+msgstr "Custom OCR prompt (overrides template)"
+
+msgid "纠错提示词:"
+msgstr "Correction Prompt:"
+
+msgid "此区域专用的纠错提示词（留空用全局）"
+msgstr "Region-specific correction prompt (leave empty for global)"
+
+msgid "- 删除此区域"
+msgstr "- Delete Region"
+
+# ── Template Editor ──
+msgid "📝 提示词模板编辑器"
+msgstr "📝 Prompt Template Editor"
+
+msgid "模板:"
+msgstr "Template:"
+
+msgid "提示词内容（点击下方按钮插入占位符）:"
+msgstr "Prompt Content (click buttons to insert placeholders):"
+
+msgid "插入:"
+msgstr "Insert:"
+
+msgid "默认结构"
+msgstr "Default Structure"
+
+msgid "关闭"
+msgstr "Close"
+
+msgid "新建模板"
+msgstr "New Template"
+
+msgid "模板名称:"
+msgstr "Template Name:"
+
+msgid "重命名模板"
+msgstr "Rename Template"
+
+msgid "新名称:"
+msgstr "New Name:"
+
+msgid "重命名失败"
+msgstr "Rename Failed"
+
+# ── Display Dialog ──
+msgid "显示设置"
+msgstr "Display Settings"
+
+msgid "主题配色"
+msgstr "Theme"
+
+msgid "字体大小:"
+msgstr "Font Size:"
+
+msgid "UI 缩放:"
+msgstr "UI Scale:"
+
+msgid "整体 UI 缩放比例（影响密度和字体）"
+msgstr "Overall UI scale (affects density and fonts)"
+
+msgid "点击主题卡片即时预览，关闭窗口自动保存。"
+msgstr "Click a theme card to preview. Auto-saves on close."
+
+# ── Video Preview ──
+msgid "停止播放"
+msgstr "Stop Playback"
+
+msgid "播放/暂停 (Space)"
+msgstr "Play/Pause (Space)"
+
+msgid "前进 5 秒 (→)"
+msgstr "Forward 5s (→)"
+
+msgid "后退 5 秒 (←)"
+msgstr "Backward 5s (←)"
+
+msgid "播放速度：点击切换"
+msgstr "Play Speed: Click to toggle"
+
+msgid "开始:"
+msgstr "Start:"
+
+msgid "结束:"
+msgstr "End:"
+
+# ── Status Messages ──
+msgid "处理中..."
+msgstr "Processing..."
+
+msgid "语音识别中..."
+msgstr "Speech recognition in progress..."
+
+msgid "OCR 处理中..."
+msgstr "OCR processing..."
+
+msgid "✅ 已清除 {count} 个缓存文件"
+msgstr "✅ Cleared {count} cache files"
+
+msgid "⚠ ASR 引擎未加载"
+msgstr "⚠ ASR engine not loaded"
+
+msgid "✅ ASR 缓存命中: {n} 段"
+msgstr "✅ ASR cache hit: {n} segments"
+
+msgid "✅ 语音识别完成: {n} 段，开始 OCR..."
+msgstr "✅ Speech recognition done: {n} segments, starting OCR..."
+
+msgid "⚠ 语音识别失败: {err}，继续 OCR..."
+msgstr "⚠ Speech recognition failed: {err}, continuing OCR..."
+
+msgid "✅ 处理完成: {n} 条结果"
+msgstr "✅ Processing complete: {n} results"
+
+msgid "❌ 处理失败: {err}"
+msgstr "❌ Processing failed: {err}"
+
+msgid "已停止"
+msgstr "Stopped"
+
+msgid "已暂停"
+msgstr "Paused"
+
+msgid "继续处理"
+msgstr "Resuming"
+
+msgid "⏳ AI 纠错: 提取全文环境中..."
+msgstr "⏳ AI Correction: extracting context..."
+
+msgid "已提交 {n} 条批量纠错 [{m} 批]"
+msgstr "Submitted {n} corrections [{m} batches]"
+
+msgid "⏳ 检测中..."
+msgstr "⏳ Checking..."
+
+msgid "⏳ 获取模型列表..."
+msgstr "⏳ Fetching model list..."
+
+msgid "⚠ 引擎未初始化"
+msgstr "⚠ Engine not initialized"
+
+msgid "✅ 可用"
+msgstr "✅ Available"
+
+msgid "❌ 不可用"
+msgstr "❌ Unavailable"
+
+msgid "✅ 已保存预设: {}"
+msgstr "✅ Saved preset: {}"
+
+# ── Misc ──
+msgid "字幕"
+msgstr "Subtitle"
+
+msgid "模式"
+msgstr "Mode"
+
+msgid "流式"
+msgstr "Streaming"
+
+msgid "常规"
+msgstr "Regular"
+
+msgid "OCR+ASR"
+msgstr "OCR+ASR"
+
+msgid "仅OCR"
+msgstr "OCR Only"
+
+msgid "仅ASR"
+msgstr "ASR Only"
+
+msgid "流式字幕（去重）"
+msgstr "Streaming (Dedup)"
+
+msgid "常规字幕（固定间隔）"
+msgstr "Regular (Fixed Interval)"
+
+msgid "OCR + ASR（完整流程）"
+msgstr "OCR + ASR (Full Pipeline)"
+
+msgid "仅 OCR"
+msgstr "OCR Only"
+
+msgid "仅语音识别 (ASR)"
+msgstr "Speech Recognition Only (ASR)"
+
+msgid "仅纠正结果"
+msgstr "Corrected Only"
+
+msgid "仅原文"
+msgstr "Original Only"
+
+msgid "双语对照（原文+纠正）"
+msgstr "Bilingual (Original + Corrected)"
+
+msgid "原文 换行 纠正"
+msgstr "Original + Corrected"
+
+msgid "清除缓存"
+msgstr "Clear Cache"
+
+msgid "确定清除所有缓存？\n（LLM 响应缓存 + ASR 结果缓存）"
+msgstr "Clear all caches?\n(LLM response cache + ASR result cache)"
+
+msgid "请先在表格中选中需要纠错的行（可多选）。"
+msgstr "Please select rows to correct in the table (multi-select allowed)."
+
+msgid "请先在表格中选中需要润色的行（可多选）。"
+msgstr "Please select rows to polish in the table (multi-select allowed)."
+
+msgid "过滤后无有效结果可导出。"
+msgstr "No valid results after filtering."
+
+msgid "请先在「后处理」标签页中添加需要过滤的关键词。"
+msgstr "Please add filter keywords in the Post-Processing tab first."
+
+msgid "暂无识别结果可提取环境。"
+msgstr "No recognition results to extract context."
+
+msgid "SRT 导出:"
+msgstr "SRT Export:"
+
+msgid "字幕时长:"
+msgstr "Subtitle Duration:"
+
+msgid "流式参数（哨兵去重）"
+msgstr "Streaming Parameters (Sentinel Dedup)"
+
+msgid "常规参数（固定间隔）"
+msgstr "Regular Parameters (Fixed Interval)"
+
+msgid "解码参数"
+msgstr "Decoding Parameters"
+
+msgid "VAD (语音活动检测)"
+msgstr "VAD (Voice Activity Detection)"
+
+msgid "拖动调整顺序，编辑前缀/后缀，点 ✕ 删除行"
+msgstr "Drag to reorder, edit prefix/suffix, click ✕ to delete"
+
+msgid "前缀"
+msgstr "Prefix"
+
+msgid "后缀"
+msgstr "Suffix"
+
+msgid "提示词配置"
+msgstr "Prompt Configuration"
+
+msgid "字数骤降比:"
+msgstr "Drop Ratio:"
+
+msgid "连续缓冲区:"
+msgstr "Buffer Size:"
+
+msgid "相似度阈值:"
+msgstr "Similarity Threshold:"
+
+msgid "最小文字长度:"
+msgstr "Min Text Length:"
+
+msgid "输出间隔:"
+msgstr "Output Interval:"
+
+msgid "去重相似度阈值:"
+msgstr "Dedup Similarity Threshold:"
+
+msgid "置信度阈值:"
+msgstr "Confidence Threshold:"
+
+msgid "无语音阈值:"
+msgstr "No-Speech Threshold:"
+
+msgid "压缩比阈值:"
+msgstr "Compression Ratio Threshold:"
+
+msgid "温度:"
+msgstr "Temperature:"
+
+msgid "热词:"
+msgstr "Hotwords:"
+
+msgid "初始提示:"
+msgstr "Initial Prompt:"
+
+msgid "最小静音:"
+msgstr "Min Silence:"
+
+msgid "VAD 阈值:"
+msgstr "VAD Threshold:"
+
+msgid "模型目录:"
+msgstr "Model Directory:"
+
+msgid "可用模型:"
+msgstr "Available Models:"
+
+msgid "系统提示词:"
+msgstr "System Prompt:"
+
+msgid "用户提示词:"
+msgstr "User Prompt:"
+
+msgid "输出格式:"
+msgstr "Output Format:"
+
+msgid "API 预设:"
+msgstr "API Preset:"
+
+msgid "批量条数:"
+msgstr "Batch Size:"
+
+msgid "上下文窗口:"
+msgstr "Context Window:"
+
+msgid "失败重试:"
+msgstr "Retry:"
+
+msgid "并发数:"
+msgstr "Concurrency:"
+
+msgid "RPM 限制:"
+msgstr "RPM Limit:"
+
+msgid "上下文时间间隔:"
+msgstr "Context Time Gap:"
+
+msgid "重试次数:"
+msgstr "Retry Count:"
+
+msgid "处理模式:"
+msgstr "Process Mode:"
+
+msgid "帧间隔:"
+msgstr "Frame Interval:"
+
+msgid "Beam Size:"
+msgstr "Beam Size:"
+
+# ── ToolTips ──
+msgid "选择开始处理时运行的流程模式"
+msgstr "Select the processing pipeline to run"
+
+msgid "每隔多少秒处理一帧"
+msgstr "Process one frame every N seconds"
+
+msgid "流式：哨兵去重实时输出\n常规：固定间隔采样"
+msgstr "Streaming: real-time sentinel dedup\nRegular: fixed-interval sampling"
+
+msgid "文本长度骤降到上一帧的此比例时强制触发输出"
+msgstr "Trigger output when text length drops to this ratio of previous frame"
+
+msgid "连续相同文本的缓冲区大小，超过后强制输出"
+msgstr "Buffer size for consecutive identical text before forced output"
+
+msgid "每隔多少秒输出一次当前帧的全部识别结果"
+msgstr "Output all recognition results every N seconds"
+
+msgid "SRT 导出时的字幕内容模式"
+msgstr "Content mode for SRT export"
+
+msgid "总开关：开启后将使用 LLM 对 OCR 结果进行纠错"
+msgstr "Master switch: uses LLM to correct OCR results"
+
+msgid "开启后 LLM 将把 OCR 结果翻译为中文，纠错提示词仅作参考"
+msgstr "LLM translates OCR results to Chinese; correction prompt is advisory"
+
+msgid "开启后 LLM 将对纠错/翻译结果进行二次润色，使表达更自然流畅"
+msgstr "LLM polishes correction/translation results for more natural output"
+
+msgid "自动提取的全文环境信息（领域/氛围/摘要），可手动修改，不随设置保存"
+msgstr "Auto-extracted context info (domain/tone/summary), editable, not saved with settings"
+
+msgid "选择纠错使用的 API 连接预设"
+msgstr "Select API connection preset for correction"
+
+msgid "同时运行的批次数（滑动窗口并发）"
+msgstr "Number of concurrent batches (sliding window)"
+
+msgid "每分钟最大请求数，0 表示不限制"
+msgstr "Max requests per minute, 0 = unlimited"
+
+msgid "上下文窗口中，跳过时间间隔超过此值的行"
+msgstr "Skip rows with time gap exceeding this value in context window"
+
+msgid "将当前 API 配置保存为预设，供纠错等功能使用"
+msgstr "Save current API config as a preset for correction features"
+
+msgid "将当前 API Key / Base URL / 模型/超时保存为预设，供纠错等功能快速使用"
+msgstr "Save API Key/Base URL/Model/Timeout as a preset for quick use"
+
+msgid "从 Base URL 获取可用模型列表"
+msgstr "Fetch available model list from Base URL"
+
+msgid "ASR 结果在表格中显示的区域名称"
+msgstr "Region name displayed in table for ASR results"
+
+msgid "自动检测并跳过静音部分，加速处理"
+msgstr "Auto-detect and skip silence, speed up processing"
+
+msgid "Beam size，越大精度越高但越慢"
+msgstr "Beam size, larger = more accurate but slower"
+
+msgid "越高越容易跳过无声音片段"
+msgstr "Higher values skip non-speech segments more aggressively"
+
+msgid "温度参数（逗号分隔），越低越确定"
+msgstr "Temperature (comma-separated), lower = more deterministic"
+
+msgid "提升特定词汇的识别率"
+msgstr "Improve recognition rate for specific words"
+
+msgid "自定义纠错系统提示词（可选）"
+msgstr "Custom correction system prompt (optional)"
+
+msgid "自定义纠错提示词（可选）"
+msgstr "Custom correction prompt (optional)"
+
+msgid "确定要清空所有过滤关键词吗？"
+msgstr "Clear all filter keywords?"
+
+msgid "确认清空"
+msgstr "Confirm Clear"
+
+msgid "留空使用默认缓存"
+msgstr "Leave empty for default cache"
+
+msgid "热词，逗号分隔"
+msgstr "Hotwords, comma separated"
+
+msgid "初始提示词，如: 以下是普通话的转录"
+msgstr "Initial prompt, e.g.: This is Mandarin transcription"
+
+msgid "点击上方按钮自动提取环境信息，也可手动编辑..."
+msgstr "Click button above to auto-extract context, or edit manually..."
+
+msgid "🔍 立即提取全文环境"
+msgstr "🔍 Extract Context Now"
+
+msgid "启用 AI 纠错"
+msgstr "Enable AI Correction"
+
+msgid "🌐 翻译模式（将结果翻译为中文，纠错提示词仅作参考）"
+msgstr "🌐 Translate Mode (translate results to Chinese)"
+
+msgid "🔴 流式输出模式（实时逐字显示 API 响应）"
+msgstr "🔴 Streaming Mode (real-time API response display)"
+
+msgid "📋 JSON 输出模式（API 返回结构化 JSON 格式）"
+msgstr "📋 JSON Output Mode (structured JSON from API)"
+
+msgid "提取全文环境（领域/氛围/内容摘要作为纠错参考）"
+msgstr "Extract full-text context (domain/tone/summary for correction)"
+
+msgid "✨ 润色模式（纠错/翻译后二次润色质量）"
+msgstr "✨ Polish Mode (secondary polish after correction/translation)"
+
+msgid "启用 VAD（跳过静音段）"
+msgstr "Enable VAD (Skip Silence)"
+
+msgid "启用哨兵去重（骤降/缓冲区/相似度）"
+msgstr "Enable Sentinel Dedup (drop/buffer/similarity)"
+
+msgid "启用基本去重（相似文本合并）"
+msgstr "Enable Basic Dedup (merge similar text)"
+
+msgid "启用置信度过滤（仅 PaddleOCR）"
+msgstr "Enable Confidence Filter (PaddleOCR only)"
+
+msgid "字级时间戳"
+msgstr "Word-Level Timestamps"
+
+msgid "基于上文条件解码"
+msgstr "Condition on Previous Text"
+
+msgid "模糊匹配"
+msgstr "Fuzzy Match"
+
+msgid "PP-OCRv5_server (高精度/慢)"
+msgstr "PP-OCRv5_server (High Accuracy/Slow)"
+
+msgid "PP-OCRv5_mobile (平衡)"
+msgstr "PP-OCRv5_mobile (Balanced)"
+
+msgid "PP-OCRv4 (快速)"
+msgstr "PP-OCRv4 (Fast)"
+
+msgid "已加载: {}"
+msgstr "Loaded: {}"
+
+msgid "已加载音频: {}（仅支持 ASR 和纠错）"
+msgstr "Loaded audio: {} (ASR and correction only)"
+
+msgid "测试帧已截取，在预览图上拖拽绘制矩形区域"
+msgstr "Frame captured. Drag on preview to draw region"
+
+msgid "在视频预览上拖拽鼠标绘制矩形区域"
+msgstr "Drag mouse on video preview to draw region"
+
+msgid "已跳转到 {}"
+msgstr "Jumped to {}"
+
+msgid "已清空队列和预览"
+msgstr "Queue and preview cleared"
+
+msgid "✅ 已导出: {}"
+msgstr "✅ Exported: {}"
+
+msgid "✅ 完成: {} ({} 条)"
+msgstr "✅ Done: {} ({} items)"
+
+msgid "✅ 批量处理完成: {} 个文件 → output/"
+msgstr "✅ Batch complete: {} files → output/"
+
+msgid "批量处理 [{}/{}]: {}"
+msgstr "Batch [{}/{}]: {}"
+
+msgid "✅ 已导入 {} 个模板"
+msgstr "✅ Imported {} templates"
+
+msgid "✅ 已导出模板到: {}"
+msgstr "✅ Exported template to: {}"
+
+msgid "处理中... {}s / {}s | 哨兵: {}"
+msgstr "Processing... {}s / {}s | Sentinel: {}"
+
+msgid "❌ 处理失败: {}"
+msgstr "❌ Processing failed: {}"
+
+msgid "✅ 完成: {} 条结果 | 批量纠错完成"
+msgstr "✅ Done: {} results | Batch correction complete"
+
+msgid "⚠ 批量纠错出错: {}"
+msgstr "⚠ Batch correction error: {}"
+
+msgid "⏳ 正在提取全文环境..."
+msgstr "⏳ Extracting context..."
+
+msgid "✅ 全文环境已提取并回填"
+msgstr "✅ Context extracted and applied"
+
+msgid "⚠ 环境提取失败，请检查 API 配置"
+msgstr "⚠ Context extraction failed, check API config"
+
+msgid "⚠ 无有效文本可提取环境"
+msgstr "⚠ No valid text for context extraction"
+
+msgid "⚠ 环境提取失败: {}"
+msgstr "⚠ Context extraction failed: {}"
+
+msgid "✅ 已添加过滤器: {}"
+msgstr "✅ Filter added: {}"
+
+msgid "🗑 已移除过滤器: {}"
+msgstr "🗑 Filter removed: {}"
+
+msgid "⚠ 移除失败: 关键词 '{}' 不存在"
+msgstr "⚠ Remove failed: keyword '{}' not found"
+
+msgid "✅ 模板 [{}] 已保存"
+msgstr "✅ Template [{}] saved"
+
+msgid "🗑 模板 [{}] 已删除"
+msgstr "🗑 Template [{}] deleted"
+
+msgid "✅ API 预设已更新"
+msgstr "✅ API preset updated"
+
+msgid "导入模板"
+msgstr "Import Templates"
+
+msgid "导出模板"
+msgstr "Export Templates"
+
+msgid "打开文件"
+msgstr "Open File"
+
+msgid "导入失败"
+msgstr "Import Failed"
+
+msgid "导出失败"
+msgstr "Export Failed"
+
+msgid "错误"
+msgstr "Error"
+
+msgid "警告"
+msgstr "Warning"
+
+msgid "完成"
+msgstr "Done"
+
+msgid "模板导入失败"
+msgstr "Template import failed"
+
+msgid "模板导出失败"
+msgstr "Template export failed"
+
+msgid "SRT 导出"
+msgstr "SRT Export"
+
+msgid "排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删除行）:"
+msgstr "Sort rules (drag to reorder, edit prefix/suffix, click ✕ to delete):"
+
+msgid "原版"
+msgstr "Original"

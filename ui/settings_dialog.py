@@ -99,8 +99,11 @@ class SettingsDialog(QDialog):
 
         # ── 字幕模式 ──
         subtitle_mode = mp.get("subtitle_mode", "流式字幕（去重）")
-        _safe_set(self._subtitle_mode, subtitle_mode)
-        self._on_subtitle_mode_changed(subtitle_mode)
+        if "流式" in subtitle_mode:
+            _safe_set(self._subtitle_mode, _("流式字幕（去重）"))
+        else:
+            _safe_set(self._subtitle_mode, _("常规字幕（固定间隔）"))
+        self._on_subtitle_mode_changed(_("流式字幕（去重）") if "流式" in subtitle_mode else _("常规字幕（固定间隔）"))
 
         # ── 流式参数 ──
         _safe_set(self._s_sentinel, mp.get("sentinel_enabled", True))
@@ -175,20 +178,31 @@ class SettingsDialog(QDialog):
             self._sort_items.append((prefix, name, suffix))
             self._add_sort_row(name, prefix, suffix)
 
+    @staticmethod
+    def _rev_map(translated: str, *pairs: tuple[str, str]) -> str:
+        """将翻译后的文本映射回内部中文值。"""
+        for orig_chinese, _translated in pairs:
+            if translated == (_(orig_chinese) if orig_chinese != translated else orig_chinese):
+                return orig_chinese
+        return translated
+
     def _sync_values_to_cp(self):
         """将对话框中的值通过 ConfigPanel 公共 API 写回。"""
         params = {}
 
         # ── 基础设置 ──
         params["frame_interval"] = self._frame_interval.value()
-        params["process_mode"] = self._process_mode.currentText()
+        params["process_mode"] = self._rev_map(self._process_mode.currentText(),
+            ("OCR + ASR（完整流程）", "仅 OCR", "仅语音识别 (ASR)"))
         params["subtitle_duration"] = self._subtitle_duration.value()
-        params["srt_export_mode"] = self._srt_export.currentText()
+        params["srt_export_mode"] = self._rev_map(self._srt_export.currentText(),
+            ("仅纠正结果", "仅原文", "双语对照（原文+纠正）", "原文 换行 纠正"))
         params["post_sim_dedup"] = self._post_sim_dedup.isChecked()
         params["corr_enabled"] = self._corr_enabled.isChecked()
 
         # ── 字幕模式 ──
-        params["subtitle_mode"] = self._subtitle_mode.currentText()
+        params["subtitle_mode"] = self._rev_map(self._subtitle_mode.currentText(),
+            ("流式字幕（去重）", "常规字幕（固定间隔）"))
         params["sentinel_enabled"] = self._s_sentinel.isChecked()
 
         # ── 流式参数 ──
@@ -392,17 +406,17 @@ class SettingsDialog(QDialog):
         mf = QFormLayout()
         mf.setSpacing(8)
         self._process_mode = QComboBox()
-        self._process_mode.addItems(["OCR + ASR（完整流程）", "仅 OCR", "仅语音识别 (ASR)"])
-        self._process_mode.setToolTip("选择开始处理时运行的流程模式")
-        mf.addRow("处理模式:", self._process_mode)
+        self._process_mode.addItems([_("OCR + ASR（完整流程）"), _("仅 OCR"), _("仅语音识别 (ASR)")])
+        self._process_mode.setToolTip(_("选择开始处理时运行的流程模式"))
+        mf.addRow(_("处理模式:"), self._process_mode)
         self._frame_interval = QDoubleSpinBox()
         self._frame_interval.setRange(0.02, 10.0)
         self._frame_interval.setSingleStep(0.1)
         self._frame_interval.setDecimals(2)
         self._frame_interval.setValue(0.1)
-        self._frame_interval.setSuffix(" 秒")
-        self._frame_interval.setToolTip("每隔多少秒处理一帧")
-        mf.addRow("帧间隔:", self._frame_interval)
+        self._frame_interval.setSuffix(_(" 秒"))
+        self._frame_interval.setToolTip(_("每隔多少秒处理一帧"))
+        mf.addRow(_("帧间隔:"), self._frame_interval)
         mode_group.addLayout(mf)
         layout.addWidget(mode_group)
 
@@ -418,17 +432,17 @@ class SettingsDialog(QDialog):
         self._engine_combo.currentTextChanged.connect(self._on_engine_changed)
         ef.addRow(_("引擎:"), self._engine_combo)
         self._eng_api_key = QLineEdit()
-        self._eng_api_key.setPlaceholderText("sk-xxx")
+        self._eng_api_key.setPlaceholderText(_("sk-xxx"))
         self._eng_api_key.setEchoMode(QLineEdit.Password)
         ef.addRow(_("API Key:"), self._eng_api_key)
         self._eng_base_url = QLineEdit()
-        self._eng_base_url.setPlaceholderText("https://api.openai.com/v1")
+        self._eng_base_url.setPlaceholderText(_("https://api.openai.com/v1"))
         ef.addRow(_("Base URL:"), self._eng_base_url)
         model_row = QHBoxLayout()
         self._eng_model = QComboBox()
         self._eng_model.setEditable(True)
         self._eng_model.setInsertPolicy(QComboBox.NoInsert)
-        self._eng_model.lineEdit().setPlaceholderText("gpt-4o")
+        self._eng_model.lineEdit().setPlaceholderText(_("gpt-4o"))
         self._eng_model.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         model_row.addWidget(self._eng_model, 1)
         self._eng_model_status = QLabel("")
@@ -441,7 +455,7 @@ class SettingsDialog(QDialog):
         self._eng_timeout = QSpinBox()
         self._eng_timeout.setRange(1, 300)
         self._eng_timeout.setValue(30)
-        self._eng_timeout.setSuffix(" 秒")
+        self._eng_timeout.setSuffix(_(" 秒"))
         ef.addRow(_("超时:"), self._eng_timeout)
         self._eng_gpu = QCheckBox(_("启用 GPU 加速"))
         ef.addRow("", self._eng_gpu)
@@ -468,12 +482,12 @@ class SettingsDialog(QDialog):
         self._subtitle_duration.setRange(0.5, 30.0)
         self._subtitle_duration.setSingleStep(0.5)
         self._subtitle_duration.setValue(3.0)
-        self._subtitle_duration.setSuffix(" 秒")
-        of.addRow("字幕时长:", self._subtitle_duration)
+        self._subtitle_duration.setSuffix(_(" 秒"))
+        of.addRow(_("字幕时长:"), self._subtitle_duration)
         self._srt_export = QComboBox()
-        self._srt_export.addItems(["仅纠正结果", "仅原文", "双语对照（原文+纠正）", "原文 换行 纠正"])
-        self._srt_export.setToolTip("SRT 导出时的字幕内容模式")
-        of.addRow("SRT 导出:", self._srt_export)
+        self._srt_export.addItems([_("仅纠正结果"), _("仅原文"), _("双语对照（原文+纠正）"), _("原文 换行 纠正")])
+        self._srt_export.setToolTip(_("SRT 导出时的字幕内容模式"))
+        of.addRow(_("SRT 导出:"), self._srt_export)
         out_group.addLayout(of)
         layout.addWidget(out_group)
 
@@ -492,10 +506,10 @@ class SettingsDialog(QDialog):
         mode_form = QFormLayout()
         mode_form.setSpacing(8)
         self._subtitle_mode = QComboBox()
-        self._subtitle_mode.addItems(["流式字幕（去重）", "常规字幕（固定间隔）"])
-        self._subtitle_mode.setToolTip("流式：哨兵去重实时输出\n常规：固定间隔采样")
+        self._subtitle_mode.addItems([_("流式字幕（去重）"), _("常规字幕（固定间隔）")])
+        self._subtitle_mode.setToolTip(_("流式：哨兵去重实时输出\n常规：固定间隔采样"))
         self._subtitle_mode.currentTextChanged.connect(self._on_subtitle_mode_changed)
-        mode_form.addRow("字幕模式:", self._subtitle_mode)
+        mode_form.addRow(_("字幕模式:"), self._subtitle_mode)
         mode_group.addLayout(mode_form)
         layout.addWidget(mode_group)
 
@@ -653,7 +667,7 @@ class SettingsDialog(QDialog):
         return tab
 
     def _on_subtitle_mode_changed(self, mode: str):
-        is_streaming = "流式" in mode
+        is_streaming = (mode == _("流式字幕（去重）") or "流式" in mode)
         self._s_group.setVisible(is_streaming)
         self._r_group.setVisible(not is_streaming)
 
