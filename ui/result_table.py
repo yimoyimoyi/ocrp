@@ -76,8 +76,8 @@ class _CellEditor(QWidget):
             self._editor.setPlainText(text)
             self._editor.setAcceptRichText(False)
             self._editor.setFrameShape(QFrame.NoFrame)
-            self._editor.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            self._editor.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self._editor.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # type: ignore[attr-defined]
+            self._editor.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # type: ignore[attr-defined]
         else:
             self._editor = QLineEdit(self)
             self._editor.setText(text)
@@ -91,7 +91,9 @@ class _CellEditor(QWidget):
         self._editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._editor.installEventFilter(self)
         if isinstance(self._editor, QTextEdit):
-            self._editor.viewport().installEventFilter(self)
+            vp = self._editor.viewport()
+            if vp:
+                vp.installEventFilter(self)
         layout.addWidget(self._editor)
 
     def set_sync_callback(self, cb):
@@ -419,7 +421,7 @@ class ResultTableWidget(QWidget):
         wrapper.setAutoFillBackground(True)
         lo = QHBoxLayout(wrapper)
         lo.setContentsMargins(0, 0, 0, 0)
-        lo.setAlignment(Qt.AlignCenter)
+        lo.setAlignment(Qt.AlignCenter)  # type: ignore[attr-defined]
         lo.addWidget(btn)
         return wrapper
 
@@ -592,7 +594,7 @@ class ResultTableWidget(QWidget):
         self._is_templated = bool(region_order)
         all_region_names = set(r.get("region", "") for r in self._results)
         from collections import OrderedDict
-        time_groups = OrderedDict()
+        time_groups: dict[float, dict] = OrderedDict()
         for r in self._results:
             ts_key = round(r.get("time_sec", 0.0) or 0.0, 1)
             if ts_key not in time_groups:

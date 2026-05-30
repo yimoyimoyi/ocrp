@@ -78,7 +78,7 @@ class CollapsibleGroup(QWidget):
         # ── 标题栏 ──
         header = QWidget()
         header.setObjectName("collapsibleHeader")
-        header.setCursor(Qt.PointingHandCursor)
+        header.setCursor(Qt.PointingHandCursor)  # type: ignore[attr-defined]
         header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         header.mousePressEvent = lambda e: self._collapse(not self._collapsed)
         hl = QHBoxLayout(header)
@@ -87,7 +87,7 @@ class CollapsibleGroup(QWidget):
 
         self._toggle_btn = QToolButton()
         self._toggle_btn.setObjectName("collapsibleToggle")
-        self._toggle_btn.setArrowType(Qt.DownArrow if not self._collapsed else Qt.RightArrow)
+        self._toggle_btn.setArrowType(Qt.DownArrow if not self._collapsed else Qt.RightArrow)  # type: ignore[attr-defined]
         self._toggle_btn.setAutoRaise(True)
         self._toggle_btn.setFixedSize(16, 16)
         self._toggle_btn.clicked.connect(lambda: self._collapse(not self._collapsed))
@@ -109,7 +109,7 @@ class CollapsibleGroup(QWidget):
 
         if self._collapsed:
             content.setVisible(False)
-            self._toggle_btn.setArrowType(Qt.RightArrow)
+            self._toggle_btn.setArrowType(Qt.RightArrow)  # type: ignore[attr-defined]
             self._update_border_radius(True)
 
     def _update_border_radius(self, collapsed: bool):
@@ -143,18 +143,19 @@ class CollapsibleGroup(QWidget):
         if content:
             content.setVisible(not coll)
         # 箭头切换
-        self._toggle_btn.setArrowType(Qt.RightArrow if coll else Qt.DownArrow)
+        self._toggle_btn.setArrowType(Qt.RightArrow if coll else Qt.DownArrow)  # type: ignore[attr-defined]
         # 动态圆角
         self._update_border_radius(coll)
         # 逐级向上通知布局更新
         self.updateGeometry()
-        p = self.parent()
+        p: QWidget | None = self.parentWidget()
         while p:
             if isinstance(p, (QSplitter, QMainWindow)):
                 break
-            if p.layout():
-                p.layout().invalidate()
-                p.layout().activate()
+            lay = p.layout()
+            if lay:
+                lay.invalidate()
+                lay.activate()
             p.updateGeometry()
-            p = p.parent()
+            p = p.parentWidget()
         self.toggled.emit(coll)

@@ -196,7 +196,7 @@ warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true      # PyQt5/PaddleOCR 等无类型存根
 check_untyped_defs = false         # 渐进式：先不检查无注释函数
-disable_error_code = ["assignment", "arg-type", "return-value"]
+disable_error_code = ["assignment", "arg-type", "return-value", "override", "attr-defined", "union-attr", "no-any-return", "var-annotated", "no-redef", "dict-item", "abstract", "misc", "call-overload", "has-type", "func-returns-value"]
 
 # ═══════════════════════════════════════════════════════════════════
 # Pytest

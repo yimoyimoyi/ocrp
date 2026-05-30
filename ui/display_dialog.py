@@ -29,7 +29,7 @@ class _ThemeCard(QFrame):
         super().__init__(parent)
         self._key = theme_key
         self._selected = selected
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.PointingHandCursor)  # type: ignore[attr-defined]
         self.setFixedSize(120, 64)
         self._update_style()
 
@@ -53,7 +53,7 @@ class _ThemeCard(QFrame):
         # 主题名
         name_label = QLabel(display_name)
         name_label.setStyleSheet("font-size: 11px; font-weight: 500;")
-        name_label.setAlignment(Qt.AlignCenter)
+        name_label.setAlignment(Qt.AlignCenter)  # type: ignore[attr-defined]
         layout.addWidget(name_label)
 
     def _update_style(self):

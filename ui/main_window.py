@@ -97,9 +97,9 @@ class ColoredStatusLabel(QLabel):
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
-        self.setTextFormat(Qt.RichText)
+        self.setTextFormat(Qt.RichText)  # type: ignore[attr-defined]
 
-    def setText(self, text: str):
+    def setText(self, text: str):  # type: ignore[override]
         color = _detect_status_color(text)
         super().setText(f'<span style="color:{color}">{text}</span>')
 
@@ -1180,7 +1180,9 @@ class MainWindow(QMainWindow):
             # 在状态栏显示模板描述（如果有）
             desc = t.get("description", "")
             if desc:
-                self.statusBar().showMessage(f"模板: {name} — {desc}", 3000)
+                sb = self.statusBar()
+                if sb:
+                    sb.showMessage(f"模板: {name} — {desc}", 3000)
         self._config_panel.select_template(name)
         self._sync_region_defaults()
         # 同步菜单栏

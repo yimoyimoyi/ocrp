@@ -169,7 +169,7 @@ class LanguageManager:
 
     _instance = None
     _current_lang: str = "zh_CN"
-    _listeners: list[callable] = []
+    _listeners: list = []
 
     def __new__(cls):
         if cls._instance is None:
@@ -204,12 +204,12 @@ class LanguageManager:
                 pass
         return True
 
-    def register_listener(self, callback: callable):
+    def register_listener(self, callback):
         """注册语言切换监听器。callback(lang_code) 在语言切换时被调用。"""
         if callback not in self._listeners:
             self._listeners.append(callback)
 
-    def unregister_listener(self, callback: callable):
+    def unregister_listener(self, callback):
         """注销语言切换监听器。"""
         if callback in self._listeners:
             self._listeners.remove(callback)

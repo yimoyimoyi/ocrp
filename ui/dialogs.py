@@ -59,7 +59,9 @@ class EngineConfigDialog(QDialog):
         self._model_edit = QComboBox()
         self._model_edit.setEditable(True)
         self._model_edit.setInsertPolicy(QComboBox.NoInsert)
-        self._model_edit.lineEdit().setPlaceholderText(_("gpt-4o"))
+        le = self._model_edit.lineEdit()
+        if le:
+            le.setPlaceholderText(_("gpt-4o"))
         self._model_edit.setEditText(config.get("model", ""))
         form.addRow(_("模型:"), self._model_edit)
 

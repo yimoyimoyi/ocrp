@@ -56,7 +56,7 @@ class ConfigPanel(QObject):
 
     @property
     def corr_enabled(self) -> bool:
-        return self._params.get("corr_enabled", False)
+        return bool(self._params.get("corr_enabled", False))
 
     @corr_enabled.setter
     def corr_enabled(self, val: bool):
@@ -64,7 +64,7 @@ class ConfigPanel(QObject):
 
     @property
     def post_sim_dedup(self) -> bool:
-        return self._params.get("post_sim_dedup", True)
+        return bool(self._params.get("post_sim_dedup", True))
 
     @post_sim_dedup.setter
     def post_sim_dedup(self, val: bool):
@@ -72,7 +72,7 @@ class ConfigPanel(QObject):
 
     @property
     def corr_translate(self) -> bool:
-        return self._params.get("corr_translate", False)
+        return bool(self._params.get("corr_translate", False))
 
     @corr_translate.setter
     def corr_translate(self, val: bool):
@@ -80,7 +80,7 @@ class ConfigPanel(QObject):
 
     @property
     def sentinel_enabled(self) -> bool:
-        return self._params.get("sentinel_enabled", True)
+        return bool(self._params.get("sentinel_enabled", True))
 
     @sentinel_enabled.setter
     def sentinel_enabled(self, val: bool):
@@ -88,7 +88,7 @@ class ConfigPanel(QObject):
 
     @property
     def subtitle_mode(self) -> str:
-        return self._params.get("subtitle_mode", "流式字幕（去重）")
+        return str(self._params.get("subtitle_mode", "流式字幕（去重）"))
 
     @subtitle_mode.setter
     def subtitle_mode(self, val: str):
@@ -96,7 +96,7 @@ class ConfigPanel(QObject):
 
     @property
     def process_mode(self) -> str:
-        return self._params.get("process_mode", "OCR + ASR（完整流程）")
+        return str(self._params.get("process_mode", "OCR + ASR（完整流程）"))
 
     @process_mode.setter
     def process_mode(self, val: str):
@@ -104,7 +104,7 @@ class ConfigPanel(QObject):
 
     @property
     def corr_preset_name(self) -> str:
-        return self._params.get("corr_preset", "")
+        return str(self._params.get("corr_preset", ""))
 
     @corr_preset_name.setter
     def corr_preset_name(self, val: str):
@@ -112,7 +112,7 @@ class ConfigPanel(QObject):
 
     @property
     def prompt_text(self) -> str:
-        return self._params.get("corr_prompt", "")
+        return str(self._params.get("corr_prompt", ""))
 
     @prompt_text.setter
     def prompt_text(self, val: str):
@@ -120,7 +120,7 @@ class ConfigPanel(QObject):
 
     @property
     def corr_summary_prompt(self) -> str:
-        return self._params.get("corr_summary_prompt", "")
+        return str(self._params.get("corr_summary_prompt", ""))
 
     @corr_summary_prompt.setter
     def corr_summary_prompt(self, val: str):
@@ -128,7 +128,7 @@ class ConfigPanel(QObject):
 
     @property
     def corr_system_prompt(self) -> str:
-        return self._params.get("corr_system_prompt", "")
+        return str(self._params.get("corr_system_prompt", ""))
 
     @corr_system_prompt.setter
     def corr_system_prompt(self, val: str):
@@ -136,7 +136,7 @@ class ConfigPanel(QObject):
 
     @property
     def asr_model(self) -> str:
-        return self._params.get("asr_model_path", "")
+        return str(self._params.get("asr_model_path", ""))
 
     @asr_model.setter
     def asr_model(self, val: str):
@@ -144,7 +144,7 @@ class ConfigPanel(QObject):
 
     @property
     def asr_language(self) -> str:
-        return self._params.get("asr_language", "zh")
+        return str(self._params.get("asr_language", "zh"))
 
     @asr_language.setter
     def asr_language(self, val: str):
@@ -152,7 +152,7 @@ class ConfigPanel(QObject):
 
     @property
     def asr_region_name(self) -> str:
-        return self._params.get("asr_region_name", "语音")
+        return str(self._params.get("asr_region_name", "语音"))
 
     @asr_region_name.setter
     def asr_region_name(self, val: str):
@@ -160,7 +160,7 @@ class ConfigPanel(QObject):
 
     @property
     def asr_model_size(self) -> str:
-        return self._params.get("asr_model_size", "large-v3")
+        return str(self._params.get("asr_model_size", "large-v3"))
 
     @asr_model_size.setter
     def asr_model_size(self, val: str):

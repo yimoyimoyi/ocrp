@@ -311,7 +311,7 @@ class ConfigManager:
         result = dict(DEFAULT_SETTINGS)
         for key, value in cfg.items():
             if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-                result[key].update(value)
+                result[key].update(value)  # type: ignore[attr-defined]
             else:
                 result[key] = value
         return result
@@ -323,38 +323,41 @@ class ConfigManager:
         self.settings[key] = value
 
     def get_theme(self) -> str:
-        return self.settings.get("theme", "dark")
+        return str(self.settings.get("theme", "dark"))
 
     def get_scale(self) -> float:
-        return self.settings.get("ui_scale", 1.0)
+        return float(self.settings.get("ui_scale", 1.0))
 
     def get_font_size(self) -> int:
-        return self.settings.get("font_size", 12)
+        return int(self.settings.get("font_size", 12))
 
     def get_last_engine(self) -> str:
-        return self.settings.get("last_engine", "paddleocr")
+        return str(self.settings.get("last_engine", "paddleocr"))
 
     def get_last_directory(self) -> str:
-        return self.settings.get("last_directory", "")
+        return str(self.settings.get("last_directory", ""))
 
     def get_window_geometry(self) -> dict:
-        return self.settings.get("window_geometry", {})
+        d = self.settings.get("window_geometry", {})
+        return dict(d) if isinstance(d, dict) else {}
 
     def get_splitter_sizes(self) -> list:
-        return self.settings.get("splitter_sizes", [300, 400])
+        v = self.settings.get("splitter_sizes", [300, 400])
+        return list(v) if isinstance(v, list) else [300, 400]
 
     def get_hw_accel(self) -> bool:
-        return self.settings.get("hw_accel", False)
+        return bool(self.settings.get("hw_accel", False))
 
     def get_language(self) -> str:
-        return self.settings.get("language", "")
+        return str(self.settings.get("language", ""))
 
     def set_language(self, lang: str):
         self.settings["language"] = lang
         self.save_settings()
 
     def get_recent_videos(self) -> list:
-        return self.settings.get("recent_videos", [])
+        v = self.settings.get("recent_videos", [])
+        return list(v) if isinstance(v, list) else []
 
     def add_recent_video(self, path: str, max_entries: int = 10):
         recent = self.settings.get("recent_videos", [])

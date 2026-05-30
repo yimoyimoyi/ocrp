@@ -122,7 +122,6 @@ QWidget#collapsibleContent {
 QLabel#collapsibleTitle {
     color: #e0e0e0;
     font-weight: 600;
-    font-size: 13px;
 }
 QToolButton#collapsibleToggle {
     background: transparent;
@@ -421,7 +420,6 @@ QWidget#collapsibleContent {
 QLabel#collapsibleTitle {
     color: #1a1a1a;
     font-weight: 600;
-    font-size: 13px;
 }
 QToolButton#collapsibleToggle {
     background: transparent;
@@ -691,7 +689,6 @@ QWidget#collapsibleContent {
 QLabel#collapsibleTitle {
     color: #333333;
     font-weight: 600;
-    font-size: 13px;
 }
 QToolButton#collapsibleToggle {
     background: transparent;
