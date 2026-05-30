@@ -115,7 +115,7 @@ rem -- [5/7] Sync dependencies (GPU, incremental) -----------------------
 call :step "5/7" "Sync dependencies (GPU - CUDA 12.6)"
 echo     Source: PyTorch CUDA 12.6 + PaddlePaddle CUDA 12.6 + PyPI
 
-rem Step 1: Base sync (CPU deps first, then replace with GPU)
+rem Step 1: Base sync
 echo     Syncing base dependencies...
 uv sync --index-strategy unsafe-best-match 2>nul
 if !errorlevel! neq 0 (
@@ -129,9 +129,9 @@ if !errorlevel! neq 0 (
     )
 )
 
-rem Step 2: Install GPU packages via Python script (avoids cmd.exe unicode parsing issues)
+rem Step 2: Install GPU packages via Python script
 echo     Installing GPU packages...
-uv run python "scripts\setup_gpu_pkgs.py"
+uv run python "scripts\download_gpu.py" "https://download.pytorch.org/whl/cu126" "https://www.paddlepaddle.org.cn/packages/stable/cu126/"
 if !errorlevel! neq 0 (
     echo     [WARN] GPU package installation had errors
     call :log "GPU packages FAILED"

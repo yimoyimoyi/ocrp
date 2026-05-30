@@ -124,16 +124,16 @@ def _get_ocr():
     except Exception as e:
         raise RuntimeError(f"PaddleOCR 导入失败: {e}") from e
 
-    # GPU 检测
+    # GPU 检测 (check PaddlePaddle CUDA, not torch — PaddleOCR uses paddle for inference)
     device = _ocr_device
     if device.startswith("gpu"):
         try:
-            import torch
-            if not torch.cuda.is_available():
+            import paddle
+            if not paddle.device.is_compiled_with_cuda():
                 device = "cpu"
-                print("[OCR_SERVER] GPU not available, falling back to CPU", file=sys.stderr, flush=True)
+                print("[OCR_SERVER] PaddlePaddle no CUDA, falling back to CPU", file=sys.stderr, flush=True)
         except Exception as e:
-            print(f"[OCR_SERVER] GPU 检测失败: {e}", file=sys.stderr, flush=True)
+            print(f"[OCR_SERVER] GPU check failed: {e}", file=sys.stderr, flush=True)
             device = "cpu"
 
     kwargs = {

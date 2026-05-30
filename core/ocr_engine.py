@@ -429,10 +429,9 @@ class PaddleOCREngine(BaseOCREngine):
             if device.startswith("gpu"):
                 _register_gpu_dll_dirs()
                 try:
-                    import torch
-                    if not torch.cuda.is_available():
-                        logger.warning("GPU 加速已启用但 torch 检测不到 CUDA，回退 CPU。"
-                                       "请确认：1) CUDA Toolkit 已安装 2) torch 版本含 CUDA 支持 3) GPU 驱动正常")
+                    import paddle
+                    if not paddle.device.is_compiled_with_cuda():
+                        logger.warning("PaddlePaddle 未编译 CUDA 支持，回退 CPU。")
                         device = "cpu"
                 except Exception as e:
                     logger.warning("GPU 检测失败，回退 CPU: %s", e)
