@@ -100,19 +100,25 @@ class ColoredStatusLabel(QLabel):
         self._plain = text
         self._color = "#b0bec5"
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(60)
 
     def setText(self, text: str):  # type: ignore[override]
         self._plain = text
         self._color = _detect_status_color(text)
-        self._update_elided()
+        self._apply_text()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._update_elided()
+        self._apply_text()
 
-    def _update_elided(self):
+    def _apply_text(self):
+        w = self.width()
+        if w < 20:
+            # 宽度未确定，先显示纯文本，等 resize 时再省略
+            super().setText(f'<span style="color:{self._color}">{self._plain}</span>')
+            return
         fm = self.fontMetrics()
-        elided = fm.elidedText(self._plain, Qt.ElideRight, self.width() - 4)
+        elided = fm.elidedText(self._plain, Qt.ElideRight, w - 8)
         safe = elided.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         super().setText(f'<span style="color:{self._color}">{safe}</span>')
 
@@ -152,16 +158,16 @@ class MainWindow(QMainWindow):
         self._status_bar.setContentsMargins(6, 2, 6, 2)
 
         self._status_label = ColoredStatusLabel(_("就绪"))
-        self._status_label.setMinimumWidth(120)
+        self._status_label.setMinimumWidth(80)
         self._engine_label = QLabel(_("  |  引擎: paddleocr"))
         self._time_label = QLabel("")
-        self._time_label.setMinimumWidth(80)
+        self._time_label.setMinimumWidth(40)
 
         self._progress_bar = QProgressBar(self._status_bar)
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setObjectName("progressAnimated")
-        self._progress_bar.setMaximumWidth(200)
-        self._progress_bar.setMinimumWidth(120)
+        self._progress_bar.setMaximumWidth(140)
+        self._progress_bar.setMinimumWidth(80)
         self._progress_bar.setMaximumHeight(18)
         self._progress_bar.setValue(0)
         self._progress_bar.setFormat("")
@@ -1167,8 +1173,8 @@ class MainWindow(QMainWindow):
             if btn:
                 btn.setFixedHeight(capture_h)
 
-        # 状态栏高度
-        bar_h = max(22, int(26 * scale + (font_size - 13) * 0.8))
+        # 状态栏高度：至少 28px，随字体和缩放增长
+        bar_h = max(28, int(30 * scale + (font_size - 12) * 1.2))
         self._status_bar.setMinimumHeight(bar_h)
 
         # 进度条高度

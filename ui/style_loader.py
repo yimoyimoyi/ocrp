@@ -320,7 +320,6 @@ QStatusBar {
     border-top: 1px solid #333333;
     padding: 2px 10px;
     font-size: 12px;
-    min-height: 26px;
 }
 
 /* ── 进度条 ── */
@@ -590,7 +589,6 @@ QStatusBar {
     border-top: 1px solid #e0e0e0;
     padding: 2px 10px;
     font-size: 12px;
-    min-height: 26px;
 }
 
 QProgressBar#progressAnimated {
@@ -879,7 +877,6 @@ QStatusBar {
     border-top: 1px solid #d0d0d0;
     padding: 2px 10px;
     font-size: 12px;
-    min-height: 26px;
 }
 
 QProgressBar#progressAnimated {
@@ -1170,7 +1167,6 @@ QStatusBar {
     border-top: 1px solid #333333;
     padding: 2px 10px;
     font-size: 12px;
-    min-height: 26px;
 }
 
 QProgressBar#progressAnimated {
