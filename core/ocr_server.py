@@ -1,13 +1,18 @@
 """OCR 子进程服务器 —— 独立进程空间，隔离 PaddleOCR DLL 环境，避免与 torch CUDA 冲突。
 
 协议（stdin/stdout JSON 行）：
-  输入:  {"cmd":"recognize","id":1,"image_b64":"...","lang":"ch","device":"gpu"}
+  输入:  {"cmd":"recognize","shm_name":"orcp_ocr_img","width":1920,"height":100,"channels":3,"lang":"ch","device":"gpu"}
+  输入:  {"cmd":"recognize","image_b64":"...","width":1920,"height":100,"channels":3}  (向后兼容)
   输出:  {"status":"result","id":1,"text":"...","confidence":0.95}
   输出:  {"status":"error","id":1,"message":"..."}
   输入:  {"cmd":"set_device","device":"cpu"}
   输出:  {"status":"ok"}
   输入:  {"cmd":"shutdown"}
   输出:  {"status":"bye"}
+
+图像传输模式：
+  - 共享内存（推荐）：主进程写入共享内存，JSON 只传 shm_name + 尺寸，零 base64 开销
+  - base64（向后兼容）：主进程 base64 编码后放入 JSON，兼容旧版
 
 用法:
   python core/ocr_server.py --config config/ocr_engines.json
@@ -69,6 +74,7 @@ if sys.platform == "win32":
             break
     if _cudnn_bin and _tl:
         import shutil
+
         _synced = 0
         for _fn in os.listdir(_tl):
             if (_fn.startswith("cudnn") or _fn == "zlibwapi.dll") and _fn.endswith(".dll"):
@@ -94,6 +100,7 @@ _ocr_kwargs: dict = {}
 def _load_config():
     """从 JSON 文件加载 paddleocr 引擎配置。"""
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="")
     args, _ = parser.parse_known_args()
@@ -107,6 +114,7 @@ def _load_config():
         return {}
 
     from core.config_manager import _load_json_with_comments
+
     config = _load_json_with_comments(cfg_path)
     engines = config.get("engines", {})
     return engines.get("paddleocr", {}).get("config", {})
@@ -129,6 +137,7 @@ def _get_ocr():
     if device.startswith("gpu"):
         try:
             import paddle
+
             if not paddle.device.is_compiled_with_cuda():
                 device = "cpu"
                 print("[OCR_SERVER] PaddlePaddle no CUDA, falling back to CPU", file=sys.stderr, flush=True)
@@ -142,8 +151,7 @@ def _get_ocr():
         "enable_mkldnn": False,
     }
     # 只传递 PaddleOCR 实际接受的参数
-    for _k in ("use_textline_orientation", "use_doc_orientation_classify",
-               "use_doc_unwarping", "ocr_version"):
+    for _k in ("use_textline_orientation", "use_doc_orientation_classify", "use_doc_unwarping", "ocr_version"):
         if _k in _ocr_kwargs:
             kwargs[_k] = _ocr_kwargs[_k]
 
@@ -175,17 +183,29 @@ def _reload_ocr(device: str, **kwargs):
     return _get_ocr()
 
 
-def _decode_image(image_b64: str, width: int = 0, height: int = 0, channels: int = 3):
-    """从 base64 + 尺寸 JSON 解码为 numpy 数组（BGR）。"""
+def _decode_image(image_b64: str = "", shm_name: str = "", width: int = 0, height: int = 0, channels: int = 3):
+    """解码图像为 numpy 数组（BGR）。
+
+    支持两种模式：
+    - 共享内存模式（shm_name 非空）：从共享内存直接读取，零拷贝
+    - base64 模式（image_b64 非空）：从 base64 解码（向后兼容）
+    """
     import numpy as np
+
+    if shm_name:
+        # 共享内存模式：零拷贝读取
+        from core.subprocess_utils import SharedMemoryManager
+
+        return SharedMemoryManager.read_array_from(shm_name, width, height, channels)
+
+    # base64 模式（向后兼容）
     try:
         raw = base64.b64decode(image_b64)
         if width > 0 and height > 0:
-            # 原始像素 raw bytes 模式：零编码开销
             img = np.frombuffer(raw, dtype=np.uint8).reshape((height, width, channels))
             return img
-        # fallback: 编码图像模式（向后兼容）
         import cv2
+
         buf = np.frombuffer(raw, dtype=np.uint8)
         img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
         if img is None:
@@ -253,13 +273,19 @@ def main():
 
         elif cmd == "recognize":
             image_b64 = req.get("image_b64", "")
-            if not image_b64:
-                _send({"status": "error", "id": req_id, "message": "Missing image_b64"})
+            shm_name = req.get("shm_name", "")
+            if not image_b64 and not shm_name:
+                _send({"status": "error", "id": req_id, "message": "Missing image_b64 or shm_name"})
                 continue
 
             try:
-                img = _decode_image(image_b64, req.get("width", 0),
-                                    req.get("height", 0), req.get("channels", 3))
+                img = _decode_image(
+                    image_b64=image_b64,
+                    shm_name=shm_name,
+                    width=req.get("width", 0),
+                    height=req.get("height", 0),
+                    channels=req.get("channels", 3),
+                )
             except Exception as e:
                 _send({"status": "error", "id": req_id, "message": str(e)})
                 continue
@@ -267,6 +293,7 @@ def main():
             try:
                 ocr = _get_ocr()
                 import time as _t
+
                 t0 = _t.time()
                 result = ocr.predict(img)
                 elapsed = _t.time() - t0

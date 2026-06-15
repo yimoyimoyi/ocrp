@@ -1,6 +1,5 @@
 """视频帧处理器 —— FFmpeg 解码 + 哨兵检测。"""
 
-import difflib
 import os
 import threading
 from collections.abc import Callable
@@ -16,7 +15,10 @@ if TYPE_CHECKING:
 
 
 def get_similarity(a: str, b: str) -> float:
-    return difflib.SequenceMatcher(None, a, b).ratio() if a and b else 0.0
+    """计算两个字符串的相似度（0.0 ~ 1.0），使用 RapidFuzz C++ 实现。"""
+    from rapidfuzz.fuzz import ratio
+
+    return ratio(a, b) / 100.0 if a and b else 0.0
 
 
 def format_time(seconds: float) -> str:
@@ -47,7 +49,7 @@ def extract_roi(frame: np.ndarray, region: dict) -> np.ndarray | None:
 
     # ── 有自定义区域 ──
     if w > 0 and h > 0:
-        roi = frame[y:y+h, x:x+w]
+        roi = frame[y : y + h, x : x + w]
         if roi.size == 0:
             return None
         # 膨胀比例
@@ -59,7 +61,7 @@ def extract_roi(frame: np.ndarray, region: dict) -> np.ndarray | None:
                 fy = max(0, y - expand_px)
                 fw = min(frame.shape[1] - fx, w + 2 * expand_px)
                 fh = min(frame.shape[0] - fy, h + 2 * expand_px)
-                roi = frame[fy:fy+fh, fx:fx+fw]
+                roi = frame[fy : fy + fh, fx : fx + fw]
                 if roi.size == 0:
                     return None
         return roi
@@ -75,7 +77,7 @@ def extract_roi(frame: np.ndarray, region: dict) -> np.ndarray | None:
         cr = min(crop_r, rw - 1)
         ct = min(crop_t, rh - 1)
         cb = min(crop_b, rh - 1)
-        roi = frame[ct:rh-cb, cl:rw-cr]
+        roi = frame[ct : rh - cb, cl : rw - cr]
         if roi.size == 0:
             return None
         return roi
@@ -91,9 +93,11 @@ class FrameProcessor:
         on_progress: Callable | None = None,
         on_log: Callable | None = None,
         filter_manager: "FilterManager | None" = None,
+        hw_accel: bool = False,
     ):
         self._engine_mgr = engine_manager
         self._regions = regions or []
+        self._hw_accel = hw_accel
         self._on_result = on_result
         self._on_progress = on_progress
         self._on_log = on_log
@@ -145,14 +149,24 @@ class FrameProcessor:
         is_paddle = ocr_engine.engine_name == "paddleocr"
         text = ocr_engine.recognize(roi) if is_paddle else ocr_engine.recognize(roi, prompt=region.get("prompt", ""))
         if is_paddle:
-            conf = ocr_engine.last_confidence if hasattr(ocr_engine, 'last_confidence') else 0.0
+            conf = ocr_engine.last_confidence if hasattr(ocr_engine, "last_confidence") else 0.0
         else:
             conf = 1.0
         return (text, conf)
 
-    def _process_regions_parallel(self, frame: np.ndarray, engine_name: str,
-                                   regions: list, max_workers: int = 4) -> list:
-        """并行处理同一帧内的多个区域 OCR，大幅减少多 ROI 场景耗时。"""
+    def _process_regions_parallel(
+        self,
+        frame: np.ndarray,
+        engine_name: str,
+        regions: list,
+        max_workers: int = 4,
+        executor: ThreadPoolExecutor | None = None,
+    ) -> list:
+        """并行处理同一帧内的多个区域 OCR，大幅减少多 ROI 场景耗时。
+
+        Args:
+            executor: 外部传入的线程池（复用模式）。为 None 时内部创建临时线程池。
+        """
         if len(regions) <= 1:
             # 单区域：直接串行，避免线程池开销
             result = []
@@ -170,8 +184,11 @@ class FrameProcessor:
                 result.append((rname, re_name, text, conf))
             return result
 
-        results = []
-        with ThreadPoolExecutor(max_workers=min(max_workers, len(regions))) as executor:
+        own_executor = executor is None
+        if own_executor:
+            executor = ThreadPoolExecutor(max_workers=min(max_workers, len(regions)))
+        try:
+            results = []
             futures = {}
             for region in regions:
                 re_name = region.get("engine", engine_name) or engine_name
@@ -189,7 +206,10 @@ class FrameProcessor:
                     self._log(f"⚠ OCR [{rname}]: {e}")
                     continue
                 results.append((rname, re_name, text, conf))
-        return results
+            return results
+        finally:
+            if own_executor:
+                executor.shutdown(wait=False)
 
     def _prefetch_reader(self, ff, fps: float):
         """后台预读线程：提前读取下一帧，让 I/O 与 OCR 重叠。"""
@@ -202,10 +222,12 @@ class FrameProcessor:
             pass
         return None
 
-    def process_video(self, video_path: str, engine_name: str | None = None,
-                      time_start: float = 0.0, time_end: float = 0.0) -> list:
+    def process_video(
+        self, video_path: str, engine_name: str | None = None, time_start: float = 0.0, time_end: float = 0.0
+    ) -> list:
         from core.ffmpeg_reader import FFmpegReader
-        ff = FFmpegReader(video_path, hw_accel=False)
+
+        ff = FFmpegReader(video_path, hw_accel=self._hw_accel)
         if not ff.open():
             self._log(f"❌ 无法打开: {video_path}")
             return []
@@ -219,7 +241,7 @@ class FrameProcessor:
             for region in self._regions:
                 re_name = region.get("engine", engine_name) or engine_name
                 re_engine = self._engine_mgr.get_engine(re_name)
-                if re_engine and hasattr(re_engine, 'set_ocr_version'):
+                if re_engine and hasattr(re_engine, "set_ocr_version"):
                     re_engine.set_ocr_version(self._s_ocr_version)
             self._log(f"🔤 哨兵 OCR: {self._s_ocr_version}")
 
@@ -239,8 +261,9 @@ class FrameProcessor:
             frame_idx = int(time_start * fps)
             ff.seek(frame_idx)
 
-        # ── 帧预读：后台线程提前读取下一帧，让 I/O 与 OCR 重叠 ──
+        # ── 线程池：帧预读 + 多区域并行 OCR（复用，避免每帧创建/销毁开销）──
         prefetch_executor = ThreadPoolExecutor(max_workers=1)
+        region_executor = ThreadPoolExecutor(max_workers=4)
         prefetch_future = None
 
         # 读取首帧
@@ -276,7 +299,9 @@ class FrameProcessor:
                 next_future = prefetch_executor.submit(self._prefetch_reader, ff, fps)
 
                 # ── 并行 OCR 当前帧的全部区域 ──
-                frame_results = self._process_regions_parallel(frame, engine_name, self._regions)
+                frame_results = self._process_regions_parallel(
+                    frame, engine_name, self._regions, executor=region_executor
+                )
 
                 if is_regular:
                     # ── 常规字幕模式：按固定间隔输出，可选基本去重 ──
@@ -316,8 +341,7 @@ class FrameProcessor:
 
                         if self._sentinel_enabled:
                             force_sentinel = (
-                                len(last_raw) > self._s_min_text_len
-                                and len(text) < len(last_raw) * self._s_drop_ratio
+                                len(last_raw) > self._s_min_text_len and len(text) < len(last_raw) * self._s_drop_ratio
                             )
                             if force_sentinel:
                                 if last_sent and get_similarity(text, last_sent) < self._s_sim_threshold:
@@ -373,6 +397,7 @@ class FrameProcessor:
                 frame_idx += 1
 
         finally:
+            region_executor.shutdown(wait=False)
             prefetch_executor.shutdown(wait=False)
             ff.close()
         self._log(f"✅ 完成: {len(all_results)} 条")

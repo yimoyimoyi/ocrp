@@ -34,9 +34,16 @@ CACHE_LOCK = threading.Lock()
 
 # ── 缓存读写 ──────────────────────────────────────────────────────
 
-def _get_cache_key(model: str, temperature: float, prompt: str, system_prompt: str,
-                   max_tokens: int = 2048, resp_type: str | None = None,
-                   base_url: str = "") -> str:
+
+def _get_cache_key(
+    model: str,
+    temperature: float,
+    prompt: str,
+    system_prompt: str,
+    max_tokens: int = 2048,
+    resp_type: str | None = None,
+    base_url: str = "",
+) -> str:
     """生成缓存键 —— 任何影响 LLM 输出的参数都应参与计算。"""
     raw = f"{model}|{temperature}|{max_tokens}|{resp_type}|{base_url}|{prompt}|{system_prompt}"
     return hashlib.md5(raw.encode()).hexdigest()
@@ -44,6 +51,10 @@ def _get_cache_key(model: str, temperature: float, prompt: str, system_prompt: s
 
 # ── 缓存 TTL（秒） ──
 CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 天
+
+# ── 进程内内存缓存（一级缓存，避免重复文件 I/O）──
+_memory_cache: dict[str, Any] = {}
+_memory_cache_lock = threading.Lock()
 
 
 def _is_meta_response(resp) -> bool:
@@ -56,13 +67,12 @@ def _is_meta_response(resp) -> bool:
     text = resp.strip()
     if len(text) > 100:
         return False
-    meta_prefixes = ("好的，请提供", "请提供", "请问", "好的，请问", "我需要您提供",
-                     "请告诉我", "请您提供")
+    meta_prefixes = ("好的，请提供", "请提供", "请问", "好的，请问", "我需要您提供", "请告诉我", "请您提供")
     return any(text.startswith(p) for p in meta_prefixes)
 
 
-def _load_cache(cache_key: str, log_title: str):
-    """从缓存文件中读取匹配的响应。"""
+def _load_cache_from_file(cache_key: str, log_title: str):
+    """从缓存文件中读取匹配的响应（二级缓存）。"""
     with CACHE_LOCK:
         cache_file = LLM_LOG_DIR / f"{log_title}.json"
         if cache_file.exists():
@@ -73,27 +83,39 @@ def _load_cache(cache_key: str, log_title: str):
                 for entry in entries:
                     if entry.get("cache_key") == cache_key:
                         resp = entry.get("response")
-                        # 跳过空响应条目（历史缓存污染）
                         if isinstance(resp, str) and not resp.strip():
                             continue
-                        # 跳过 meta-response（LLM 未执行任务）
                         if _is_meta_response(resp):
                             logger.debug("跳过 meta-response 缓存 [%s]: %s", log_title, resp[:40])
                             continue
-                        # 跳过过期条目
                         cached_at = entry.get("cached_at", 0)
                         if cached_at and (now - cached_at) > CACHE_TTL_SECONDS:
                             logger.debug("缓存已过期 [%s]: %s", log_title, cache_key[:12])
                             continue
-                        logger.debug("命中缓存 [%s]: %s", log_title, cache_key[:12])
+                        logger.debug("命中文件缓存 [%s]: %s", log_title, cache_key[:12])
                         return resp
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning("读取缓存失败 [%s]: %s", log_title, e)
     return None
 
 
+def _load_cache(cache_key: str, log_title: str):
+    """读取缓存（一级内存缓存 → 二级文件缓存）。"""
+    # 一级缓存：内存查找（~0.01ms）
+    with _memory_cache_lock:
+        if cache_key in _memory_cache:
+            logger.debug("命中内存缓存 [%s]: %s", log_title, cache_key[:12])
+            return _memory_cache[cache_key]
+    # 二级缓存：文件查找（~5ms）
+    result = _load_cache_from_file(cache_key, log_title)
+    if result is not None:
+        with _memory_cache_lock:
+            _memory_cache[cache_key] = result
+    return result
+
+
 def _save_cache(cache_key: str, response, log_title: str):
-    """将响应写入缓存文件（追加）。"""
+    """将响应写入缓存（文件 + 内存）。"""
     with CACHE_LOCK:
         LLM_LOG_DIR.mkdir(parents=True, exist_ok=True)
         cache_file = LLM_LOG_DIR / f"{log_title}.json"
@@ -104,19 +126,24 @@ def _save_cache(cache_key: str, response, log_title: str):
                     entries = json.load(f)
             except (json.JSONDecodeError, OSError):
                 entries = []
-        entries.append({
-            "cache_key": cache_key,
-            "response": response,
-            "cached_at": time.time(),
-        })
-        # 控制缓存文件大小，保留最新 200 条
+        entries.append(
+            {
+                "cache_key": cache_key,
+                "response": response,
+                "cached_at": time.time(),
+            }
+        )
         if len(entries) > 200:
             entries = entries[-200:]
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)
+    # 同步写入内存缓存
+    with _memory_cache_lock:
+        _memory_cache[cache_key] = response
 
 
 # ── 速率限制 ──────────────────────────────────────────────────────
+
 
 class RateLimiter:
     """滑动窗口 RPM 速率限制器，线程安全。"""
@@ -158,6 +185,7 @@ def set_global_rpm(max_rpm: int):
 
 # ── URL 修正 ──────────────────────────────────────────────────────
 
+
 def _normalize_base_url(base_url: str) -> str:
     """标准化 base_url —— 确保以 /v1 结尾（火山引擎特殊处理）。"""
     url = base_url.rstrip("/")
@@ -169,6 +197,7 @@ def _normalize_base_url(base_url: str) -> str:
 
 
 # ── 连接测试 ──────────────────────────────────────────────────────
+
 
 def test_connection(api_key: str, base_url: str, model: str, timeout: int = 10) -> tuple[bool, str]:
     """测试 API 连接是否正常。
@@ -203,6 +232,7 @@ def test_connection(api_key: str, base_url: str, model: str, timeout: int = 10) 
 
 
 # ── 核心调用 ──────────────────────────────────────────────────────
+
 
 @except_handler("LLM API request failed", retry=3, delay=1.0, default_return=None)
 def ask_llm(
@@ -264,8 +294,7 @@ def ask_llm(
 
     # ── 缓存检查（流式模式、vision 模式、no_cache 不缓存） ──
     if not stream and image is None and not no_cache:
-        cache_key = _get_cache_key(model, temperature, prompt, system_prompt,
-                                    max_tokens, resp_type, base_url)
+        cache_key = _get_cache_key(model, temperature, prompt, system_prompt, max_tokens, resp_type, base_url)
         cached = _load_cache(cache_key, log_title)
         if cached is not None:
             return cached
@@ -287,15 +316,18 @@ def ask_llm(
         import base64
 
         import cv2
+
         _, buf = cv2.imencode(".jpg", image)
         b64 = base64.b64encode(buf).decode("utf-8")
-        messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ],
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                ],
+            }
+        )
     else:
         messages.append({"role": "user", "content": prompt})
 

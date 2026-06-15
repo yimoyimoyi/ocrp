@@ -1,38 +1,48 @@
 """结果后处理器 —— 保留 run_ocr.py 的 polish_and_save 去重 + 后处理逻辑。"""
 
 import csv
-import difflib
 import json
 import re
 from typing import Any
 
 
 def get_similarity(a: str, b: str) -> float:
-    return difflib.SequenceMatcher(None, a, b).ratio() if a and b else 0.0
+    """计算两个字符串的相似度（0.0 ~ 1.0），使用 RapidFuzz C++ 实现。"""
+    from rapidfuzz.fuzz import ratio
+
+    return ratio(a, b) / 100.0 if a and b else 0.0
 
 
-def polish_results(raw_results: list, post_keep_longest: bool = False,
-                   post_sim_dedup: bool = True,
-                   post_sim_threshold: float = 0.9,
-                   post_min_text_len: int = 2) -> list:
+def polish_results(
+    raw_results: list,
+    post_keep_longest: bool = False,
+    post_sim_dedup: bool = True,
+    post_sim_threshold: float = 0.9,
+    post_min_text_len: int = 2,
+) -> list:
     if not raw_results:
         return []
 
     parsed = []
     for item in raw_results:
         t_sec, t_str, rname, engine, raw_text = item
-        clean_content = raw_text.replace("『", "").replace("』", "")\
-            .replace("「", "").replace("」", "").strip()
+        clean_content = raw_text.replace("『", "").replace("』", "").replace("「", "").replace("」", "").strip()
 
         if not clean_content:
             continue
 
         speaker = clean_content.split("：", 1)[0] if "：" in clean_content else "NONE"
-        parsed.append({
-            "time_sec": t_sec, "time": t_str, "region": rname,
-            "engine": engine, "speaker": speaker,
-            "content": clean_content, "raw": raw_text
-        })
+        parsed.append(
+            {
+                "time_sec": t_sec,
+                "time": t_str,
+                "region": rname,
+                "engine": engine,
+                "speaker": speaker,
+                "content": clean_content,
+                "raw": raw_text,
+            }
+        )
 
     region_groups: dict[str, list] = {}
     for cur in parsed:
@@ -44,8 +54,8 @@ def polish_results(raw_results: list, post_keep_longest: bool = False,
             group.append(cur)
             continue
         last = group[-1]
-        if cur['speaker'] == last['speaker'] and get_similarity(last['content'], cur['content']) > post_sim_threshold:
-            if len(cur['content']) > len(last['content']):
+        if cur["speaker"] == last["speaker"] and get_similarity(last["content"], cur["content"]) > post_sim_threshold:
+            if len(cur["content"]) > len(last["content"]):
                 group[-1] = cur
             continue
         group.append(cur)
@@ -53,7 +63,7 @@ def polish_results(raw_results: list, post_keep_longest: bool = False,
     if post_keep_longest:
         for rname in list(region_groups.keys()):
             items = region_groups[rname]
-            longest = max(items, key=lambda x: len(x['content']))
+            longest = max(items, key=lambda x: len(x["content"]))
             region_groups[rname] = [longest]
 
     if post_sim_dedup:
@@ -62,8 +72,8 @@ def polish_results(raw_results: list, post_keep_longest: bool = False,
             for cur in region_groups[rname]:
                 is_dup = False
                 for exist in merged:
-                    if get_similarity(exist['content'], cur['content']) > post_sim_threshold:
-                        if len(cur['content']) > len(exist['content']):
+                    if get_similarity(exist["content"], cur["content"]) > post_sim_threshold:
+                        if len(cur["content"]) > len(exist["content"]):
                             merged[merged.index(exist)] = cur
                         is_dup = True
                         break
@@ -124,16 +134,18 @@ def sort_results_by_order(results: list, order_text: str) -> list:
                         first_item = group[rname]
                         break
 
-                sorted_results.append({
-                    "time_sec": ts,
-                    "end_sec": first_item.get("end_sec", ts + 3.0) if first_item else ts + 3.0,
-                    "time": first_item.get("time", "--:--") if first_item else "--:--",
-                    "region": output_line,
-                    "engine": first_item.get("engine", "") if first_item else "",
-                    "speaker": "NONE",
-                    "content": output_line,
-                    "raw": output_line,
-                })
+                sorted_results.append(
+                    {
+                        "time_sec": ts,
+                        "end_sec": first_item.get("end_sec", ts + 3.0) if first_item else ts + 3.0,
+                        "time": first_item.get("time", "--:--") if first_item else "--:--",
+                        "region": output_line,
+                        "engine": first_item.get("engine", "") if first_item else "",
+                        "speaker": "NONE",
+                        "content": output_line,
+                        "raw": output_line,
+                    }
+                )
 
     return sorted_results
 
@@ -168,9 +180,14 @@ def parse_srt_time(time_str: str) -> float:
         return 0.0
 
 
-def _export_srt(results: list, output_path: str, include_corrected: bool,
-                corrected_map: dict[int, str], keep_original: bool = False,
-                srt_mode: str = "corrected"):
+def _export_srt(
+    results: list,
+    output_path: str,
+    include_corrected: bool,
+    corrected_map: dict[int, str],
+    keep_original: bool = False,
+    srt_mode: str = "corrected",
+):
     """导出为 SRT 字幕格式。
 
     srt_mode:
@@ -247,14 +264,15 @@ from core.ai_correction import ID_TAG
 
 def _clean_id_markers(text: str) -> str:
     """去除 AI 可能残留的 [ID:n] 标记（兼容全角冒号、大小写、多余空格）。"""
-    return ID_TAG.sub('', text).strip()
+    return ID_TAG.sub("", text).strip()
 
 
-def _export_txt(results: list, output_path: str, include_corrected: bool,
-                corrected_map: dict[int, str], keep_original: bool = False):
+def _export_txt(
+    results: list, output_path: str, include_corrected: bool, corrected_map: dict[int, str], keep_original: bool = False
+):
     with open(output_path, "w", encoding="utf-8") as f:
         for i, item in enumerate(results):
-            raw = item.get('raw', '').strip()
+            raw = item.get("raw", "").strip()
             if not raw:
                 continue
 
@@ -268,8 +286,9 @@ def _export_txt(results: list, output_path: str, include_corrected: bool,
             f.write(f"[{item['time']}] {text}\n")
 
 
-def _export_json(results: list, output_path: str, include_corrected: bool,
-                 corrected_map: dict[int, str], keep_original: bool = False):
+def _export_json(
+    results: list, output_path: str, include_corrected: bool, corrected_map: dict[int, str], keep_original: bool = False
+):
     data = []
     for i, item in enumerate(results):
         raw = item.get("raw", "").strip()
@@ -280,7 +299,7 @@ def _export_json(results: list, output_path: str, include_corrected: bool,
             "engine": item["engine"],
             "speaker": item["speaker"],
             "content": item["content"],
-            "raw": raw
+            "raw": raw,
         }
         # 优先级：纠错 > 原始
         if include_corrected and i in corrected_map:
@@ -295,8 +314,9 @@ def _export_json(results: list, output_path: str, include_corrected: bool,
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def _export_csv(results: list, output_path: str, include_corrected: bool,
-                corrected_map: dict[int, str], keep_original: bool = False):
+def _export_csv(
+    results: list, output_path: str, include_corrected: bool, corrected_map: dict[int, str], keep_original: bool = False
+):
     fieldnames = ["timestamp", "region", "engine", "speaker", "content", "raw"]
     if include_corrected:
         fieldnames.append("corrected")
@@ -312,7 +332,7 @@ def _export_csv(results: list, output_path: str, include_corrected: bool,
                 "engine": item["engine"],
                 "speaker": item["speaker"],
                 "content": raw,
-                "raw": raw
+                "raw": raw,
             }
             # 优先级：纠错 > 原始
             if include_corrected and i in corrected_map:

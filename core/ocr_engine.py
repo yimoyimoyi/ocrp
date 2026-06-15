@@ -7,7 +7,6 @@ DLL 隔离策略：
 """
 
 import atexit
-import base64
 import json
 import os
 import subprocess
@@ -38,6 +37,7 @@ def load_engines_config() -> dict:
             cfg = _load_json_with_comments(path)
             from core.config_schema import validate_config
             from core.config_schemas import OCR_ENGINES_SCHEMA
+
             validate_config(cfg, OCR_ENGINES_SCHEMA, "ocr_engines.json")
             return cfg
         except Exception as e:
@@ -151,12 +151,12 @@ def _register_gpu_dll_dirs():
 
         # nvidia pip 包 DLL 目录（paddlepaddle-gpu 依赖）
         # 例如 site-packages/nvidia/cuda_runtime/lib/
-        _nvidia_root = os.path.join(os.path.dirname(__file__), "..", ".venv",
-                                     "Lib", "site-packages", "nvidia")
+        _nvidia_root = os.path.join(os.path.dirname(__file__), "..", ".venv", "Lib", "site-packages", "nvidia")
         if not os.path.isdir(_nvidia_root):
             # fallback: 从 torch 安装路径推断 site-packages
             try:
                 import torch
+
                 _sp = os.path.dirname(os.path.dirname(torch.__file__))
                 _nvidia_root = os.path.join(_sp, "nvidia")
             except Exception as _e:
@@ -186,51 +186,12 @@ def _register_gpu_dll_dirs():
         logger.debug("GPU DLL 搜索路径已注册（nvidia pip 包: %d 个目录）", _nvidia_dirs)
 
 
-# ── IPC 辅助（子进程 stdin/stdout JSON 行通信）──
+# ── IPC 辅助（warm_up 中使用 subprocess.Popen 时需要）──
 def _send_json(fp, obj: dict):
     """原子写入 JSON 行到子进程 stdin。"""
     line = json.dumps(obj, ensure_ascii=False)
     fp.write(line + "\n")
     fp.flush()
-
-
-def _read_any_response(proc: subprocess.Popen, timeout: float = 60) -> dict | None:
-    """从子进程 stdout 读取下一个 JSON 响应（不限 req_id）。"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            return None
-        line = proc.stdout.readline()
-        if not line:
-            if proc.poll() is not None:
-                return None
-            continue
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError:
-            continue
-    return None
-
-
-def _read_one_response(proc: subprocess.Popen, req_id: int, timeout: float = 60) -> dict | None:
-    """从子进程 stdout 读取匹配 req_id 的 JSON 响应。"""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            return None
-        line = proc.stdout.readline()
-        if not line:
-            if proc.poll() is not None:
-                return None
-            continue
-        try:
-            resp = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if resp.get("id") == req_id:
-            return resp
-    logger.warning("OCR 子进程响应超时 (%.0fs)", timeout)
-    return None
 
 
 # ═══════════════ 抽象基类 ═══════════════
@@ -286,12 +247,9 @@ class PaddleOCREngine(BaseOCREngine):
 
         # 子进程模式（后备，config 中可设置 use_subprocess: true）
         self._use_subprocess = bool(cfg.get("use_subprocess", False))
-        self._proc: subprocess.Popen | None = None
-        self._ready = False
-        self._req_id = 0
-        self._req_lock = threading.Lock()
-        self._stderr_thread = None
-        self._stderr_lines: list = []
+        self._subproc = None  # QtSubprocessManager（懒初始化）
+        self._shm_mgr = None  # SharedMemoryManager（懒初始化）
+        self._stop_event = threading.Event()  # 用于中断 warm_up
         if self._use_subprocess:
             atexit.register(self._stop_server)
 
@@ -302,9 +260,11 @@ class PaddleOCREngine(BaseOCREngine):
         """动态切换 OCR 模型版本（哨兵模式专用）。"""
         if not version or version == "跟随全局":
             return
-        ver_map = {"PP-OCRv4 (最快)": "PP-OCRv4",
-                   "PP-OCRv5_mobile (平衡)": "PP-OCRv5_mobile",
-                   "PP-OCRv5_server (高精度)": None}
+        ver_map = {
+            "PP-OCRv4 (最快)": "PP-OCRv4",
+            "PP-OCRv5_mobile (平衡)": "PP-OCRv5_mobile",
+            "PP-OCRv5_server (高精度)": None,
+        }
         mapped = ver_map.get(version)
         if mapped != self._ocr_version:
             self._ocr_version = mapped
@@ -315,103 +275,71 @@ class PaddleOCREngine(BaseOCREngine):
         if self._device != new_device:
             self._device = new_device
             self._ocr = None
-            if self._use_subprocess and self._ready and self._proc and self._proc.poll() is None:
+            if self._use_subprocess and self._subproc and self._subproc.is_running():
                 try:
-                    _send_json(self._proc.stdin, {"cmd": "set_device", "device": new_device})
-                    _read_any_response(self._proc, timeout=30)
+                    self._subproc.send_json({"cmd": "set_device", "device": new_device})
+                    self._subproc.read_json_response(timeout=30)
                 except Exception as e:
                     logger.warning("OCR 子进程 set_device 失败: %s", e)
                     self._stop_server()
 
-    # ── 子进程管理 ──
+    # ── 子进程管理（基于 QProcess）──
+    def _ensure_subproc(self):
+        """懒初始化 QtSubprocessManager 和 SharedMemoryManager。"""
+        if self._subproc is None:
+            from core.subprocess_utils import QtSubprocessManager
+
+            self._subproc = QtSubprocessManager()
+        if self._shm_mgr is None:
+            from core.subprocess_utils import SharedMemoryManager
+
+            self._shm_mgr = SharedMemoryManager("orcp_ocr_img", capacity=10 * 1024 * 1024)
+
     def _start_server(self) -> bool:
-        if self._ready and self._proc and self._proc.poll() is None:
+        """启动 OCR 子进程服务器。"""
+        self._ensure_subproc()
+        if self._subproc.is_running() and self._subproc._ready:
             return True
+
+        if self._subproc.is_running():
+            self._stop_server()
+
         _OCR_SERVER = str(BASE_DIR / "core" / "ocr_server.py")
         _CONFIG_PATH = str(CONFIG_DIR / "ocr_engines.json")
         _PYTHON = sys.executable
-        try:
-            self._proc = subprocess.Popen(
-                [_PYTHON, _OCR_SERVER, "--config", _CONFIG_PATH],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", errors="replace", bufsize=1,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-            )
-            # 启动 stderr 排空线程，防止管道缓冲区满导致子进程阻塞
-            self._stderr_lines = []
-            self._stderr_thread = threading.Thread(
-                target=self._drain_stderr, daemon=True)
-            self._stderr_thread.start()
-            deadline = time.time() + 120
-            while time.time() < deadline:
-                if self._proc.poll() is not None:
-                    err = self._proc.stderr.read()
-                    logger.error("OCR 子进程提前退出: %s", err[:300])
-                    self._proc = None
-                    self._paddle_available = False
-                    return False
-                line = self._proc.stderr.readline()
-                if not line:
-                    time.sleep(0.1)
-                    continue
-                logger.debug("OCR_SERVER: %s", line.rstrip())
-                if "ready" in line:
-                    self._ready = True
-                    # 子进程默认读取 config 中的 device (CPU)，主进程可能已设为 GPU
-                    if self._device.startswith("gpu"):
-                        try:
-                            _send_json(self._proc.stdin, {"cmd": "set_device", "device": self._device})
-                            _read_any_response(self._proc, timeout=30)
-                            logger.info("OCR 子进程已切换到 GPU")
-                        except Exception as _e:
-                            logger.warning("OCR 子进程 GPU 切换失败: %s", _e)
-                    return True
-                if "error" in line.lower() and "failed" in line.lower():
-                    err = self._proc.stderr.read()
-                    logger.error("OCR 子进程启动失败: %s", err[:300])
-                    self._stop_server()
-                    self._paddle_available = False
-                    return False
-            logger.error("OCR 子进程启动超时 (120s)")
-            self._stop_server()
+        _args = [_OCR_SERVER, "--config", _CONFIG_PATH]
+        _env = {"PYTHONIOENCODING": "utf-8"}
+
+        ok = self._subproc.start(_PYTHON, _args, env=_env, ready_keyword="ready", timeout=120.0)
+        if not ok:
+            self._paddle_available = False
             return False
-        except Exception as e:
-            logger.error("OCR 子进程启动异常: %s", e)
-            self._stop_server()
-            return False
+
+        # 子进程默认读取 config 中的 device (CPU)，主进程可能已设为 GPU
+        if self._device.startswith("gpu"):
+            try:
+                self._subproc.send_json({"cmd": "set_device", "device": self._device})
+                self._subproc.read_json_response(timeout=30)
+                logger.info("OCR 子进程已切换到 GPU")
+            except Exception as _e:
+                logger.warning("OCR 子进程 GPU 切换失败: %s", _e)
+        return True
 
     def _stop_server(self):
-        if self._proc and self._proc.poll() is None:
-            try:
-                _send_json(self._proc.stdin, {"cmd": "shutdown"})
-                self._proc.wait(timeout=3)
-            except Exception:
-                pass
-            if self._proc.poll() is None:
-                try:
-                    self._proc.kill()
-                    self._proc.wait(timeout=3)
-                except Exception:
-                    pass
-        self._proc = None
-        self._ready = False
-        self._stderr_lines.clear()
-
-    def _drain_stderr(self):
-        """后台线程：持续排空子进程 stderr，防止管道缓冲区满导致死锁。"""
-        try:
-            for line in self._proc.stderr:
-                self._stderr_lines.append(line.rstrip())
-        except Exception:
-            pass
+        """停止 OCR 子进程并清理共享内存。"""
+        self._stop_event.set()
+        if self._subproc:
+            self._subproc.shutdown(timeout=5)
+        if self._shm_mgr:
+            self._shm_mgr.close()
+            self._shm_mgr = None
 
     def _check_process_alive(self):
-        if self._proc and self._proc.poll() is not None:
-            code = self._proc.poll()
-            err = "\n".join(self._stderr_lines[-20:]) if self._stderr_lines else "(no stderr)"
-            logger.warning("OCR 子进程意外退出 (code=%d): %s", code, err[:200])
-            self._proc = None
-            self._ready = False
+        """检查子进程是否存活。"""
+        if self._subproc and not self._subproc.is_running():
+            err = "\n".join(self._subproc.stderr_lines[-20:])
+            logger.warning("OCR 子进程意外退出: %s", err[:200])
+            self._subproc = None
 
     # ── 进程内模式：零 IPC 开销，参考 run_ocr.py ──
     def _ensure_ocr(self):
@@ -423,6 +351,7 @@ class PaddleOCREngine(BaseOCREngine):
                 return
             # 抑制 PaddleOCR / PaddlePaddle 内部 stderr 日志
             import logging as _logging
+
             for _name in ("paddleocr", "paddle", "ppocr"):
                 _logging.getLogger(_name).setLevel(_logging.WARNING)
             device = self._device
@@ -430,6 +359,7 @@ class PaddleOCREngine(BaseOCREngine):
                 _register_gpu_dll_dirs()
                 try:
                     import paddle
+
                     if not paddle.device.is_compiled_with_cuda():
                         logger.warning("PaddlePaddle 未编译 CUDA 支持，回退 CPU。")
                         device = "cpu"
@@ -444,7 +374,8 @@ class PaddleOCREngine(BaseOCREngine):
                 self._paddle_available = False
                 return
             kwargs = {
-                "lang": self._lang, "device": device,
+                "lang": self._lang,
+                "device": device,
                 "use_angle_cls": self._use_angle_cls,
                 "enable_mkldnn": False,
                 "use_doc_orientation_classify": self._use_doc_orientation_classify,
@@ -452,14 +383,16 @@ class PaddleOCREngine(BaseOCREngine):
             }
             if self._ocr_version:
                 kwargs["ocr_version"] = self._ocr_version
-            logger.info("PaddleOCR 进程内初始化: device=%s, version=%s", device,
-                        self._ocr_version or "latest")
+            logger.info("PaddleOCR 进程内初始化: device=%s, version=%s", device, self._ocr_version or "latest")
             # 诊断：检查 paddle 是否识别 CUDA
             try:
                 import paddle as _pdl
-                logger.info("paddle CUDA compiled: %s, version: %s",
-                            getattr(_pdl.device, "is_compiled_with_cuda", lambda: "?")(),
-                            _pdl.__version__)
+
+                logger.info(
+                    "paddle CUDA compiled: %s, version: %s",
+                    getattr(_pdl.device, "is_compiled_with_cuda", lambda: "?")(),
+                    _pdl.__version__,
+                )
             except Exception as _diag_e:
                 logger.warning("paddle 诊断失败: %s", _diag_e)
             try:
@@ -500,8 +433,9 @@ class PaddleOCREngine(BaseOCREngine):
             return ""
         except Exception as e:
             err = str(e)
-            if self._device.startswith("gpu") and any(kw in err.lower() for kw in
-                ("cuda", "cublas", "gpu", "out of memory", "onednn", "pir", "dll")):
+            if self._device.startswith("gpu") and any(
+                kw in err.lower() for kw in ("cuda", "cublas", "gpu", "out of memory", "onednn", "pir", "dll")
+            ):
                 logger.warning("GPU 运行时失败: %s，回退 CPU", e)
                 self._device = "cpu"
                 self._ocr = None
@@ -512,26 +446,30 @@ class PaddleOCREngine(BaseOCREngine):
 
     # ── 子进程模式（后备，use_subprocess=true 时启用）──
     def _recognize_subprocess(self, image: np.ndarray) -> str:
+        """通过 QProcess 子进程进行 OCR 识别（共享内存传输图像）。"""
         if not self._paddle_available:
             return ""
         try:
             self._check_process_alive()
-            if not self._ready:
+            if not self._subproc or not self._subproc.is_running():
                 if not self._start_server():
                     return ""
-            raw_bytes = image.tobytes()
-            image_b64 = base64.b64encode(raw_bytes).decode("ascii")
             h, w = image.shape[:2]
-            with self._req_lock:
-                self._req_id += 1
-                req_id = self._req_id
-            _send_json(self._proc.stdin, {
-                "cmd": "recognize", "id": req_id,
-                "image_b64": image_b64,
-                "width": w, "height": h, "channels": image.shape[2] if image.ndim == 3 else 1,
-                "lang": self._lang, "device": self._device,
-            })
-            resp = _read_one_response(self._proc, req_id, timeout=60)
+            c = image.shape[2] if image.ndim == 3 else 1
+            # 写入共享内存（零 base64 编码开销）
+            self._shm_mgr.write_array(image)
+            self._subproc.send_json(
+                {
+                    "cmd": "recognize",
+                    "shm_name": self._shm_mgr.name,
+                    "width": w,
+                    "height": h,
+                    "channels": c,
+                    "lang": self._lang,
+                    "device": self._device,
+                }
+            )
+            resp = self._subproc.read_json_response(timeout=60)
             if resp and resp.get("status") == "result":
                 self._last_confidence = resp.get("confidence", 0.0)
                 return resp.get("text", "")
@@ -547,11 +485,75 @@ class PaddleOCREngine(BaseOCREngine):
             return ""
 
     def warm_up(self):
+        """后台预热：子进程模式启动 server，进程内模式加载 PaddleOCR 模型。"""
+        self._stop_event.clear()
+
         if self._use_subprocess:
-            threading.Thread(target=self._start_server, daemon=True).start()
+
+            def _do_warmup():
+                t0 = time.time()
+                proc = None
+                try:
+                    _OCR_SERVER = str(BASE_DIR / "core" / "ocr_server.py")
+                    _CONFIG_PATH = str(CONFIG_DIR / "ocr_engines.json")
+                    _PYTHON = sys.executable
+                    proc = subprocess.Popen(
+                        [_PYTHON, _OCR_SERVER, "--config", _CONFIG_PATH],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        bufsize=1,
+                        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                    )
+                    deadline = time.time() + 120
+                    while time.time() < deadline:
+                        if self._stop_event.is_set():
+                            logger.debug("OCR warm_up 被中断")
+                            proc.kill()
+                            return
+                        if proc.poll() is not None:
+                            logger.warning("OCR warm_up 子进程提前退出 (code=%d)", proc.poll())
+                            return
+                        line = proc.stderr.readline()
+                        if not line:
+                            time.sleep(0.1)
+                            continue
+                        if "ready" in line:
+                            elapsed = time.time() - t0
+                            logger.info("OCR warm_up 完成 (%.1fs)", elapsed)
+                            try:
+                                _send_json(proc.stdin, {"cmd": "shutdown"})
+                                proc.wait(timeout=5)
+                            except Exception:
+                                proc.kill()
+                            return
+                    logger.warning("OCR warm_up 超时 (120s)")
+                    proc.kill()
+                except Exception as e:
+                    logger.debug("OCR warm_up 异常: %s", e)
+                finally:
+                    if proc and proc.poll() is None:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+
+            threading.Thread(target=_do_warmup, daemon=True).start()
         else:
-            # 进程内模式：后台加载 PaddleOCR 模型，避免首次识别时的延迟
-            threading.Thread(target=self._ensure_ocr, daemon=True).start()
+
+            def _do_warmup_inprocess():
+                t0 = time.time()
+                self._ensure_ocr()
+                if self._stop_event.is_set():
+                    logger.debug("OCR warm_up (进程内) 被中断")
+                    return
+                elapsed = time.time() - t0
+                logger.info("OCR warm_up 完成 (进程内模式, %.1fs)", elapsed)
+
+            threading.Thread(target=_do_warmup_inprocess, daemon=True).start()
 
     def __del__(self):
         if self._use_subprocess:
@@ -591,8 +593,7 @@ class OpenAIVisionEngine(BaseOCREngine):
 
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         prompt_text = prompt or self._prompt_template
-        logger.info("OpenAI Vision 请求 | model=%s | image=%dx%d",
-                     self._model, image.shape[1], image.shape[0])
+        logger.info("OpenAI Vision 请求 | model=%s | image=%dx%d", self._model, image.shape[1], image.shape[0])
         logger.debug("Prompt: %s", prompt_text[:120])
         content = ask_llm(
             prompt=prompt_text,
@@ -632,8 +633,7 @@ class OllamaVisionEngine(BaseOCREngine):
 
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         prompt_text = prompt or self._prompt_template
-        logger.info("Ollama Vision 请求 | model=%s | image=%dx%d",
-                     self._model, image.shape[1], image.shape[0])
+        logger.info("Ollama Vision 请求 | model=%s | image=%dx%d", self._model, image.shape[1], image.shape[0])
         logger.debug("Prompt: %s", prompt_text[:120])
         content = ask_llm(
             prompt=prompt_text,
@@ -672,9 +672,14 @@ class LlamaCppEngine(BaseOCREngine):
 
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
         prompt_text = prompt or self._prompt_template
-        logger.info("[llama.cpp] API 请求: %s 模型=%s 图片=%dx%d prompt=%.80s",
-                     self._base_url, self._model or "(default)",
-                     image.shape[1], image.shape[0], prompt_text)
+        logger.info(
+            "[llama.cpp] API 请求: %s 模型=%s 图片=%dx%d prompt=%.80s",
+            self._base_url,
+            self._model or "(default)",
+            image.shape[1],
+            image.shape[0],
+            prompt_text,
+        )
         content = ask_llm(
             prompt=prompt_text,
             api_key=self._api_key,
@@ -726,7 +731,7 @@ class OCREngineManager:
     def set_hw_accel(self, enabled: bool):
         self._hw_accel_enabled = enabled
         for name, eng in self._engines.items():
-            if hasattr(eng, 'set_hw_accel'):
+            if hasattr(eng, "set_hw_accel"):
                 eng.set_hw_accel(enabled)
 
     def get_engine(self, name: str | None = None, warm_up: bool = True) -> BaseOCREngine | None:
@@ -755,9 +760,9 @@ class OCREngineManager:
 
         engine = engine_cls(cfg)
         self._engines[engine_name] = engine
-        if self._hw_accel_enabled and hasattr(engine, 'set_hw_accel'):
+        if self._hw_accel_enabled and hasattr(engine, "set_hw_accel"):
             engine.set_hw_accel(True)
-        if warm_up and hasattr(engine, 'warm_up'):
+        if warm_up and hasattr(engine, "warm_up"):
             engine.warm_up()
         return engine
 
@@ -779,7 +784,7 @@ class OCREngineManager:
         en = name or self._current_name
         eng = self._engines.pop(en, None)
         if eng:
-            if hasattr(eng, 'close'):
+            if hasattr(eng, "close"):
                 try:
                     eng.close()
                 except Exception as e:
@@ -789,7 +794,7 @@ class OCREngineManager:
     def release_all_engines(self):
         """释放所有 OCR 引擎。"""
         for eng in list(self._engines.values()):
-            if hasattr(eng, 'close'):
+            if hasattr(eng, "close"):
                 try:
                     eng.close()
                 except Exception as e:

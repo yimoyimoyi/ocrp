@@ -35,21 +35,21 @@ class WorkflowManager(QObject):
     """封装所有业务流程逻辑。"""
 
     # ── 信号（UI 更新） ──
-    status_msg = pyqtSignal(str)                                    # 状态栏文本
-    progress_val = pyqtSignal(int)                                  # 进度条 0-100
-    time_display = pyqtSignal(str)                                  # 时间标签
-    buttons_enabled = pyqtSignal(dict)                              # 按钮启用状态
-    error_dialog = pyqtSignal(str, str)                             # 错误弹窗 (标题, 消息)
-    info_dialog = pyqtSignal(str, str)                              # 提示弹窗 (标题, 消息)
-    result_row = pyqtSignal(float, str, str, str, str, float, float)       # (ts, t_str, rname, ename, raw, conf, end_sec)
-    process_finished = pyqtSignal()                                 # 处理完成后通知 MainWindow 做后处理
-    correction_updated = pyqtSignal(int, str, str)                  # (row, raw, corrected)
-    correction_stream_updated = pyqtSignal(int, str)                # (row, partial_text) 流式增量更新
-    polish_updated = pyqtSignal(int, str, str)                      # (row, original, polished)
-    batch_progress = pyqtSignal(str, int, int)                      # (fname, idx, total)
-    batch_file_done = pyqtSignal(str, list)                         # (file_path, results)
-    batch_all_done = pyqtSignal()                                   # 批量全部完成
-    batch_error = pyqtSignal(str)                                   # 批量出错
+    status_msg = pyqtSignal(str)  # 状态栏文本
+    progress_val = pyqtSignal(int)  # 进度条 0-100
+    time_display = pyqtSignal(str)  # 时间标签
+    buttons_enabled = pyqtSignal(dict)  # 按钮启用状态
+    error_dialog = pyqtSignal(str, str)  # 错误弹窗 (标题, 消息)
+    info_dialog = pyqtSignal(str, str)  # 提示弹窗 (标题, 消息)
+    result_row = pyqtSignal(float, str, str, str, str, float, float)  # (ts, t_str, rname, ename, raw, conf, end_sec)
+    process_finished = pyqtSignal()  # 处理完成后通知 MainWindow 做后处理
+    correction_updated = pyqtSignal(int, str, str)  # (row, raw, corrected)
+    correction_stream_updated = pyqtSignal(int, str)  # (row, partial_text) 流式增量更新
+    polish_updated = pyqtSignal(int, str, str)  # (row, original, polished)
+    batch_progress = pyqtSignal(str, int, int)  # (fname, idx, total)
+    batch_file_done = pyqtSignal(str, list)  # (file_path, results)
+    batch_all_done = pyqtSignal()  # 批量全部完成
+    batch_error = pyqtSignal(str)  # 批量出错
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -96,6 +96,7 @@ class WorkflowManager(QObject):
 
         # ── 批量状态 ──
         self._batch_files: list[str] = []
+        self._batch_load_timer = None
 
         # ── 串行状态（ASR → OCR） ──
         self._pending_vp: str = ""
@@ -147,6 +148,7 @@ class WorkflowManager(QObject):
     def _load_asr_cache(self, video_path: str) -> list | None:
         """从缓存加载 ASR 结果。"""
         import hashlib
+
         if not self._asr_cache_file.exists():
             return None
         key = hashlib.md5(video_path.encode()).hexdigest()
@@ -163,6 +165,7 @@ class WorkflowManager(QObject):
     def _save_asr_cache(self, video_path: str, results: list):
         """保存 ASR 结果到缓存。"""
         import hashlib
+
         key = hashlib.md5(video_path.encode()).hexdigest()
         self._asr_cache_dir.mkdir(parents=True, exist_ok=True)
         cache = {}
@@ -232,16 +235,17 @@ class WorkflowManager(QObject):
 
     def _reload_all_config(self):
         """每次操作前从 JSON 文件重新读取所有配置。"""
-        if self._corrector and hasattr(self._corrector, 'reload_config'):
+        if self._corrector and hasattr(self._corrector, "reload_config"):
             self._corrector.reload_config()
-        if self._asr_mgr and hasattr(self._asr_mgr, 'reload_config'):
+        if self._asr_mgr and hasattr(self._asr_mgr, "reload_config"):
             self._asr_mgr.reload_config()
-        if self._engine_mgr and hasattr(self._engine_mgr, 'reload_config'):
+        if self._engine_mgr and hasattr(self._engine_mgr, "reload_config"):
             self._engine_mgr.reload_config()
-        if self._config_mgr and hasattr(self._config_mgr, 'reload'):
+        if self._config_mgr and hasattr(self._config_mgr, "reload"):
             self._config_mgr.reload()
         # 同步 RPM 限制
         from core.llm_utils.llm_client import set_global_rpm
+
         mp = self._get_mode_params()
         set_global_rpm(mp.get("corr_rpm", 30))
 
@@ -280,15 +284,20 @@ class WorkflowManager(QObject):
         # 视频 OCR 流程
         regions = [r for r in self._get_regions() if r.get("enabled", True)]
         if not regions:
-            regions = [{
-                "name": "全帧", "x": 0, "y": 0, "w": 0, "h": 0,
-                "engine": self._get_current_engine(),
-                "prompt": self._get_custom_prompt() or self._get_config_prompt(),
-                "prompt_template": self._get_current_template(),
-                "enabled": True,
-            }]
+            regions = [
+                {
+                    "name": "全帧",
+                    "x": 0,
+                    "y": 0,
+                    "w": 0,
+                    "h": 0,
+                    "engine": self._get_current_engine(),
+                    "prompt": self._get_custom_prompt() or self._get_config_prompt(),
+                    "prompt_template": self._get_current_template(),
+                    "enabled": True,
+                }
+            ]
             self._set_regions(regions)
-
 
         self._correction_pending.clear()
 
@@ -335,8 +344,11 @@ class WorkflowManager(QObject):
         t_start, t_end = self._get_time_range()
 
         self._audio_worker = AudioProcessWorker(
-            asr_engine, vp, is_video=not is_audio,
-            time_start=t_start, time_end=t_end,
+            asr_engine,
+            vp,
+            is_video=not is_audio,
+            time_start=t_start,
+            time_end=t_end,
             asr_region_name=region_name,
             audio_cache_path=self._get_audio_cache_path(),
         )
@@ -366,13 +378,19 @@ class WorkflowManager(QObject):
 
         regions = [r for r in self._get_regions() if r.get("enabled", True)]
         if not regions:
-            regions = [{
-                "name": "全帧", "x": 0, "y": 0, "w": 0, "h": 0,
-                "engine": self._get_current_engine(),
-                "prompt": self._get_custom_prompt() or self._get_config_prompt(),
-                "prompt_template": self._get_current_template(),
-                "enabled": True,
-            }]
+            regions = [
+                {
+                    "name": "全帧",
+                    "x": 0,
+                    "y": 0,
+                    "w": 0,
+                    "h": 0,
+                    "engine": self._get_current_engine(),
+                    "prompt": self._get_custom_prompt() or self._get_config_prompt(),
+                    "prompt_template": self._get_current_template(),
+                    "enabled": True,
+                }
+            ]
             self._set_regions(regions)
 
         self._correction_pending.clear()
@@ -409,10 +427,7 @@ class WorkflowManager(QObject):
             asr_enabled = True
 
         # 判断是否有 OCR 区域（排除纯 ASR 区域）
-        has_ocr_regions = any(
-            r.get("name", "") != asr_region_name
-            for r in regions
-        )
+        has_ocr_regions = any(r.get("name", "") != asr_region_name for r in regions)
 
         # 根据模式和实际可用性决定流程
         do_asr = False
@@ -444,12 +459,15 @@ class WorkflowManager(QObject):
         """启动 OCR 视频处理线程。"""
         regions = self._pending_regions
         ename = self._pending_ename
+        mp = self._get_mode_params()
+        hw_accel = self._config_mgr.get_hw_accel() if self._config_mgr else False
         self._frame_processor = FrameProcessor(
-            engine_manager=self._engine_mgr, regions=regions,
+            engine_manager=self._engine_mgr,
+            regions=regions,
             filter_manager=self._filter_mgr,
+            hw_accel=hw_accel,
         )
 
-        mp = self._get_mode_params()
         if mp:
             fp = self._frame_processor
             fp._subtitle_mode = mp.get("subtitle_mode", "流式字幕（去重）")
@@ -468,8 +486,11 @@ class WorkflowManager(QObject):
 
         t_start, t_end = self._get_time_range()
         self._video_worker = VideoProcessWorker(
-            self._frame_processor, vp, ename,
-            time_start=t_start, time_end=t_end,
+            self._frame_processor,
+            vp,
+            ename,
+            time_start=t_start,
+            time_end=t_end,
         )
         self._video_worker.log.connect(lambda m: self.status_msg.emit(m))
         self._video_worker.progress.connect(self._on_process_progress)
@@ -490,11 +511,13 @@ class WorkflowManager(QObject):
                 ts = seg.get("start", 0.0)
                 end_ts = seg.get("end", ts + 3.0)
                 from core.frame_processor import format_time
+
                 t_str = format_time(ts)
                 text = seg.get("text", "").strip()
                 if text:
                     self._on_asr_result(ts, t_str, mp.get("asr_region_name", "语音"), "whisperx", text, end_ts)
             from PyQt5.QtCore import QTimer
+
             QTimer.singleShot(100, lambda: self._on_asr_finished(cached))
             return
 
@@ -510,8 +533,11 @@ class WorkflowManager(QObject):
         region_name = mp.get("asr_region_name", "语音")
         t_start, t_end = self._get_time_range()
         self._audio_worker = AudioProcessWorker(
-            asr_engine, video_path, is_video=True,
-            time_start=t_start, time_end=t_end,
+            asr_engine,
+            video_path,
+            is_video=True,
+            time_start=t_start,
+            time_end=t_end,
             asr_region_name=region_name,
             audio_cache_path=self._get_audio_cache_path(),
         )
@@ -550,6 +576,7 @@ class WorkflowManager(QObject):
             self.status_msg.emit(f"✅ 语音识别完成: {n} 段")
             # 延迟触发完成
             from PyQt5.QtCore import QTimer
+
             QTimer.singleShot(100, lambda: self._on_process_finished([]))
 
     def _on_asr_error(self, err):
@@ -602,40 +629,49 @@ class WorkflowManager(QObject):
         self.status_msg.emit(f"处理中... {cur}s / {total}s | 哨兵: {sentinel}")
 
     def _on_process_finished(self, _):
-        self._set_buttons(start=True, stop=False, correction=True, correction_all=True,
-                          polish=True, polish_all=True, pause=False)
-        self.progress_val.emit(0)
+        try:
+            self._set_buttons(
+                start=True, stop=False, correction=True, correction_all=True, polish=True, polish_all=True, pause=False
+            )
+            self.progress_val.emit(0)
 
-        # 排序：先按时间，再按区域顺序模板（如有）
-        mp = self._get_mode_params()
-        if not self._get_is_image():
-            self._sort_by_time()
-        region_order = mp.get("region_order", "")
-        if not self._get_is_image() and region_order:
-            self._sort_results_table(region_order)
+            # 排序：先按时间，再按区域顺序模板（如有）
+            mp = self._get_mode_params()
+            if not self._get_is_image():
+                self._sort_by_time()
+            region_order = mp.get("region_order", "")
+            if not self._get_is_image() and region_order:
+                self._sort_results_table(region_order)
 
-        # 通知 MainWindow 做后处理（end_sec 回填等）
-        self.process_finished.emit()
+            # 通知 MainWindow 做后处理（end_sec 回填等）
+            self.process_finished.emit()
 
-        n = self._get_table_row_count()
-        msg = f"✅ 处理完成: {n} 条结果"
-        if self._filtered_count > 0:
-            msg += f" | 过滤: {self._filtered_count} 条"
-        self._filtered_count = 0
+            n = self._get_table_row_count()
+            msg = f"✅ 处理完成: {n} 条结果"
+            if self._filtered_count > 0:
+                msg += f" | 过滤: {self._filtered_count} 条"
+            self._filtered_count = 0
 
-        # 全量处理：直接纠错（纠错完成后会自动触发下一个文件）
-        corr_enabled = mp.get("corr_enabled", False)
-        if corr_enabled and n > 0:
-            self._run_full_correction(is_auto=True)
-            self.status_msg.emit(f"{msg} | 全量 AI 纠错中...")
-        else:
-            self.status_msg.emit(msg)
-            # 没有纠错时，直接进入下一个文件
-            self._maybe_start_next_batch_file()
+            # 全量处理：直接纠错（纠错完成后会自动触发下一个文件）
+            corr_enabled = mp.get("corr_enabled", False)
+            if corr_enabled and n > 0:
+                self._run_full_correction(is_auto=True)
+                self.status_msg.emit(f"{msg} | 全量 AI 纠错中...")
+            else:
+                self.status_msg.emit(msg)
+                # 没有纠错时，直接进入下一个文件
+                self._maybe_start_next_batch_file()
+        except Exception as e:
+            import traceback
+
+            logger.error("_on_process_finished 异常: %s", e)
+            traceback.print_exc()
+            self.status_msg.emit(f"❌ 处理完成回调异常: {e}")
 
     def _on_process_error(self, err):
-        self._set_buttons(start=True, stop=False, correction=True, correction_all=True,
-                          polish=True, polish_all=True, pause=False)
+        self._set_buttons(
+            start=True, stop=False, correction=True, correction_all=True, polish=True, polish_all=True, pause=False
+        )
         self.progress_val.emit(0)
         self.status_msg.emit(f"❌ 处理失败: {err}")
         is_batch = self._batch_worker and self._batch_worker.isRunning()
@@ -671,7 +707,7 @@ class WorkflowManager(QObject):
         ]
         for name, w in workers:
             if w and w.isRunning():
-                if hasattr(w, 'stop'):
+                if hasattr(w, "stop"):
                     w.stop()
                 else:
                     w.quit()
@@ -691,7 +727,7 @@ class WorkflowManager(QObject):
         with self._batch_correction_workers_lock:
             for w in self._batch_correction_workers:
                 if w.isRunning():
-                    if hasattr(w, 'stop'):
+                    if hasattr(w, "stop"):
                         w.stop()
                     else:
                         w.quit()
@@ -701,33 +737,32 @@ class WorkflowManager(QObject):
         with self._correction_workers_lock:
             for w in self._correction_workers:
                 if w.isRunning():
-                    if hasattr(w, 'stop'):
+                    if hasattr(w, "stop"):
                         w.stop()
                     else:
                         w.quit()
 
         self.status_msg.emit(_("已停止"))
-        self._set_buttons(start=True, stop=False, correction=True, correction_all=True,
-                          polish=True, polish_all=True)
+        self._set_buttons(start=True, stop=False, correction=True, correction_all=True, polish=True, polish_all=True)
         self.progress_val.emit(0)
 
     def pause_processing(self):
         """暂停当前处理（视频 OCR / 音频 ASR / 批量）。"""
         logger.info("暂停处理")
         paused = False
-        if self._frame_processor and hasattr(self._frame_processor, '_pause_flag'):
+        if self._frame_processor and hasattr(self._frame_processor, "_pause_flag"):
             self._frame_processor.pause()
             paused = True
         if self._video_worker and self._video_worker.isRunning():
-            if hasattr(self._video_worker, 'pause'):
+            if hasattr(self._video_worker, "pause"):
                 self._video_worker.pause()
                 paused = True
         if self._audio_worker and self._audio_worker.isRunning():
-            if hasattr(self._audio_worker, 'pause'):
+            if hasattr(self._audio_worker, "pause"):
                 self._audio_worker.pause()
                 paused = True
         if self._batch_worker and self._batch_worker.isRunning():
-            if hasattr(self._batch_worker, 'pause'):
+            if hasattr(self._batch_worker, "pause"):
                 self._batch_worker.pause()
                 paused = True
         if paused:
@@ -739,19 +774,19 @@ class WorkflowManager(QObject):
         """继续当前处理。"""
         logger.info("继续处理")
         resumed = False
-        if self._frame_processor and hasattr(self._frame_processor, '_pause_flag'):
+        if self._frame_processor and hasattr(self._frame_processor, "_pause_flag"):
             self._frame_processor.resume()
             resumed = True
         if self._video_worker and self._video_worker.isRunning():
-            if hasattr(self._video_worker, 'resume'):
+            if hasattr(self._video_worker, "resume"):
                 self._video_worker.resume()
                 resumed = True
         if self._audio_worker and self._audio_worker.isRunning():
-            if hasattr(self._audio_worker, 'resume'):
+            if hasattr(self._audio_worker, "resume"):
                 self._audio_worker.resume()
                 resumed = True
         if self._batch_worker and self._batch_worker.isRunning():
-            if hasattr(self._batch_worker, 'resume'):
+            if hasattr(self._batch_worker, "resume"):
                 self._batch_worker.resume()
                 resumed = True
         if resumed:
@@ -804,8 +839,7 @@ class WorkflowManager(QObject):
         self._is_auto_correction = False
         self._correction_stop_requested = False
 
-        self._submit_all_correction_batches(texts, batch_size, context_window, max_retries,
-                                             total_batches, concurrency)
+        self._submit_all_correction_batches(texts, batch_size, context_window, max_retries, total_batches, concurrency)
         self.status_msg.emit(f"已提交 {len(texts)} 条批量纠错 [{total_batches} 批]")
 
     # ═══════════════════════════════════════════════════════════════
@@ -829,9 +863,7 @@ class WorkflowManager(QObject):
         for row, r in enumerate(results):
             raw = r.get("raw", "")
             if raw.strip():
-                texts.append((row, raw,
-                              r.get("time_sec", 0.0) or 0.0,
-                              r.get("end_sec", 0.0) or 0.0))
+                texts.append((row, raw, r.get("time_sec", 0.0) or 0.0, r.get("end_sec", 0.0) or 0.0))
         return texts
 
     def _sync_corrector_modes(self, mp: dict):
@@ -844,11 +876,13 @@ class WorkflowManager(QObject):
     def _maybe_extract_env(self, results: list, mp: dict):
         """如果配置启用，同步提取全文环境上下文（确保纠错批次在提取完成后才提交）。"""
         if mp.get("corr_extract_env", False) and self._corrector and not self._env_extraction_running:
-            if hasattr(self._corrector, '_should_skip_env_extraction'):
+            if hasattr(self._corrector, "_should_skip_env_extraction"):
                 if self._corrector._should_skip_env_extraction():
-                    logger.info("跳过环境提取: extract_env=%s, env_context=%s",
-                               self._corrector._extract_env,
-                               bool(self._corrector._env_context))
+                    logger.info(
+                        "跳过环境提取: extract_env=%s, env_context=%s",
+                        self._corrector._extract_env,
+                        bool(self._corrector._env_context),
+                    )
                     return
             self._env_extraction_running = True
             self.status_msg.emit("⏳ AI 纠错: 提取全文环境中...")
@@ -890,13 +924,17 @@ class WorkflowManager(QObject):
         self._total_correction_batches = total_batches
         self._is_auto_correction = is_auto
 
-        self._submit_all_correction_batches(texts, batch_size, context_window, max_retries,
-                                             total_batches, concurrency)
+        self._submit_all_correction_batches(texts, batch_size, context_window, max_retries, total_batches, concurrency)
 
-    def _submit_all_correction_batches(self, texts: list, batch_size: int,
-                                        context_window: int, max_retries: int,
-                                        total_batches: int,
-                                        concurrency: int = 4):
+    def _submit_all_correction_batches(
+        self,
+        texts: list,
+        batch_size: int,
+        context_window: int,
+        max_retries: int,
+        total_batches: int,
+        concurrency: int = 4,
+    ):
         """并行提交所有批次纠错（滑动窗口并发）。"""
         if self._correction_stop_requested:
             self._on_batch_correction_finished()
@@ -905,7 +943,7 @@ class WorkflowManager(QObject):
         # 预计算所有批次
         batches = []
         for offset in range(0, len(texts), batch_size):
-            batches.append(texts[offset:offset + batch_size])
+            batches.append(texts[offset : offset + batch_size])
 
         self._batch_total_count = len(batches)
         self._batch_completed_count = 0
@@ -928,7 +966,8 @@ class WorkflowManager(QObject):
 
         batch = self._batch_pending_batches.popleft()
         worker = BatchCorrectionWorker(
-            self._corrector, batch,
+            self._corrector,
+            batch,
             context_window=context_window,
             max_retries=max_retries,
         )
@@ -939,8 +978,7 @@ class WorkflowManager(QObject):
         with self._batch_correction_workers_lock:
             self._batch_correction_workers.append(worker)
 
-        self.status_msg.emit(
-            f"⏳ AI 纠错 [{self._batch_completed_count + 1}/{self._batch_total_count}] ...")
+        self.status_msg.emit(f"⏳ AI 纠错 [{self._batch_completed_count + 1}/{self._batch_total_count}] ...")
         worker.start()
 
     def _on_parallel_batch_done(self, context_window: int, max_retries: int):
@@ -1004,16 +1042,54 @@ class WorkflowManager(QObject):
         # 纠错完成后，进入下一个文件
         self._maybe_start_next_batch_file()
 
+    def _export_current_results(self, file_path: str | None, results: list):
+        """将当前文件结果导出到 output/ 目录（批量切换时自动调用）。"""
+        if not results or not file_path:
+            return
+        try:
+            from core.result_processor import export_results, polish_results
+
+            output_dir = Path(__file__).resolve().parent.parent / "output"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            stem = Path(file_path).stem
+
+            # 统一转为 tuple 格式
+            raw_list = []
+            for r in results:
+                if isinstance(r, dict):
+                    raw_list.append(
+                        (
+                            r.get("time_sec", 0.0) or 0.0,
+                            r.get("time_str", "") or r.get("time", ""),
+                            r.get("region", "unknown"),
+                            r.get("engine", ""),
+                            r.get("raw", ""),
+                        )
+                    )
+                else:
+                    raw_list.append(r)
+            polished = polish_results(raw_list)
+            txt_path = output_dir / f"{stem}.txt"
+            export_results(polished, str(txt_path), "txt", False, {})
+            logger.info("批量导出: %s", txt_path.name)
+        except Exception as e:
+            logger.warning("批量导出失败: %s", e)
+
     def _maybe_start_next_batch_file(self):
-        """如果有批量队列，处理下一个文件。"""
+        """如果有批量队列，处理下一个文件（信号驱动，不阻塞主线程）。
+
+        流程：导出当前结果到 output/ → 清空表格 → 加载下一个文件
+        """
         if not self._batch_files or len(self._batch_files) <= 1:
             return
-        # 保存当前文件结果到缓存
+        # 保存当前文件结果到缓存 + 导出到 output/
         current_results = self._get_results()
+        current_vp = self._get_video_path()
         if current_results:
-            current_vp = self._get_video_path()
             if current_vp:
                 self._save_asr_cache(current_vp, current_results)
+            # 导出当前文件结果到 output/ 目录
+            self._export_current_results(current_vp, current_results)
         # 移除已处理的第一个文件
         self._batch_files.pop(0)
         self._update_batch_label()
@@ -1021,41 +1097,55 @@ class WorkflowManager(QObject):
             self._set_buttons(start=True, stop=False)
             self.status_msg.emit("✅ 所有文件处理完成")
             return
+        # 清空结果表格（导出已完成）
+        self._clear_results_table()
         # 加载下一个文件
         next_file = self._batch_files[0]
         ext = Path(next_file).suffix.lower()
-        if ext in ('.mp4', '.mkv', '.avi', '.mov', '.webm'):
-            self._load_video_for_batch(next_file)
-        elif ext in ('.png', '.jpg', '.jpeg', '.bmp'):
-            self._load_image_for_batch(next_file)
+
+        # 连接加载完成信号
+        self._video_preview.video_loaded.connect(self._on_batch_file_loaded)
+        # 超时保护（30s）
+        from PyQt5.QtCore import QTimer
+
+        self._batch_load_timer = QTimer()
+        self._batch_load_timer.setSingleShot(True)
+        self._batch_load_timer.timeout.connect(self._on_batch_load_timeout)
+        self._batch_load_timer.start(30000)
+
+        if ext in (".mp4", ".mkv", ".avi", ".mov", ".webm"):
+            self._video_preview.load_video(next_file)
+        elif ext in (".png", ".jpg", ".jpeg", ".bmp"):
+            self._video_preview.load_image(next_file)
         elif ext in SUPPORTED_AUDIO_EXTS:
-            self._load_audio_for_batch(next_file)
+            self._video_preview.load_audio(next_file)
         else:
+            self._disconnect_batch_load()
             logger.warning("不支持的文件格式: %s, 跳过", ext)
             self._maybe_start_next_batch_file()
-            return
-        # 清理结果表格，开始处理
-        self._clear_results_table()
+
+    def _on_batch_file_loaded(self, path: str):
+        """批量文件加载完成 → 启动处理。"""
+        self._disconnect_batch_load()
         from PyQt5.QtCore import QTimer
+
         QTimer.singleShot(500, lambda: self.start_processing())
 
-    def _load_video_for_batch(self, path: str):
-        """批量模式加载视频（阻塞等待完成）。"""
-        from PyQt5.QtCore import QCoreApplication
-        self._video_preview.load_video(path)
-        QCoreApplication.processEvents()
+    def _on_batch_load_timeout(self):
+        """批量文件加载超时 → 跳过该文件。"""
+        logger.warning("批量文件加载超时 (30s)，跳过")
+        self._disconnect_batch_load()
+        self._maybe_start_next_batch_file()
 
-    def _load_image_for_batch(self, path: str):
-        """批量模式加载图片（阻塞等待完成）。"""
-        from PyQt5.QtCore import QCoreApplication
-        self._video_preview.load_image(path)
-        QCoreApplication.processEvents()
-
-    def _load_audio_for_batch(self, path: str):
-        """批量模式加载音频（阻塞等待完成）。"""
-        from PyQt5.QtCore import QCoreApplication
-        self._video_preview.load_audio(path)
-        QCoreApplication.processEvents()
+    def _disconnect_batch_load(self):
+        """断开批量加载信号连接，取消超时定时器。"""
+        try:
+            self._video_preview.video_loaded.disconnect(self._on_batch_file_loaded)
+        except (TypeError, RuntimeError):
+            pass
+        if hasattr(self, "_batch_load_timer") and self._batch_load_timer:
+            self._batch_load_timer.stop()
+            self._batch_load_timer = None
 
     # ═══════════════════════════════════════════════════════════════
     # AI 纠错 —— 单条提交
@@ -1071,8 +1161,7 @@ class WorkflowManager(QObject):
         for i in range(max(0, row - ctx_window), min(len(results), row + ctx_window + 1)):
             if i != row:
                 # 跳过时间间隔超过 seg_time_gap 的上下文行
-                time_gap = abs((results[i].get("time_sec", 0.0) or 0.0) -
-                               (results[row].get("time_sec", 0.0) or 0.0))
+                time_gap = abs((results[i].get("time_sec", 0.0) or 0.0) - (results[row].get("time_sec", 0.0) or 0.0))
                 if time_gap <= seg_gap:
                     ctx.append(results[i].get("raw", ""))
 
@@ -1091,7 +1180,11 @@ class WorkflowManager(QObject):
                     break
 
         w = AICorrectionWorker(
-            self._corrector, row, raw, ctx, image=image,
+            self._corrector,
+            row,
+            raw,
+            ctx,
+            image=image,
             region_correction_prompt=region_corr_prompt,
         )
         w.correction_ready.connect(self._on_correction_ready)
@@ -1175,7 +1268,7 @@ class WorkflowManager(QObject):
         self._maybe_extract_env(self._get_results(), mp)
 
         batch_size = mp.get("corr_batch_size", 5)
-        batches = [items[i:i + batch_size] for i in range(0, len(items), batch_size)]
+        batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
         self._set_buttons(polish=False, polish_all=False)
         self._polish_in_progress = True
@@ -1187,8 +1280,9 @@ class WorkflowManager(QObject):
 
         total = len(items)
         concurrency = mp.get("corr_concurrency", 4)
-        logger.info("润色启动: %d 条, %d 批 (batch_size=%d, concurrency=%d)",
-                     total, len(batches), batch_size, concurrency)
+        logger.info(
+            "润色启动: %d 条, %d 批 (batch_size=%d, concurrency=%d)", total, len(batches), batch_size, concurrency
+        )
         self.status_msg.emit(f"润色中: {total} 条 [{len(batches)} 批]")
 
         concurrency = min(concurrency, len(batches))
@@ -1211,8 +1305,7 @@ class WorkflowManager(QObject):
     def _on_polish_batch_done(self):
         """单个润色批次完成，启动下一批或结束。"""
         self._polish_completed_batches += 1
-        self.status_msg.emit(
-            f"润色进度: {self._polish_completed_batches}/{self._polish_total_batches} 批")
+        self.status_msg.emit(f"润色进度: {self._polish_completed_batches}/{self._polish_total_batches} 批")
 
         if self._polish_pending_batches and not self._polish_stop_requested:
             self._launch_next_polish_batch()
@@ -1278,6 +1371,7 @@ class WorkflowManager(QObject):
         self._set_buttons(start=False, stop=True, correction=False)
         self.progress_val.emit(0)
 
+        hw_accel = self._config_mgr.get_hw_accel() if self._config_mgr else False
         self._batch_worker = BatchProcessWorker(
             engine_manager=self._engine_mgr,
             file_list=list(batch_files),
@@ -1285,6 +1379,7 @@ class WorkflowManager(QObject):
             mode_params=self._get_mode_params(),
             output_dir=str(output_dir),
             corrector=self._corrector,
+            hw_accel=hw_accel,
         )
         self._batch_worker.progress_file.connect(self._on_batch_progress_file)
         self._batch_worker.log.connect(lambda m: self.status_msg.emit(m))
@@ -1377,9 +1472,9 @@ class WorkflowManager(QObject):
         # ── 第一步：对所有线程发 stop/quit 信号 ──
         for w in workers:
             try:
-                if hasattr(w, 'stop'):
+                if hasattr(w, "stop"):
                     w.stop()
-                if hasattr(w, 'quit'):
+                if hasattr(w, "quit"):
                     w.quit()
             except Exception as e:
                 logger.warning("工作线程清理异常: %s", e)
@@ -1403,7 +1498,7 @@ class WorkflowManager(QObject):
         if self._asr_mgr:
             try:
                 engine = self._asr_mgr.get_engine()
-                if engine and hasattr(engine, '_stop_server'):
+                if engine and hasattr(engine, "_stop_server"):
                     engine._stop_server()
             except Exception as e:
                 logger.warning("ASR 引擎关闭异常: %s", e)

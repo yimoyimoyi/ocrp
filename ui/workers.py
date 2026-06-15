@@ -20,6 +20,7 @@ def _recognize_roi(engine, roi, prompt: str = "") -> str:
 
 class WorkerSignals(QObject):
     """工作线程信号集合。"""
+
     started = pyqtSignal()
     finished = pyqtSignal()
     error = pyqtSignal(str)
@@ -34,8 +35,7 @@ class OCRWorker(QThread):
     result_ready = pyqtSignal(float, str, str, str, str)
     ocr_error = pyqtSignal(float, str)
 
-    def __init__(self, engine, frame: np.ndarray, region: dict,
-                 timestamp: float, engine_name: str):
+    def __init__(self, engine, frame: np.ndarray, region: dict, timestamp: float, engine_name: str):
         super().__init__()
         self._engine = engine
         self._frame = frame
@@ -46,6 +46,7 @@ class OCRWorker(QThread):
     def run(self):
         try:
             from core.frame_processor import extract_roi
+
             roi = extract_roi(self._frame, self._region)
             if roi is None or roi.size == 0:
                 return
@@ -55,6 +56,7 @@ class OCRWorker(QThread):
 
             if text and text.strip():
                 from core.frame_processor import format_time
+
                 t_str = format_time(self._timestamp)
                 rname = self._region.get("name", "unknown")
                 self.result_ready.emit(self._timestamp, t_str, rname, self._engine_name, text)
@@ -71,10 +73,15 @@ class AICorrectionWorker(QThread):
     correction_failed = pyqtSignal(int, str)
     correction_stream = pyqtSignal(int, str)  # row, partial_text (流式增量更新)
 
-    def __init__(self, corrector, result_index: int, raw_text: str,
-                 context_texts: list | None = None,
-                 image: np.ndarray | None = None,
-                 region_correction_prompt: str = ""):
+    def __init__(
+        self,
+        corrector,
+        result_index: int,
+        raw_text: str,
+        context_texts: list | None = None,
+        image: np.ndarray | None = None,
+        region_correction_prompt: str = "",
+    ):
         super().__init__()
         self._corrector = corrector
         self._result_index = result_index
@@ -86,7 +93,7 @@ class AICorrectionWorker(QThread):
 
     def stop(self):
         self._stop_flag.set()
-        if hasattr(self._corrector, 'stop') and callable(self._corrector.stop):
+        if hasattr(self._corrector, "stop") and callable(self._corrector.stop):
             self._corrector.stop()
 
     def run(self):
@@ -94,20 +101,25 @@ class AICorrectionWorker(QThread):
             return
         try:
             # 构建流式回调（逐字发射信号更新表格）
-            stream_mode = getattr(self._corrector, 'stream_mode', False)
+            stream_mode = getattr(self._corrector, "stream_mode", False)
             stream_cb = None
             accumulated = ""
             if stream_mode:
+
                 def on_stream(chunk: str):
                     nonlocal accumulated
                     accumulated += chunk
                     self.correction_stream.emit(self._result_index, accumulated)
+
                 stream_cb = on_stream
 
-            corrected = self._corrector.correct(self._raw_text, self._context_texts,
-                                                image=self._image,
-                                                stream_callback=stream_cb,
-                                                prompt_override=self._region_correction_prompt)
+            corrected = self._corrector.correct(
+                self._raw_text,
+                self._context_texts,
+                image=self._image,
+                stream_callback=stream_cb,
+                prompt_override=self._region_correction_prompt,
+            )
 
             if corrected and corrected != self._raw_text:
                 self.correction_ready.emit(self._result_index, self._raw_text, corrected)
@@ -120,12 +132,11 @@ class AICorrectionWorker(QThread):
 class BatchCorrectionWorker(QThread):
     """批量 AI 纠错线程 —— 使用 correct_batch() 一次提交多条，保证顺序与完整性。"""
 
-    correction_ready = pyqtSignal(int, str, str)   # row, raw, corrected
-    batch_finished = pyqtSignal()                   # 全部完成
-    batch_error = pyqtSignal(str)                   # 错误信息
+    correction_ready = pyqtSignal(int, str, str)  # row, raw, corrected
+    batch_finished = pyqtSignal()  # 全部完成
+    batch_error = pyqtSignal(str)  # 错误信息
 
-    def __init__(self, corrector, texts: list, context_window: int = 3,
-                 max_retries: int = 3):
+    def __init__(self, corrector, texts: list, context_window: int = 3, max_retries: int = 3):
         """
         Args:
             corrector: AICorrector 实例
@@ -180,6 +191,7 @@ class BatchCorrectionWorker(QThread):
             self.batch_finished.emit()
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             self.batch_error.emit(str(e))
             self.batch_finished.emit()  # 不断裂批处理链，剩余批次继续
@@ -225,6 +237,7 @@ class BatchPolishWorker(QThread):
             self.batch_finished.emit()
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             self.batch_error.emit(str(e))
             self.batch_finished.emit()
@@ -239,8 +252,9 @@ class VideoProcessWorker(QThread):
     finished_all = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, frame_processor, video_path: str, engine_name: str,
-                 time_start: float = 0.0, time_end: float = 0.0):
+    def __init__(
+        self, frame_processor, video_path: str, engine_name: str, time_start: float = 0.0, time_end: float = 0.0
+    ):
         super().__init__()
         self._fp = frame_processor
         self._video_path = video_path
@@ -256,8 +270,8 @@ class VideoProcessWorker(QThread):
             self._fp._stop_flag.clear()
 
             results = self._fp.process_video(
-                self._video_path, self._engine_name,
-                time_start=self._time_start, time_end=self._time_end)
+                self._video_path, self._engine_name, time_start=self._time_start, time_end=self._time_end
+            )
             self.finished_all.emit(results)
         except Exception as e:
             traceback.print_exc()
@@ -297,6 +311,7 @@ class ImageProcessWorker(QThread):
             return
         try:
             from core.frame_processor import extract_roi
+
             results = []
             for region in self._regions:
                 if self._stop_flag.is_set():
@@ -316,26 +331,33 @@ class ImageProcessWorker(QThread):
                 # 从引擎读取置信度（与 FrameProcessor._process_frame 相同逻辑）
                 is_paddle = engine.engine_name == "paddleocr"
                 if is_paddle:
-                    conf = engine.last_confidence if hasattr(engine, 'last_confidence') else 0.0
+                    conf = engine.last_confidence if hasattr(engine, "last_confidence") else 0.0
                 else:
                     conf = 1.0  # API 引擎默认可信
 
                 if text and text.strip():
                     # 图片无时间戳用空串
-                    t_str = "" if self._timestamp <= 0 else f"{int(self._timestamp // 60):02d}:{int(self._timestamp % 60):02d}"
+                    t_str = (
+                        ""
+                        if self._timestamp <= 0
+                        else f"{int(self._timestamp // 60):02d}:{int(self._timestamp % 60):02d}"
+                    )
                     rname = region.get("name", "unknown")
                     self.result_item.emit(self._timestamp, t_str, rname, engine.engine_name, text, conf)
-                    results.append({
-                        "timestamp": self._timestamp,
-                        "time_str": t_str,
-                        "region": rname,
-                        "engine": engine.engine_name,
-                        "raw": text,
-                        "confidence": conf,
-                    })
+                    results.append(
+                        {
+                            "timestamp": self._timestamp,
+                            "time_str": t_str,
+                            "region": rname,
+                            "engine": engine.engine_name,
+                            "raw": text,
+                            "confidence": conf,
+                        }
+                    )
             self.finished_all.emit(results)
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             self.error.emit(str(e))
 
@@ -349,15 +371,22 @@ class ImageProcessWorker(QThread):
 class AudioProcessWorker(QThread):
     """WhisperX 语音识别线程 —— 从音频/视频中提取语音并转录。"""
 
-    progress = pyqtSignal(str)           # 阶段描述
+    progress = pyqtSignal(str)  # 阶段描述
     result_item = pyqtSignal(float, str, str, str, str, float)  # ts, t_str, rname, ename, raw, end_sec
     log = pyqtSignal(str)
-    finished_all = pyqtSignal(list)      # 返回结果列表
+    finished_all = pyqtSignal(list)  # 返回结果列表
     error = pyqtSignal(str)
 
-    def __init__(self, asr_engine, audio_source: str, is_video: bool = True,
-                 time_start: float = 0.0, time_end: float = 0.0,
-                 asr_region_name: str = "语音", audio_cache_path: str = None):
+    def __init__(
+        self,
+        asr_engine,
+        audio_source: str,
+        is_video: bool = True,
+        time_start: float = 0.0,
+        time_end: float = 0.0,
+        asr_region_name: str = "语音",
+        audio_cache_path: str = None,
+    ):
         super().__init__()
         self._asr_engine = asr_engine
         self._audio_source = audio_source
@@ -398,7 +427,7 @@ class AudioProcessWorker(QThread):
                 converted = convert_to_wav(self._audio_source)
                 if converted:
                     audio_path = converted
-                    self._was_converted = (converted != self._audio_source)
+                    self._was_converted = converted != self._audio_source
                 else:
                     self.error.emit("音频格式转换失败")
                     return
@@ -409,6 +438,7 @@ class AudioProcessWorker(QThread):
             self.progress.emit("正在语音识别...")
 
             from core.frame_processor import format_time
+
             results = []
             error_holder = [None]
 
@@ -422,25 +452,27 @@ class AudioProcessWorker(QThread):
                 text = seg.get("text", "").strip()
                 if text:
                     self.result_item.emit(ts, t_str, self._region_name, "whisperx", text, end_ts)
-                    results.append({
-                        "timestamp": ts,
-                        "end_sec": end_ts,
-                        "time_str": t_str,
-                        "region": self._region_name,
-                        "engine": "whisperx",
-                        "raw": text,
-                    })
+                    results.append(
+                        {
+                            "timestamp": ts,
+                            "end_sec": end_ts,
+                            "time_str": t_str,
+                            "region": self._region_name,
+                            "engine": "whisperx",
+                            "raw": text,
+                        }
+                    )
 
             # 🔥 流式调用：每识别出一段就实时发射 result_item
             # transcribe 仍可用作兼容（收集全部后一次性返回）
-            if hasattr(self._asr_engine, 'transcribe_stream'):
+            if hasattr(self._asr_engine, "transcribe_stream"):
                 self._asr_engine.transcribe_stream(audio_path, on_segment=_on_segment, error_holder=error_holder)
             else:
                 segments, err = self._asr_engine.transcribe(audio_path)
                 if err:
                     error_holder[0] = err
                 else:
-                    for seg in (segments or []):
+                    for seg in segments or []:
                         _on_segment(seg)
 
             if error_holder[0]:
@@ -457,6 +489,7 @@ class AudioProcessWorker(QThread):
             self.finished_all.emit(results)
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             self.error.emit(str(e))
         finally:
@@ -464,6 +497,7 @@ class AudioProcessWorker(QThread):
             if audio_path and audio_path != self._audio_source:
                 try:
                     import os
+
                     os.unlink(audio_path)
                 except Exception as e:
                     logger.debug("删除临时音频文件失败: %s", e)
@@ -472,17 +506,24 @@ class AudioProcessWorker(QThread):
 class BatchProcessWorker(QThread):
     """批量文件处理线程 —— 按相同区域依次处理多个文件，自动导出结果。"""
 
-    progress_file = pyqtSignal(str, int, int)     # current_file, index, total
-    progress_detail = pyqtSignal(int, int)         # cur_sec, total_sec
+    progress_file = pyqtSignal(str, int, int)  # current_file, index, total
+    progress_detail = pyqtSignal(int, int)  # cur_sec, total_sec
     result_item = pyqtSignal(float, str, str, str, str, float)
     log = pyqtSignal(str)
-    finished_one = pyqtSignal(str, list)            # file_path, results
+    finished_one = pyqtSignal(str, list)  # file_path, results
     finished_all = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, engine_manager, file_list: list, regions: list,
-                 mode_params: dict, output_dir: str,
-                 corrector=None):
+    def __init__(
+        self,
+        engine_manager,
+        file_list: list,
+        regions: list,
+        mode_params: dict,
+        output_dir: str,
+        corrector=None,
+        hw_accel: bool = False,
+    ):
         super().__init__()
         self._engine_mgr = engine_manager
         self._file_list = list(file_list)
@@ -490,6 +531,7 @@ class BatchProcessWorker(QThread):
         self._mode_params = dict(mode_params)
         self._output_dir = output_dir
         self._corrector = corrector
+        self._hw_accel = hw_accel
         self._stop_flag = threading.Event()
 
     def stop(self):
@@ -504,7 +546,7 @@ class BatchProcessWorker(QThread):
 
             fname = Path(file_path).name
             self.progress_file.emit(fname, idx + 1, total)
-            self.log.emit(f"正在处理 [{idx+1}/{total}]: {fname}")
+            self.log.emit(f"正在处理 [{idx + 1}/{total}]: {fname}")
 
             results = self._process_one_file(file_path)
             if results and not self._stop_flag.is_set():
@@ -522,9 +564,9 @@ class BatchProcessWorker(QThread):
         ext = Path(file_path).suffix.lower()
         results = []
 
-        if ext in ('.mp4', '.mkv', '.avi', '.mov', '.webm'):
+        if ext in (".mp4", ".mkv", ".avi", ".mov", ".webm"):
             # 视频处理
-            fp = FrameProcessor(engine_manager=self._engine_mgr, regions=self._regions)
+            fp = FrameProcessor(engine_manager=self._engine_mgr, regions=self._regions, hw_accel=self._hw_accel)
             mp = self._mode_params
             if mp:
                 fp._sentinel_enabled = mp.get("sentinel_enabled", True)
@@ -538,7 +580,9 @@ class BatchProcessWorker(QThread):
             # 禁用哨兵日志打印
             fp._on_log = lambda m: None
 
-            results = fp.process_video(file_path, self._regions[0].get("engine", "paddleocr") if self._regions else "paddleocr")
+            results = fp.process_video(
+                file_path, self._regions[0].get("engine", "paddleocr") if self._regions else "paddleocr"
+            )
             for r in results:
                 # results 是元组 (ts, t_str, rname, ename, text, conf)
                 if len(r) >= 6:
@@ -563,7 +607,7 @@ class BatchProcessWorker(QThread):
                         continue
 
                     x, y, w, h = (region.get(k, 0) for k in ("x", "y", "w", "h"))
-                    roi = frame[y:y+h, x:x+w] if (w > 0 and h > 0) else frame
+                    roi = frame[y : y + h, x : x + w] if (w > 0 and h > 0) else frame
                     if roi.size == 0:
                         continue
 
@@ -575,23 +619,26 @@ class BatchProcessWorker(QThread):
 
                     # 读取置信度
                     is_paddle = engine.engine_name == "paddleocr"
-                    conf = engine.last_confidence if is_paddle and hasattr(engine, 'last_confidence') else 1.0
+                    conf = engine.last_confidence if is_paddle and hasattr(engine, "last_confidence") else 1.0
 
                     if text and text.strip():
                         t_str = format_time(0)
                         rname = region.get("name", "unknown")
                         ts = 0.0
                         self.result_item.emit(ts, t_str, rname, engine_name, text, conf)
-                        results.append({
-                            "timestamp": ts,
-                            "time_str": t_str,
-                            "region": rname,
-                            "engine": engine_name,
-                            "raw": text,
-                            "confidence": conf,
-                        })
+                        results.append(
+                            {
+                                "timestamp": ts,
+                                "time_str": t_str,
+                                "region": rname,
+                                "engine": engine_name,
+                                "raw": text,
+                                "confidence": conf,
+                            }
+                        )
             except Exception as e:
                 import traceback
+
                 traceback.print_exc()
                 self.log.emit(f"⚠ 图片处理失败: {file_path}: {e}")
 
@@ -614,13 +661,15 @@ class BatchProcessWorker(QThread):
             # dict 格式（图片路径）→ 转为 tuple
             raw_list = []
             for r in results:
-                raw_list.append((
-                    r.get("timestamp", 0.0),
-                    r.get("time_str", ""),
-                    r.get("region", "unknown"),
-                    r.get("engine", ""),
-                    r.get("raw", ""),
-                ))
+                raw_list.append(
+                    (
+                        r.get("timestamp", 0.0),
+                        r.get("time_str", ""),
+                        r.get("region", "unknown"),
+                        r.get("engine", ""),
+                        r.get("raw", ""),
+                    )
+                )
             polished = polish_results(raw_list)
         else:
             polished = polish_results(results)
@@ -638,8 +687,9 @@ class BatchProcessWorker(QThread):
 # 异步 UI 操作 Workers（避免主线程堵塞）
 # ═══════════════════════════════════════════════════════════════
 
+
 class VideoLoadWorker(QThread):
-    """后台加载视频：ffprobe + Popen + 首帧读取均在工作线程。"""
+    """后台加载视频：ffprobe + 首帧读取 + 音频提取并行执行。"""
 
     loaded = pyqtSignal(object, dict)  # (frame: np.ndarray, info: dict)
     error = pyqtSignal(str)
@@ -651,7 +701,57 @@ class VideoLoadWorker(QThread):
 
     def run(self):
         try:
+            import threading
+
             from core.ffmpeg_reader import FFmpegReader
+
+            # 并行：后台线程提取音频，主线程读取首帧
+            audio_result = [None]  # [wav_path | None]
+
+            def _extract_audio():
+                try:
+                    import os
+                    import subprocess
+                    import tempfile
+
+                    from core.utils import find_ffmpeg
+
+                    ffmpeg = find_ffmpeg()
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                        tmp_path = tmp.name
+                    cmd = [
+                        ffmpeg,
+                        "-v",
+                        "error",
+                        "-i",
+                        self._path,
+                        "-f",
+                        "wav",
+                        "-acodec",
+                        "pcm_s16le",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        "-y",
+                        tmp_path,
+                    ]
+                    r = subprocess.run(cmd, capture_output=True, timeout=120)
+                    if r.returncode == 0 and os.path.isfile(tmp_path):
+                        audio_result[0] = tmp_path
+                    else:
+                        # 视频可能无音频流，不是错误
+                        try:
+                            os.unlink(tmp_path)
+                        except OSError:
+                            pass
+                except Exception:
+                    pass  # 音频提取失败不影响视频加载
+
+            audio_thread = threading.Thread(target=_extract_audio, daemon=True)
+            audio_thread.start()
+
+            # 主线程：读取首帧
             ff = FFmpegReader(self._path, self._hw_accel)
             if not ff.open():
                 self.error.emit("无法打开视频文件")
@@ -661,10 +761,17 @@ class VideoLoadWorker(QThread):
                 ff.close()
                 self.error.emit("无法读取视频首帧")
                 return
+
+            # 等待音频提取完成（最多 10s，超时不阻塞）
+            audio_thread.join(timeout=10)
+
             info = {
-                "width": ff.width, "height": ff.height,
-                "fps": ff.fps, "duration": ff.duration,
+                "width": ff.width,
+                "height": ff.height,
+                "fps": ff.fps,
+                "duration": ff.duration,
                 "reader": ff,
+                "audio_path": audio_result[0],  # 可能为 None（无音频流）
             }
             self.loaded.emit(frame, info)
         except FileNotFoundError as e:

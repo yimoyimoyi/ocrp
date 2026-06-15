@@ -20,16 +20,13 @@ _FFPROBE = find_ffmpeg("ffprobe")
 def _get_video_info(path: str) -> dict:
     """用 ffprobe 获取视频元数据。"""
     try:
-        cmd = [
-            _FFPROBE, "-v", "quiet", "-print_format", "json",
-            "-show_format", "-show_streams", path
-        ]
+        cmd = [_FFPROBE, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", path]
         result = subprocess.run(cmd, capture_output=True, timeout=30)
         if result.returncode != 0:
             return {}
         stdout = result.stdout
         if isinstance(stdout, bytes):
-            stdout = stdout.decode('utf-8', 'replace')
+            stdout = stdout.decode("utf-8", "replace")
         data = json.loads(stdout)
         info = {"duration": 0.0, "fps": 30.0, "width": 0, "height": 0}
         for stream in data.get("streams", []):
@@ -79,6 +76,9 @@ class FFmpegReader:
         self._duration = self._info.get("duration", 0.0)
         self._frame_idx: int = 0
         self._total_frames: int = 0
+        # 预分配帧缓冲区（避免每帧 bytearray() + bytes() 拷贝）
+        self._frame_size: int = self._width * self._height * 3
+        self._frame_buf: bytearray = bytearray(self._frame_size) if self._frame_size > 0 else bytearray()
 
     @property
     def width(self) -> int:
@@ -98,7 +98,7 @@ class FFmpegReader:
 
     def open(self) -> bool:
         """启动 FFmpeg 解码管道。
-        
+
         注意：stderr 必须用 DEVNULL（不能用 PIPE），否则 FFmpeg 的
         stderr 管道缓冲区填满后会阻塞 stdout 输出（经典死锁）。
         """
@@ -112,13 +112,19 @@ class FFmpegReader:
             vcodec = ["-hwaccel", "cuda"]
 
         cmd = [
-            _FFMPEG, "-v", "error",
+            _FFMPEG,
+            "-v",
+            "error",
             *vcodec,
-            "-i", self._path,
-            "-f", "rawvideo",
-            "-pix_fmt", "bgr24",
-            "-vsync", "0",
-            "pipe:1"
+            "-i",
+            self._path,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "-vsync",
+            "0",
+            "pipe:1",
         ]
 
         try:
@@ -140,50 +146,89 @@ class FFmpegReader:
             return False
 
     def read(self) -> np.ndarray | None:
-        """读取下一帧，返回 BGR numpy 数组。"""
+        """读取下一帧，返回 BGR numpy 数组（使用预分配 buffer，减少内存分配）。"""
         if not self._proc:
             return None
         try:
-            frame_size = self._width * self._height * 3
-            raw = bytearray()
-            while len(raw) < frame_size:
-                chunk = self._proc.stdout.read(frame_size - len(raw))
-                if not chunk:
+            view = memoryview(self._frame_buf)
+            pos = 0
+            while pos < self._frame_size:
+                n = self._proc.stdout.readinto(view[pos:])
+                if not n:
                     return None
-                raw.extend(chunk)
-            frame = np.frombuffer(bytes(raw), dtype=np.uint8).reshape(
-                (self._height, self._width, 3))
+                pos += n
+            # copy 确保 frame 拥有独立内存（buf 会被下一帧覆盖）
+            frame = np.frombuffer(self._frame_buf, dtype=np.uint8).reshape((self._height, self._width, 3)).copy()
             self._frame_idx += 1
             return frame
         except Exception as e:
             logger.warning("读取视频帧失败: %s", e)
             return None
 
+    def _skip_frame(self):
+        """跳过一帧（读取但不返回，用于小范围 seek）。"""
+        if not self._proc:
+            return
+        try:
+            view = memoryview(self._frame_buf)
+            pos = 0
+            while pos < self._frame_size:
+                n = self._proc.stdout.readinto(view[pos:])
+                if not n:
+                    return
+                pos += n
+            self._frame_idx += 1
+        except Exception:
+            pass
+
     def seek(self, frame_idx: int) -> np.ndarray | None:
-        """跳转到指定帧号并读取（使用 -ss 前置快速 seek）。"""
+        """跳转到指定帧号并读取。
+
+        小范围跳转（≤30 帧）：逐帧跳过，避免进程重启开销。
+        大范围跳转：关闭重启 FFmpeg 进程（-ss 快速 seek）。
+        """
+        frames_to_skip = frame_idx - self._frame_idx
+        if 0 < frames_to_skip <= 30 and self._proc and self._proc.poll() is None:
+            # 小跳转：逐帧跳过（读取但不返回）
+            for _ in range(frames_to_skip - 1):
+                self._skip_frame()
+            self._frame_idx = frame_idx
+            return self.read()
+
+        # 大跳转：关闭重启
         self.close()
         target_sec = frame_idx / self._fps if self._fps > 0 else 0
 
         cmd = [
-            _FFMPEG, "-v", "error",
-            "-ss", f"{target_sec:.3f}",
-            "-i", self._path,
-            "-vframes", "1",
-            "-f", "rawvideo",
-            "-pix_fmt", "bgr24",
-            "-vsync", "0",
-            "pipe:1"
+            _FFMPEG,
+            "-v",
+            "error",
+            "-ss",
+            f"{target_sec:.3f}",
+            "-i",
+            self._path,
+            "-vframes",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "-vsync",
+            "0",
+            "pipe:1",
         ]
         try:
-            raw = subprocess.run(cmd, stdout=subprocess.PIPE,
-                                 stderr=subprocess.DEVNULL,
-                                 timeout=30).stdout
-            expected = self._width * self._height * 3
+            raw = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30).stdout
+            expected = self._frame_size
             if not raw or len(raw) < expected:
-                logger.warning("FFmpeg seek(%d): 数据不足 (got %d, expected %d)", frame_idx, len(raw) if raw else 0, expected)
+                logger.warning(
+                    "FFmpeg seek(%d): 数据不足 (got %d, expected %d)",
+                    frame_idx,
+                    len(raw) if raw else 0,
+                    expected,
+                )
                 return None
-            frame = np.frombuffer(raw[:expected], dtype=np.uint8).reshape(
-                (self._height, self._width, 3))
+            frame = np.frombuffer(raw[:expected], dtype=np.uint8).reshape((self._height, self._width, 3))
             self._frame_idx = frame_idx + 1
             if not self.open():
                 logger.warning("FFmpeg seek(%d): 重新打开失败", frame_idx)

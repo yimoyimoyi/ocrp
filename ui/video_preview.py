@@ -44,7 +44,8 @@ logger = get_logger(__name__)
 
 class _AudioExtractWorker(QThread):
     """后台 FFmpeg 音频提取线程。"""
-    finished = pyqtSignal(str)   # 临时文件路径
+
+    finished = pyqtSignal(str)  # 临时文件路径
     error = pyqtSignal(str)
 
     def __init__(self, video_path: str, parent=None):
@@ -57,13 +58,21 @@ class _AudioExtractWorker(QThread):
                 tmp_path = tmp.name
             ffmpeg = find_ffmpeg()
             cmd = [
-                ffmpeg, "-v", "error",
-                "-i", self._video_path,
-                "-f", "wav",
-                "-acodec", "pcm_s16le",
-                "-ar", "16000",
-                "-ac", "1",
-                "-y", tmp_path,
+                ffmpeg,
+                "-v",
+                "error",
+                "-i",
+                self._video_path,
+                "-f",
+                "wav",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-y",
+                tmp_path,
             ]
             result = subprocess.run(cmd, capture_output=True, timeout=60)
             if result.returncode != 0 or not os.path.isfile(tmp_path):
@@ -89,19 +98,48 @@ def _imread_unicode(path: str) -> np.ndarray | None:
         return None
 
 
-class _ImageLoadBridge(QObject):
-    """跨线程信号桥：daemon 线程通过 pyqtSignal 将加载结果投递到主线程。
+class ImageLoadWorker(QThread):
+    """后台加载图片（文件读取 + 解码）。"""
 
-    PyQt5 中 QTimer.singleShot 不能从非 GUI 线程调用（无事件循环）。
-    使用 pyqtSignal 发射 → Qt 自动 queued connection 到主线程。
-    """
-    loaded = pyqtSignal(object, str)   # (np.ndarray, path)
+    loaded = pyqtSignal(object, str)  # (np.ndarray, path)
     error = pyqtSignal()
+
+    def __init__(self, path: str):
+        super().__init__()
+        self._path = path
+
+    def run(self):
+        img = _imread_unicode(self._path)
+        if img is not None:
+            self.loaded.emit(img.copy(), self._path)
+        else:
+            self.error.emit()
+
+
+class AudioLoadWorker(QThread):
+    """后台加载音频（ffprobe 获取时长）。"""
+
+    loaded = pyqtSignal(str, float)  # (path, duration)
+    error = pyqtSignal(str)
+
+    def __init__(self, path: str):
+        super().__init__()
+        self._path = path
+
+    def run(self):
+        try:
+            from core.ffmpeg_reader import _get_video_info
+
+            info = _get_video_info(self._path)
+            self.loaded.emit(self._path, info.get("duration", 0.0))
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class _SeekResultBridge(QObject):
     """跨线程信号桥：后台 seek 线程将解码帧投递到主线程。"""
-    frame_ready = pyqtSignal(object)   # np.ndarray
+
+    frame_ready = pyqtSignal(object)  # np.ndarray
 
 
 class _PreviewLabel(QLabel):
@@ -121,17 +159,18 @@ class _PreviewLabel(QLabel):
         self.setCursor(Qt.CrossCursor)
 
         # 实例引用（由 VideoPreviewWidget 设置）
-        self._pixmap_ref = lambda: None       # () -> Optional[QPixmap]
-        self._regions_ref = lambda: []        # () -> List[dict]
-        self._selected_ref = lambda: -1       # () -> int
-        self._color_pool_ref = lambda: []     # () -> List[QColor]
-        self._drawing_ref = lambda: False     # () -> bool
+        self._pixmap_ref = lambda: None  # () -> Optional[QPixmap]
+        self._regions_ref = lambda: []  # () -> List[dict]
+        self._selected_ref = lambda: -1  # () -> int
+        self._color_pool_ref = lambda: []  # () -> List[QColor]
+        self._drawing_ref = lambda: False  # () -> bool
         self._start_point_ref = lambda: QPoint()
         self._end_point_ref = lambda: QPoint()
-        self._placeholder_text = "拖放视频/图片文件到此处\n或 Ctrl+V 粘贴文件路径\n\nSpace 播放/暂停 · ← → 快进/退 5s · S 切换速度"
+        self._placeholder_text = (
+            "拖放视频/图片文件到此处\n或 Ctrl+V 粘贴文件路径\n\nSpace 播放/暂停 · ← → 快进/退 5s · S 切换速度"
+        )
 
-    def set_refs(self, pixmap_fn, regions_fn, selected_fn, color_pool_fn,
-                 drawing_fn, start_fn, end_fn):
+    def set_refs(self, pixmap_fn, regions_fn, selected_fn, color_pool_fn, drawing_fn, start_fn, end_fn):
         """设置对 VideoPreviewWidget 状态的引用。"""
         self._pixmap_ref = pixmap_fn
         self._regions_ref = regions_fn
@@ -151,6 +190,7 @@ class _PreviewLabel(QLabel):
 
         # 背景（渐变）
         from PyQt5.QtGui import QLinearGradient
+
         grad = QLinearGradient(0, 0, 0, lh)
         grad.setColorAt(0, QColor(18, 18, 30))
         grad.setColorAt(1, QColor(8, 8, 16))
@@ -158,17 +198,16 @@ class _PreviewLabel(QLabel):
 
         if pix is None or pix.isNull():
             # 占位文字 — 主标题居中 + 副标题底部（防播放栏遮挡）
-            painter.setPen(QColor(0x9a, 0xa0, 0xa6))
+            painter.setPen(QColor(0x9A, 0xA0, 0xA6))
             painter.setFont(QFont("Microsoft YaHei", 14))
             lines = self._placeholder_text.split("\n")
             main_text = "\n".join(lines[:2])
             painter.drawText(QRect(0, 0, lw, lh - 56), Qt.AlignCenter, main_text)
             if len(lines) > 2:
                 painter.setFont(QFont("Microsoft YaHei", 10))
-                painter.setPen(QColor(0x9a, 0xa0, 0xa6, 120))
+                painter.setPen(QColor(0x9A, 0xA0, 0xA6, 120))
                 hint_text = "\n".join(lines[2:])
-                painter.drawText(QRect(0, lh - 60, lw, 50), Qt.AlignCenter,
-                                 hint_text)
+                painter.drawText(QRect(0, lh - 60, lw, 50), Qt.AlignCenter, hint_text)
             painter.end()
             return
 
@@ -288,8 +327,12 @@ class VideoPreviewWidget(QWidget):
         self._resize_handle = ""
         self._drag_offset = QPoint()
         self._color_pool = [
-            QColor(0, 200, 100), QColor(200, 100, 0), QColor(100, 100, 255),
-            QColor(255, 200, 0), QColor(200, 0, 150), QColor(0, 200, 200)
+            QColor(0, 200, 100),
+            QColor(200, 100, 0),
+            QColor(100, 100, 255),
+            QColor(255, 200, 0),
+            QColor(200, 0, 150),
+            QColor(0, 200, 200),
         ]
         self._init_ui()
 
@@ -484,9 +527,7 @@ class VideoPreviewWidget(QWidget):
         self._is_image = False
         self._is_audio = False
         self._label._placeholder_text = (
-            "拖放视频文件到此处\n"
-            "或点击「打开视频/图片」加载文件\n\n"
-            "Space 播放/暂停 · ← → 快进/退 5s · S 切换速度"
+            "拖放视频文件到此处\n或点击「打开视频/图片」加载文件\n\nSpace 播放/暂停 · ← → 快进/退 5s · S 切换速度"
         )
         self._label.update()
 
@@ -501,6 +542,7 @@ class VideoPreviewWidget(QWidget):
             self._ffmpeg = None
 
         from ui.workers import VideoLoadWorker
+
         self._load_worker = VideoLoadWorker(path, self._hw_accel)
         self._load_worker.loaded.connect(self._on_video_loaded)
         self._load_worker.error.connect(self._on_video_load_error)
@@ -518,6 +560,8 @@ class VideoPreviewWidget(QWidget):
         self._selected_region_index = -1
         self._ffmpeg = info["reader"]
         self._video_duration = info["duration"]
+        # 缓存预提取的音频（加载阶段已完成，播放时直接可用）
+        self._audio_temp = info.get("audio_path")
         self._current_frame = frame.copy()
         self._display_frame(self._current_frame)
         if self._video_duration > 0:
@@ -547,7 +591,7 @@ class VideoPreviewWidget(QWidget):
         self._load_worker = None
 
     def load_image(self, path: str):
-        """异步加载图片：文件读取和解码在后台线程执行。"""
+        """异步加载图片：文件读取和解码在后台 QThread 执行。"""
         self._is_audio = False
         if self._ffmpeg:
             try:
@@ -561,25 +605,18 @@ class VideoPreviewWidget(QWidget):
         self._time_range_widget.hide()
         self._play_bar_widget.hide()
 
-        import threading
+        self._image_load_worker = ImageLoadWorker(path)
+        self._image_load_worker.loaded.connect(self._on_image_loaded)
+        self._image_load_worker.error.connect(self._on_image_load_error)
+        self._image_load_worker.start()
 
-        bridge = _ImageLoadBridge()
-        bridge.loaded.connect(self._on_image_loaded)
-        bridge.error.connect(self._on_image_load_error)
-
-        def _load():
-            img = _imread_unicode(path)
-            if img is not None:
-                bridge.loaded.emit(img.copy(), path)
-            else:
-                bridge.error.emit()
-
-        self._label.setText("⏳ 加载中...")
-        threading.Thread(target=_load, daemon=True).start()
+        self._label._placeholder_text = "⏳ 加载中..."
+        self._label.update()
 
     def _on_image_loaded(self, img, path):
         self._current_frame = img
         self._display_frame(self._current_frame)
+        self._label._placeholder_text = ""
         self._label.update()
         self._regions.clear()
         self._selected_region_index = -1
@@ -588,11 +625,11 @@ class VideoPreviewWidget(QWidget):
     def _on_image_load_error(self):
         self._current_frame = None
         self._display_pixmap = None
-        self._label.setText("无法打开图片")
+        self._label._placeholder_text = "❌ 无法打开图片\n拖放文件到此处"
         self._label.update()
 
     def load_audio(self, path: str):
-        """加载纯音频文件 —— 使用与视频一致的播放控件。"""
+        """异步加载纯音频文件 —— ffprobe 在后台 QThread 执行。"""
         self._cleanup_audio_temp()
         if self._ffmpeg:
             try:
@@ -610,24 +647,34 @@ class VideoPreviewWidget(QWidget):
         self._audio_timer.stop()
         self._label.update()
         self._time_range_widget.hide()
-        # 获取音频时长
-        try:
-            from core.ffmpeg_reader import _get_video_info
-            info = _get_video_info(path)
-            dur = info.get("duration", 0.0)
-        except Exception:
-            dur = 0.0
-        self._video_duration = dur
-        self._preview_slider.setRange(0, max(1, int(dur * 100)))
+
+        self._audio_load_worker = AudioLoadWorker(path)
+        self._audio_load_worker.loaded.connect(self._on_audio_loaded)
+        self._audio_load_worker.error.connect(self._on_audio_load_error)
+        self._audio_load_worker.start()
+
+        self._label._placeholder_text = "⏳ 加载中..."
+        self._label.update()
+
+    def _on_audio_loaded(self, path: str, duration: float):
+        """音频加载完成（在主线程执行）。"""
+        self._video_duration = duration
+        self._preview_slider.setRange(0, max(1, int(duration * 100)))
         self.video_loaded.emit(path)
         self._label._placeholder_text = "🎵 已加载音频文件\n仅支持语音识别和纠错"
         self._label.update()
         self.show_play_controls()
 
+    def _on_audio_load_error(self, msg: str):
+        """音频加载失败（在主线程执行）。"""
+        logger.error("音频加载失败: %s", msg)
+        self._label._placeholder_text = f"❌ 加载失败: {msg}\n拖放文件到此处"
+        self._label.update()
+
     def capture_test_frame(self, image: np.ndarray = None):
         if image is not None:
             self._current_frame = image.copy()
-        elif self._ffmpeg and hasattr(self._ffmpeg, 'is_opened') and self._ffmpeg.is_opened():
+        elif self._ffmpeg and hasattr(self._ffmpeg, "is_opened") and self._ffmpeg.is_opened():
             frame = self._ffmpeg.read()
             if frame is not None and frame.size > 0:
                 self._current_frame = frame.copy()
@@ -652,13 +699,13 @@ class VideoPreviewWidget(QWidget):
 
     def _do_seek(self):
         """执行实际的 seek 操作（由 QTimer 触发，在主线程）。"""
-        target = getattr(self, '_seek_target', None)
+        target = getattr(self, "_seek_target", None)
         if target is None:
             return
         if abs(self._current_position - target) > 0.05:
             return
         ff = self._ffmpeg
-        if ff and hasattr(ff, 'is_opened') and ff.is_opened():
+        if ff and hasattr(ff, "is_opened") and ff.is_opened():
             import threading
 
             bridge = _SeekResultBridge()
@@ -684,6 +731,7 @@ class VideoPreviewWidget(QWidget):
         if self._player:
             self._player.stop()
         from core.ffmpeg_player import FFmpegPlayer
+
         info = {"duration": self._video_duration}
         self._player = FFmpegPlayer(self._video_path, hw_accel=self._hw_accel, video_info=info)
         self._player.frame_callback = self._on_player_frame
@@ -727,19 +775,16 @@ class VideoPreviewWidget(QWidget):
         self._audio_player.setPosition(int(self._current_position * 1000))
         self._audio_player.play()
         # 延迟重置标记，给 QMediaPlayer 时间完成 seek
-        QTimer.singleShot(200, lambda: setattr(self, '_audio_seek_pending', False))
+        QTimer.singleShot(200, lambda: setattr(self, "_audio_seek_pending", False))
 
     def _start_video_audio(self):
-        """用 FFmpeg 解码视频完整音轨到临时 WAV，通过 QMediaPlayer 播放。"""
+        """启动视频音频播放（音频已在加载阶段预提取）。"""
         if self._audio_player is None:
             self._audio_player = QMediaPlayer(self)
             self._audio_player.error.connect(self._on_video_audio_error)
-        # 首次播放或切换文件后异步抽取完整音轨
-        if not hasattr(self, "_audio_temp") or not self._audio_temp:
-            self._extract_full_audio_async()
-            return  # 等待提取完成后再播放
+        # 检查音频是否已预提取
         if not self._audio_temp:
-            return
+            return  # 无音频流（静音播放）
         # 标记正在 seek，忽略初始的位置更新
         self._audio_seek_pending = True
         url = QUrl.fromLocalFile(self._audio_temp)
@@ -747,7 +792,7 @@ class VideoPreviewWidget(QWidget):
         self._audio_player.setPosition(int(self._current_position * 1000))
         self._audio_player.play()
         # 延迟重置标记，给 QMediaPlayer 时间完成 seek
-        QTimer.singleShot(200, lambda: setattr(self, '_audio_seek_pending', False))
+        QTimer.singleShot(200, lambda: setattr(self, "_audio_seek_pending", False))
 
     def _extract_full_audio_async(self):
         """异步抽取视频完整音轨到临时 WAV 文件（不阻塞 UI）。"""
@@ -768,7 +813,7 @@ class VideoPreviewWidget(QWidget):
             self._audio_player.setPosition(int(self._current_position * 1000))
             self._audio_player.play()
             # 延迟重置标记，给 QMediaPlayer 时间完成 seek
-            QTimer.singleShot(200, lambda: setattr(self, '_audio_seek_pending', False))
+            QTimer.singleShot(200, lambda: setattr(self, "_audio_seek_pending", False))
 
     def _on_audio_extract_error(self, err: str):
         """音频提取失败回调。"""
@@ -973,8 +1018,7 @@ class VideoPreviewWidget(QWidget):
         self.seek_to(self._time_end)
 
     def _update_time_labels(self):
-        for v, lb in [(self._time_start, self._time_start_label),
-                       (self._time_end, self._time_end_label)]:
+        for v, lb in [(self._time_start, self._time_start_label), (self._time_end, self._time_end_label)]:
             m, s = divmod(int(v), 60)
             lb.setText(f"{m:02d}:{s:02d}")
 
@@ -991,11 +1035,19 @@ class VideoPreviewWidget(QWidget):
     def add_region(self, x: int, y: int, w: int, h: int, name: str = "") -> dict:
         if not name:
             self._region_counter += 1
-            name = f"{_("区域")}{self._region_counter}"
+            name = f"{_('区域')}{self._region_counter}"
         color = self._color_pool[len(self._regions) % len(self._color_pool)]
-        r = {"name": name, "x": x, "y": y, "w": w, "h": h, "color": color,
-             "engine": self._default_engine, "prompt": self._default_prompt,
-             "template": self._default_template}
+        r = {
+            "name": name,
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "color": color,
+            "engine": self._default_engine,
+            "prompt": self._default_prompt,
+            "template": self._default_template,
+        }
         self._regions.append(r)
         self.regions_changed.emit(list(self._regions))
         self._label.update()
@@ -1027,7 +1079,7 @@ class VideoPreviewWidget(QWidget):
             r = self._regions[region_index]
             x, y, w, h = r["x"], r["y"], r["w"], r["h"]
             if w > 0 and h > 0:
-                return self._current_frame[y:y + h, x:x + w].copy()
+                return self._current_frame[y : y + h, x : x + w].copy()
         return self._current_frame
 
     def _display_frame(self, frame: np.ndarray):
@@ -1036,8 +1088,7 @@ class VideoPreviewWidget(QWidget):
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         else:
             rgb = frame
-        self._display_pixmap = QPixmap.fromImage(
-            QImage(rgb.tobytes(), w, h, ch * w, QImage.Format_RGB888))
+        self._display_pixmap = QPixmap.fromImage(QImage(rgb.tobytes(), w, h, ch * w, QImage.Format_RGB888))
         self._label.update()
 
     def _get_image_display_rect(self):
@@ -1103,8 +1154,7 @@ class VideoPreviewWidget(QWidget):
             x1, y1, x2, y2 = p1.x(), p1.y(), p2.x(), p2.y()
             px, py = pos.x(), pos.y()
             # 1) 四角检测优先（6px 以内）
-            for corner, cx, cy in [("tl", x1, y1), ("tr", x2, y1),
-                                   ("bl", x1, y2), ("br", x2, y2)]:
+            for corner, cx, cy in [("tl", x1, y1), ("tr", x2, y1), ("bl", x1, y2), ("br", x2, y2)]:
                 if abs(px - cx) <= margin and abs(py - cy) <= margin:
                     return i, corner
             # 2) 四条边检测：沿整条边的 full-width 检测（不仅限于中心）
@@ -1126,9 +1176,27 @@ class VideoPreviewWidget(QWidget):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
                 p = url.toLocalFile()
-                if p.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm',
-                                       '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.opus',
-                                       '.png', '.jpg', '.jpeg', '.bmp')):
+                if p.lower().endswith(
+                    (
+                        ".mp4",
+                        ".mkv",
+                        ".avi",
+                        ".mov",
+                        ".webm",
+                        ".mp3",
+                        ".wav",
+                        ".flac",
+                        ".ogg",
+                        ".m4a",
+                        ".aac",
+                        ".wma",
+                        ".opus",
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".bmp",
+                    )
+                ):
                     event.acceptProposedAction()
                     return
         event.ignore()
@@ -1144,11 +1212,12 @@ class VideoPreviewWidget(QWidget):
             self._regions.clear()
             self._selected_region_index = -1
             from core.asr_engine import SUPPORTED_AUDIO_EXTS
-            if ext in ('.mp4', '.mkv', '.avi', '.mov', '.webm'):
+
+            if ext in (".mp4", ".mkv", ".avi", ".mov", ".webm"):
                 self.load_video(path)
             elif ext in SUPPORTED_AUDIO_EXTS:
                 self._audio_dropped(path)
-            elif ext in ('.png', '.jpg', '.jpeg', '.bmp'):
+            elif ext in (".png", ".jpg", ".jpeg", ".bmp"):
                 self.load_image(path)
 
     # ── 粘贴（Ctrl+V）和键盘快捷键 ──
@@ -1163,11 +1232,30 @@ class VideoPreviewWidget(QWidget):
             if mime and mime.hasUrls():
                 paths = [url.toLocalFile() for url in mime.urls() if url.isLocalFile()]
                 if paths:
-                    valid_paths = [p for p in paths if Path(p).suffix.lower() in (
-                        '.mp4', '.mkv', '.avi', '.mov', '.webm',
-                        '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.wma', '.opus',
-                        '.png', '.jpg', '.jpeg', '.bmp'
-                    )]
+                    valid_paths = [
+                        p
+                        for p in paths
+                        if Path(p).suffix.lower()
+                        in (
+                            ".mp4",
+                            ".mkv",
+                            ".avi",
+                            ".mov",
+                            ".webm",
+                            ".mp3",
+                            ".wav",
+                            ".flac",
+                            ".ogg",
+                            ".m4a",
+                            ".aac",
+                            ".wma",
+                            ".opus",
+                            ".png",
+                            ".jpg",
+                            ".jpeg",
+                            ".bmp",
+                        )
+                    ]
                     if valid_paths:
                         self._handle_pasted_files(valid_paths)
                     return
@@ -1204,6 +1292,7 @@ class VideoPreviewWidget(QWidget):
     def _handle_pasted_files(self, paths: list):
         """处理粘贴的文件列表（与 dropEvent 行为一致）。"""
         from core.asr_engine import SUPPORTED_AUDIO_EXTS
+
         if len(paths) > 1:
             self.files_dropped.emit(paths)
         elif len(paths) == 1:
@@ -1211,11 +1300,11 @@ class VideoPreviewWidget(QWidget):
             ext = Path(path).suffix.lower()
             self._regions.clear()
             self._selected_region_index = -1
-            if ext in ('.mp4', '.mkv', '.avi', '.mov', '.webm'):
+            if ext in (".mp4", ".mkv", ".avi", ".mov", ".webm"):
                 self.load_video(path)
             elif ext in SUPPORTED_AUDIO_EXTS:
                 self._audio_dropped(path)
-            elif ext in ('.png', '.jpg', '.jpeg', '.bmp'):
+            elif ext in (".png", ".jpg", ".jpeg", ".bmp"):
                 self.load_image(path)
 
     def _audio_dropped(self, path: str):
@@ -1229,6 +1318,7 @@ class VideoPreviewWidget(QWidget):
         # 获取音频时长
         try:
             from core.ffmpeg_reader import _get_video_info
+
             info = _get_video_info(path)
             self._video_duration = info.get("duration", 0.0)
         except Exception:
@@ -1262,8 +1352,7 @@ class VideoPreviewWidget(QWidget):
                 rect = self._get_image_display_rect()
                 img_w, img_h, ox, oy = rect
                 pw, ph = self._display_pixmap.width(), self._display_pixmap.height()
-                p1 = QPoint(int(r["x"] * img_w / pw) + ox,
-                            int(r["y"] * img_h / ph) + oy)
+                p1 = QPoint(int(r["x"] * img_w / pw) + ox, int(r["y"] * img_h / ph) + oy)
                 self._drag_offset = event.pos() - p1
             else:
                 self._resizing_region_index = idx
@@ -1335,10 +1424,8 @@ class VideoPreviewWidget(QWidget):
         if self._drawing:
             self._drawing = False
             # 钳制起点/终点到图片可见区域内
-            p1 = self._label_to_frame_coords(self._start_point.x(),
-                                              self._start_point.y())
-            p2 = self._label_to_frame_coords(self._end_point.x(),
-                                              self._end_point.y())
+            p1 = self._label_to_frame_coords(self._start_point.x(), self._start_point.y())
+            p2 = self._label_to_frame_coords(self._end_point.x(), self._end_point.y())
             if p1.x() < 0 or p2.x() < 0:
                 pass  # 超出图片区域，忽略
             else:
@@ -1364,19 +1451,19 @@ class VideoPreviewWidget(QWidget):
         """关闭预览控件 —— 清理播放器和 FFmpeg。"""
         logger.info("清理播放器/FFmpeg...")
         # 停止定时器
-        if hasattr(self, '_audio_timer'):
+        if hasattr(self, "_audio_timer"):
             self._audio_timer.stop()
-        if hasattr(self, '_drag_seek_timer'):
+        if hasattr(self, "_drag_seek_timer"):
             self._drag_seek_timer.stop()
         # 停止后台 worker
-        if hasattr(self, '_load_worker') and self._load_worker:
+        if hasattr(self, "_load_worker") and self._load_worker:
             try:
                 self._load_worker.terminate()
                 self._load_worker.wait(2000)
             except Exception as e:
                 logger.debug("load_worker 终止异常: %s", e)
             self._load_worker = None
-        if hasattr(self, '_audio_extract_worker') and self._audio_extract_worker:
+        if hasattr(self, "_audio_extract_worker") and self._audio_extract_worker:
             try:
                 self._audio_extract_worker.terminate()
                 self._audio_extract_worker.wait(2000)
@@ -1391,14 +1478,14 @@ class VideoPreviewWidget(QWidget):
                 logger.warning("播放器停止异常: %s", e)
             self._player = None
         # 关闭音频播放器
-        if hasattr(self, '_audio_player') and self._audio_player:
+        if hasattr(self, "_audio_player") and self._audio_player:
             try:
                 self._audio_player.stop()
             except Exception as e:
                 logger.debug("音频播放器停止异常: %s", e)
             self._audio_player = None
         # 清理临时文件
-        if hasattr(self, '_audio_temp') and self._audio_temp:
+        if hasattr(self, "_audio_temp") and self._audio_temp:
             try:
                 os.unlink(self._audio_temp)
             except OSError:
