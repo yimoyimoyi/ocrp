@@ -150,29 +150,14 @@ def _register_gpu_dll_dirs():
             return
 
         # nvidia pip 包 DLL 目录（paddlepaddle-gpu 依赖）
-        # 例如 site-packages/nvidia/cuda_runtime/lib/
-        _nvidia_root = os.path.join(os.path.dirname(__file__), "..", ".venv", "Lib", "site-packages", "nvidia")
-        if not os.path.isdir(_nvidia_root):
-            # fallback: 从 torch 安装路径推断 site-packages
-            try:
-                import torch
-
-                _sp = os.path.dirname(os.path.dirname(torch.__file__))
-                _nvidia_root = os.path.join(_sp, "nvidia")
-            except Exception as _e:
-                logger.debug("nvidia 包路径推断失败: %s", _e)
-                _nvidia_root = None
-
+        # 优先使用 sys.path 扫描，避免硬编码路径
         _nvidia_dirs = 0
-        if _nvidia_root and os.path.isdir(_nvidia_root):
-            for _entry in os.listdir(_nvidia_root):
-                _lib_dir = os.path.join(_nvidia_root, _entry, "bin")
-                if os.path.isdir(_lib_dir):
-                    try:
-                        os.add_dll_directory(_lib_dir)
-                        _nvidia_dirs += 1
-                    except OSError as _e:
-                        logger.debug("nvidia DLL 目录注册失败 (%s): %s", _entry, _e)
+        for _bin_dir in _find_nvidia_site_packages_dirs():
+            try:
+                os.add_dll_directory(_bin_dir)
+                _nvidia_dirs += 1
+            except OSError as _e:
+                logger.debug("nvidia DLL 目录注册失败 (%s): %s", _bin_dir, _e)
 
         # 兼容旧目录
         for legacy in ("cuda12", "cudnn8"):

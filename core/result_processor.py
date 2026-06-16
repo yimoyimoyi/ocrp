@@ -5,12 +5,7 @@ import json
 import re
 from typing import Any
 
-
-def get_similarity(a: str, b: str) -> float:
-    """计算两个字符串的相似度（0.0 ~ 1.0），使用 RapidFuzz C++ 实现。"""
-    from rapidfuzz.fuzz import ratio
-
-    return ratio(a, b) / 100.0 if a and b else 0.0
+from core.utils import get_similarity
 
 
 def polish_results(

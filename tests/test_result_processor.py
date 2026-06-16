@@ -1,6 +1,7 @@
 """结果处理器单元测试。"""
 
-from core.result_processor import _fmt_srt_time, get_similarity
+from core.result_processor import _fmt_srt_time
+from core.utils import get_similarity
 
 
 class TestFormatTime:

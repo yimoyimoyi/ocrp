@@ -280,12 +280,9 @@ class QtSubprocessManager(QObject):
 
 
 # Qt 事件循环标志常量（避免每次调用时 import）
-try:
-    from PyQt5.QtCore import QEventLoop
+from PyQt5.QtCore import QEventLoop
 
-    QEventLoop_AllEvents = QEventLoop.AllEvents
-except ImportError:
-    QEventLoop_AllEvents = 0
+QEventLoop_AllEvents = QEventLoop.AllEvents
 
 
 class SharedMemoryManager:

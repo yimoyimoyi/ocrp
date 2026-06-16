@@ -59,12 +59,9 @@ def scan_local_asr_models(model_dir: str = "") -> list[str]:
 
 
 from core.config_manager import _load_json_with_comments
-from core.logger import get_logger
 
 # ── 不在模块级别加载任何 torch/cuda DLL ──
 # 子进程 server 有自己隔离的 DLL 环境
-
-logger = get_logger(__name__)
 
 
 _DEFAULT_CONFIG = {
@@ -150,6 +147,7 @@ class WhisperXEngine(BaseASREngine):
         super().__init__(c)
         self.engine_name = "whisperx"
         self._subproc = None  # QtSubprocessManager（懒初始化）
+        self._stream_proc = None  # subprocess.Popen 缓存（用于流式通信）
         self._model_size = c.get("model_size", "large-v3")
         self._model_dir = c.get("model_dir", _DEFAULT_MODEL_DIR) or ""
         self._language = c.get("language", "zh")
@@ -248,6 +246,14 @@ class WhisperXEngine(BaseASREngine):
         self._stop_event.set()  # 通知 warm_up 线程退出
         if self._subproc:
             self._subproc.shutdown(timeout=10)
+        # 清理流式子进程
+        if self._stream_proc is not None:
+            try:
+                self._stream_proc.kill()
+                self._stream_proc.wait(timeout=5)
+            except Exception:
+                pass
+            self._stream_proc = None
 
     def _send_request(self, req: dict, timeout: float = 300.0) -> dict:
         """发送请求并等待响应（基于 QProcess，无手动线程）。"""
@@ -288,9 +294,15 @@ class WhisperXEngine(BaseASREngine):
 
         QProcess 依赖事件循环，在 QThread.run() 中无法接收信号。
         此方法使用 subprocess.Popen 直接管理子进程，用于流式通信。
+        会缓存 Popen 实例，避免重复启动模型。
         """
-        # 如果 QProcess 管理的子进程已就绪，获取其底层进程信息
-        # 但 QProcess 不暴露 Popen，所以用 subprocess.Popen 重新启动一个独立实例
+        # 复用已有的缓存进程
+        if self._stream_proc is not None and self._stream_proc.poll() is None:
+            return self._stream_proc
+
+        # 清理旧进程
+        self._stream_proc = None
+
         _ASR_SERVER = str(BASE_DIR / "core" / "asr_server.py")
         _CONFIG_PATH = str(CONFIG_DIR / "asr_engines.json")
         _PYTHON = sys.executable
@@ -314,6 +326,7 @@ class WhisperXEngine(BaseASREngine):
                 time.sleep(0.1)
                 continue
             if "ready" in line:
+                self._stream_proc = proc
                 return proc
             if "error" in line.lower() and "failed" in line.lower():
                 logger.error("ASR 子进程启动失败: %s", line.rstrip()[:200])
@@ -410,15 +423,17 @@ class WhisperXEngine(BaseASREngine):
             if error_holder is not None:
                 error_holder[0] = str(e)
         finally:
-            # 清理子进程
-            try:
-                _send_json(proc.stdin, {"cmd": "shutdown"})
-                proc.wait(timeout=10)
-            except Exception:
+            # 不复用子进程时仅关闭旧进程引用（非缓存进程）
+            # 缓存的 _stream_proc 由 _stop_server / atexit 统一清理
+            if proc is not self._stream_proc:
                 try:
-                    proc.kill()
+                    _send_json(proc.stdin, {"cmd": "shutdown"})
+                    proc.wait(timeout=10)
                 except Exception:
-                    pass
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
 
     def warm_up(self):
         """后台线程预加载模型（不阻塞调用线程）。

@@ -5,6 +5,24 @@ import shutil
 import sys
 from pathlib import Path
 
+
+def get_similarity(a: str, b: str) -> float:
+    """计算两个字符串的相似度（0.0 ~ 1.0），使用 RapidFuzz C++ 实现。"""
+    from rapidfuzz.fuzz import ratio
+
+    return ratio(a, b) / 100.0 if a and b else 0.0
+
+
+def format_time(seconds: float) -> str:
+    """格式化秒数为 HH:MM:SS,mmm（SRT 标准格式）。"""
+    if seconds < 0:
+        seconds = 0.0
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds - int(seconds)) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
 _BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ── Windows 包管理器常见 FFmpeg 安装路径 ──

@@ -55,7 +55,7 @@ class OCRWorker(QThread):
             text = _recognize_roi(self._engine, roi, prompt)
 
             if text and text.strip():
-                from core.frame_processor import format_time
+                from core.utils import format_time
 
                 t_str = format_time(self._timestamp)
                 rname = self._region.get("name", "unknown")
@@ -437,7 +437,7 @@ class AudioProcessWorker(QThread):
 
             self.progress.emit("正在语音识别...")
 
-            from core.frame_processor import format_time
+            from core.utils import format_time
 
             results = []
             error_holder = [None]
@@ -559,7 +559,8 @@ class BatchProcessWorker(QThread):
         """处理单个文件（视频或图片），返回结果列表。"""
         from pathlib import Path
 
-        from core.frame_processor import FrameProcessor, format_time
+        from core.frame_processor import FrameProcessor
+        from core.utils import format_time
 
         ext = Path(file_path).suffix.lower()
         results = []

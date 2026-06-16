@@ -220,7 +220,7 @@ if !USE_GPU! equ 1 goto :sync_gpu
 
 echo     Mode: CPU
 echo     Source: PaddlePaddle CPU + PyPI
-uv sync %UV_SYNC_OPTS%
+uv sync %UV_SYNC_OPTS% --extra asr
 if !errorlevel! equ 0 goto :sync_ok
 goto :sync_fail
 
@@ -233,7 +233,7 @@ set "PADDLE_IDX=https://www.paddlepaddle.org.cn/packages/stable/cu126/"
 
 rem Step 1: Base sync
 echo     Syncing base dependencies...
-uv sync %UV_SYNC_OPTS%
+uv sync %UV_SYNC_OPTS% --extra asr
 if !errorlevel! neq 0 goto :sync_fail
 
 rem Step 2: Check and install GPU torch if missing

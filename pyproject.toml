@@ -40,9 +40,8 @@ dependencies = [
     "pandas>=2.0",
     "RapidFuzz>=3.0",
     # 音频 / ASR
-    "whisperx>=3.3.1",
-    "torchaudio>=2.0",
-    "torch>=2.0",
+    "torchaudio>=2.0,<2.11",
+    "torch>=2.0,<2.11",
     # UI 主题
     "qt-material>=2.14",
     # 系统工具
@@ -56,6 +55,10 @@ dependencies = [
 # ── GPU 支持（CUDA 12.4） ──
 gpu = [
     # paddlepaddle-gpu 通过 paddle 官方源安装，不在此声明
+]
+# ── ASR 语音识别（可选，需要额外 CUDA 依赖） ──
+asr = [
+    "whisperx>=3.3.1",
 ]
 # ── 开发 / 质量工具 ──
 dev = [

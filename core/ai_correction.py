@@ -28,7 +28,6 @@ logger = get_logger(__name__)
 import datetime as _adt
 
 _ALOG = BASE_DIR / "logs" / "debug_seg.log"
-_ALOG.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _alog(msg: str):
@@ -36,6 +35,7 @@ def _alog(msg: str):
     if os.environ.get("ORCP_DEBUG_SEG", "") != "1":
         return
     try:
+        _ALOG.parent.mkdir(parents=True, exist_ok=True)
         if _ALOG.exists() and _ALOG.stat().st_size > 5 * 1024 * 1024:
             data = _ALOG.read_bytes()
             _ALOG.write_bytes(data[len(data) // 2:])
@@ -699,7 +699,7 @@ class AICorrector:
                 f"{context_block}以下是需要处理的内容：\n{batch_text}\n\n"
                 f"{custom_hint}{task}\n\n"
                 f'输出格式（严格遵守 JSON）：\n'
-                f'{{"results": [{{"id": 0, "text": "处理后的第一行"}}, {{"id": 1, "text": "处理后的第二行}}, ...]}}'
+                f'{{"results": [{{"id": 0, "text": "处理后的第一行"}}, {{"id": 1, "text": "处理后的第二行"}}, ...]}}'
             )
         else:
             prompt = (

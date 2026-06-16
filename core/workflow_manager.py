@@ -61,6 +61,9 @@ class WorkflowManager(QObject):
         self._filter_mgr = None
         self._config_mgr = None
 
+        # ── UI 组件引用 ──
+        self._video_preview = None
+
         # ── 工作线程 ──
         self._video_worker: VideoProcessWorker | None = None
         self._audio_worker: AudioProcessWorker | None = None
@@ -72,6 +75,7 @@ class WorkflowManager(QObject):
         self._batch_correction_workers: list[BatchCorrectionWorker] = []
         self._batch_correction_workers_lock = threading.Lock()
         self._batch_completed_count: int = 0
+        self._batch_completed_count_lock = threading.Lock()
         self._batch_total_count: int = 0
         self._batch_pending_batches: deque = deque()
 
@@ -93,6 +97,7 @@ class WorkflowManager(QObject):
         self._polish_completed_batches: int = 0
         self._polish_pending_batches: deque = deque()
         self._polish_workers: list[BatchPolishWorker] = []
+        self._polish_workers_lock = threading.Lock()
 
         # ── 批量状态 ──
         self._batch_files: list[str] = []
@@ -510,7 +515,7 @@ class WorkflowManager(QObject):
             for seg in cached:
                 ts = seg.get("start", 0.0)
                 end_ts = seg.get("end", ts + 3.0)
-                from core.frame_processor import format_time
+                from core.utils import format_time
 
                 t_str = format_time(ts)
                 text = seg.get("text", "").strip()
@@ -654,9 +659,12 @@ class WorkflowManager(QObject):
 
             # 全量处理：直接纠错（纠错完成后会自动触发下一个文件）
             corr_enabled = mp.get("corr_enabled", False)
-            if corr_enabled and n > 0:
+            if corr_enabled and n > 0 and not self._correction_in_progress:
                 self._run_full_correction(is_auto=True)
                 self.status_msg.emit(f"{msg} | 全量 AI 纠错中...")
+            elif corr_enabled and self._correction_in_progress:
+                logger.warning("纠错已在运行中，跳过重复触发")
+                self.status_msg.emit(msg)
             else:
                 self.status_msg.emit(msg)
                 # 没有纠错时，直接进入下一个文件
@@ -694,6 +702,14 @@ class WorkflowManager(QObject):
         self._polish_stop_requested = True
         self._polish_in_progress = False
 
+        # 停止环境提取 worker
+        if hasattr(self, "_env_worker") and self._env_worker is not None and self._env_worker.isRunning():
+            self._env_worker.quit()
+            if not self._env_worker.wait(3000):
+                self._env_worker.terminate()
+            self._env_worker = None
+            self._env_extraction_running = False
+
         # 视频帧处理器（sentinel / OCR 循环）
         if self._frame_processor:
             self._frame_processor.stop()
@@ -717,10 +733,11 @@ class WorkflowManager(QObject):
         self._batch_pending_batches.clear()
 
         # 停止润色 workers
-        for w in self._polish_workers:
-            if w.isRunning():
-                w.stop()
-        self._polish_workers.clear()
+        with self._polish_workers_lock:
+            for w in self._polish_workers:
+                if w.isRunning():
+                    w.stop()
+            self._polish_workers.clear()
         self._polish_pending_batches.clear()
 
         # 批量纠错（并行 worker 列表）
@@ -824,23 +841,32 @@ class WorkflowManager(QObject):
             self.status_msg.emit(_("⚠ 选中的行无有效文本可纠错"))
             return
 
+        if self._correction_in_progress:
+            logger.warning("纠错已在运行中，忽略选中行的纠错请求")
+            self.status_msg.emit(_("⚠ 纠错进行中，请等待当前纠错完成"))
+            return
+
+        self._correction_in_progress = True
+
         mp = self._get_mode_params()
         self._sync_corrector_modes(mp)
-        self._maybe_extract_env(results, mp)
-
-        context_window = mp.get("corr_context_window", 3)
-        max_retries = mp.get("corr_retry", 3)
-        batch_size = mp.get("corr_batch_size", 5)
-        concurrency = mp.get("corr_concurrency", 4)
-
-        total_batches = (len(texts) + batch_size - 1) // batch_size
-        self._set_buttons(correction_all=False, correction=False, polish=False, polish_all=False)
-        self._total_correction_batches = total_batches
-        self._is_auto_correction = False
         self._correction_stop_requested = False
 
-        self._submit_all_correction_batches(texts, batch_size, context_window, max_retries, total_batches, concurrency)
-        self.status_msg.emit(f"已提交 {len(texts)} 条批量纠错 [{total_batches} 批]")
+        def _do_correction():
+            context_window = mp.get("corr_context_window", 3)
+            max_retries = mp.get("corr_retry", 3)
+            batch_size = mp.get("corr_batch_size", 5)
+            concurrency = mp.get("corr_concurrency", 4)
+
+            total_batches = (len(texts) + batch_size - 1) // batch_size
+            self._set_buttons(correction_all=False, correction=False, polish=False, polish_all=False)
+            self._total_correction_batches = total_batches
+            self._is_auto_correction = False
+
+            self._submit_all_correction_batches(texts, batch_size, context_window, max_retries, total_batches, concurrency)
+            self.status_msg.emit(f"已提交 {len(texts)} 条批量纠错 [{total_batches} 批]")
+
+        self._maybe_extract_env(results, mp, on_done=_do_correction)
 
     # ═══════════════════════════════════════════════════════════════
     # AI 纠错 —— 全部
@@ -873,8 +899,14 @@ class WorkflowManager(QObject):
             self._corrector.stream_mode = mp.get("corr_stream", False)
             self._corrector.json_mode = mp.get("corr_json", False)
 
-    def _maybe_extract_env(self, results: list, mp: dict):
-        """如果配置启用，同步提取全文环境上下文（确保纠错批次在提取完成后才提交）。"""
+    def _maybe_extract_env(self, results: list, mp: dict, on_done: Callable | None = None):
+        """如果配置启用，异步提取全文环境上下文。
+
+        Args:
+            results: 结果列表
+            mp: 模式参数
+            on_done: 提取完成（或无需提取）后的回调
+        """
         if mp.get("corr_extract_env", False) and self._corrector and not self._env_extraction_running:
             if hasattr(self._corrector, "_should_skip_env_extraction"):
                 if self._corrector._should_skip_env_extraction():
@@ -883,13 +915,38 @@ class WorkflowManager(QObject):
                         self._corrector._extract_env,
                         bool(self._corrector._env_context),
                     )
+                    if on_done:
+                        on_done()
                     return
             self._env_extraction_running = True
             self.status_msg.emit("⏳ AI 纠错: 提取全文环境中...")
             all_texts = [r.get("raw", "") for r in results if r.get("raw", "").strip()]
             if all_texts:
-                self._corrector.extract_environment(all_texts)
-            self._env_extraction_running = False
+                from ui.workers import EnvExtractWorker
+
+                self._env_worker = EnvExtractWorker(self._corrector, all_texts)
+
+                def _on_env_done(_env_text: str):
+                    self._env_extraction_running = False
+                    if on_done:
+                        on_done()
+
+                def _on_env_error(err: str):
+                    logger.error("环境提取失败: %s", err)
+                    self._env_extraction_running = False
+                    if on_done:
+                        on_done()
+
+                self._env_worker.finished.connect(_on_env_done)
+                self._env_worker.error.connect(_on_env_error)
+                self._env_worker.start()
+            else:
+                self._env_extraction_running = False
+                if on_done:
+                    on_done()
+        else:
+            if on_done:
+                on_done()
 
     def _start_batch_correction(self, results: list, is_auto: bool = False):
         """内部：启动批量纠错/翻译（自动全量或手动全量）。
@@ -906,25 +963,29 @@ class WorkflowManager(QObject):
 
         mp = self._get_mode_params()
         self._sync_corrector_modes(mp)
-        self._maybe_extract_env(results, mp)
 
-        texts = self._build_correction_texts(results)
-        if not texts:
-            self.status_msg.emit(f"✅ 完成: {len(results)} 条结果 | 无有效文本可纠错")
-            return
+        def _do_correction():
+            texts = self._build_correction_texts(results)
+            if not texts:
+                self._correction_in_progress = False
+                self._set_buttons(correction_all=True, correction=True, polish=True, polish_all=True)
+                self.status_msg.emit(f"✅ 完成: {len(results)} 条结果 | 无有效文本可纠错")
+                return
 
-        context_window = mp.get("corr_context_window", 3)
-        max_retries = mp.get("corr_retry", 3)
-        batch_size = mp.get("corr_batch_size", 5)
-        concurrency = mp.get("corr_concurrency", 4)
+            context_window = mp.get("corr_context_window", 3)
+            max_retries = mp.get("corr_retry", 3)
+            batch_size = mp.get("corr_batch_size", 5)
+            concurrency = mp.get("corr_concurrency", 4)
 
-        # 按 batch_size 分批提交
-        total_batches = (len(texts) + batch_size - 1) // batch_size
-        self._set_buttons(correction_all=False, correction=False, polish=False, polish_all=False)
-        self._total_correction_batches = total_batches
-        self._is_auto_correction = is_auto
+            # 按 batch_size 分批提交
+            total_batches = (len(texts) + batch_size - 1) // batch_size
+            self._set_buttons(correction_all=False, correction=False, polish=False, polish_all=False)
+            self._total_correction_batches = total_batches
+            self._is_auto_correction = is_auto
 
-        self._submit_all_correction_batches(texts, batch_size, context_window, max_retries, total_batches, concurrency)
+            self._submit_all_correction_batches(texts, batch_size, context_window, max_retries, total_batches, concurrency)
+
+        self._maybe_extract_env(results, mp, on_done=_do_correction)
 
     def _submit_all_correction_batches(
         self,
@@ -983,7 +1044,8 @@ class WorkflowManager(QObject):
 
     def _on_parallel_batch_done(self, context_window: int, max_retries: int):
         """单个批次完成 → 启动下一批或检查全部完成。"""
-        self._batch_completed_count += 1
+        with self._batch_completed_count_lock:
+            self._batch_completed_count += 1
 
         if self._correction_stop_requested:
             self._check_all_batches_done()
@@ -997,7 +1059,8 @@ class WorkflowManager(QObject):
     def _on_parallel_batch_error(self, err: str, context_window: int, max_retries: int):
         """单个批次出错 → 记录错误，继续后续批次。"""
         logger.warning("批次纠错失败: %s", err)
-        self._batch_completed_count += 1
+        with self._batch_completed_count_lock:
+            self._batch_completed_count += 1
 
         if self._correction_stop_requested:
             self._check_all_batches_done()
@@ -1029,6 +1092,8 @@ class WorkflowManager(QObject):
             self._batch_correction_workers.clear()
         n = self._get_table_row_count()
         self.status_msg.emit(f"✅ 完成: {n} 条结果 | 全量纠错完成")
+        # 纠错完成后，进入下一个文件
+        self._maybe_start_next_batch_file()
 
     def _on_batch_correction_finished(self):
         """批量纠错完成（来自 correct_all）。"""
@@ -1102,6 +1167,10 @@ class WorkflowManager(QObject):
         # 加载下一个文件
         next_file = self._batch_files[0]
         ext = Path(next_file).suffix.lower()
+
+        if self._video_preview is None:
+            logger.error("video_preview 未初始化，无法加载批量文件")
+            return
 
         # 连接加载完成信号
         self._video_preview.video_loaded.connect(self._on_batch_file_loaded)
@@ -1263,31 +1332,38 @@ class WorkflowManager(QObject):
 
     def _start_polish(self, items: list[tuple[int, str, str]]):
         """启动润色（并行批处理，滑动窗口 4 并发）。"""
+        if self._polish_in_progress:
+            logger.warning("润色已在运行中，忽略重复请求")
+            self.status_msg.emit(_("⚠ 润色进行中，请等待当前润色完成"))
+            return
+
         mp = self._get_mode_params()
         self._sync_corrector_modes(mp)
-        self._maybe_extract_env(self._get_results(), mp)
-
-        batch_size = mp.get("corr_batch_size", 5)
-        batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
-
-        self._set_buttons(polish=False, polish_all=False)
         self._polish_in_progress = True
         self._polish_stop_requested = False
-        self._polish_total_batches = len(batches)
-        self._polish_completed_batches = 0
-        self._polish_pending_batches = deque(batches)
-        self._polish_workers: list[BatchPolishWorker] = []
 
-        total = len(items)
-        concurrency = mp.get("corr_concurrency", 4)
-        logger.info(
-            "润色启动: %d 条, %d 批 (batch_size=%d, concurrency=%d)", total, len(batches), batch_size, concurrency
-        )
-        self.status_msg.emit(f"润色中: {total} 条 [{len(batches)} 批]")
+        def _do_polish():
+            batch_size = mp.get("corr_batch_size", 5)
+            batches = [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
 
-        concurrency = min(concurrency, len(batches))
-        for _i in range(concurrency):
-            self._launch_next_polish_batch()
+            self._set_buttons(polish=False, polish_all=False)
+            self._polish_total_batches = len(batches)
+            self._polish_completed_batches = 0
+            self._polish_pending_batches = deque(batches)
+            self._polish_workers: list[BatchPolishWorker] = []
+
+            total = len(items)
+            concurrency = mp.get("corr_concurrency", 4)
+            logger.info(
+                "润色启动: %d 条, %d 批 (batch_size=%d, concurrency=%d)", total, len(batches), batch_size, concurrency
+            )
+            self.status_msg.emit(f"润色中: {total} 条 [{len(batches)} 批]")
+
+            concurrency = min(concurrency, len(batches))
+            for _i in range(concurrency):
+                self._launch_next_polish_batch()
+
+        self._maybe_extract_env(self._get_results(), mp, on_done=_do_polish)
 
     def _launch_next_polish_batch(self):
         """从待处理队列中取下一批并启动润色 worker。"""
@@ -1299,7 +1375,8 @@ class WorkflowManager(QObject):
         worker.polish_ready.connect(self._on_polish_ready)
         worker.batch_finished.connect(self._on_polish_batch_done)
         worker.batch_error.connect(self._on_polish_batch_error)
-        self._polish_workers.append(worker)
+        with self._polish_workers_lock:
+            self._polish_workers.append(worker)
         worker.start()
 
     def _on_polish_batch_done(self):
@@ -1326,7 +1403,8 @@ class WorkflowManager(QObject):
 
     def _on_polish_finished(self):
         self._polish_in_progress = False
-        self._polish_workers.clear()
+        with self._polish_workers_lock:
+            self._polish_workers.clear()
         self._set_buttons(polish=True, polish_all=True)
         n = self._get_table_row_count()
         self.status_msg.emit(f"✅ 完成: {n} 条结果 | 润色完成")
@@ -1468,6 +1546,8 @@ class WorkflowManager(QObject):
             workers.append(self._batch_worker)
         if self._image_worker and self._image_worker.isRunning():
             workers.append(self._image_worker)
+        if hasattr(self, "_env_worker") and self._env_worker is not None and self._env_worker.isRunning():
+            workers.append(self._env_worker)
 
         # ── 第一步：对所有线程发 stop/quit 信号 ──
         for w in workers:

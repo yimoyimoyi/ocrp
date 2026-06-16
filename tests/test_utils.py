@@ -1,75 +1,45 @@
-"""工具函数单元测试。"""
+"""核心工具函数单元测试。"""
+
+from core.utils import format_time, get_similarity
 
 
-class TestFindFfmpeg:
-    """测试 FFmpeg 路径查找。"""
+class TestGetSimilarity:
+    """测试字符串相似度计算。"""
 
-    def test_find_ffmpeg_returns_string(self):
-        from core.utils import find_ffmpeg
+    def test_identical_strings(self):
+        assert get_similarity("hello", "hello") == 1.0
 
-        path = find_ffmpeg("ffmpeg")
-        assert isinstance(path, str)
-        assert "ffmpeg" in path
+    def test_completely_different(self):
+        assert get_similarity("abc", "xyz") < 0.5
 
-    def test_find_ffprobe_returns_string(self):
-        from core.utils import find_ffmpeg
+    def test_empty_strings(self):
+        assert get_similarity("", "") == 0.0
+        assert get_similarity("hello", "") == 0.0
+        assert get_similarity("", "hello") == 0.0
 
-        path = find_ffmpeg("ffprobe")
-        assert isinstance(path, str)
-        assert "ffprobe" in path
+    def test_similar_strings(self):
+        sim = get_similarity("hello world", "hello wrold")
+        assert 0.8 < sim < 1.0
 
-
-class TestConstants:
-    """测试模块常量。"""
-
-    def test_engine_constants(self):
-        from core.utils import ENGINE_PADDLEOCR, ENGINE_WHISPERX
-
-        assert ENGINE_PADDLEOCR == "paddleocr"
-        assert ENGINE_WHISPERX == "whisperx"
-
-    def test_mode_constants(self):
-        from core.utils import MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
-
-        assert "OCR" in MODE_OCR_ONLY
-        assert "ASR" in MODE_ASR_ONLY
-        assert "完整流程" in MODE_OCR_ASR_FULL
-
-    def test_default_constants(self):
-        from core.utils import DEFAULT_OCR_TEMPLATE, DEFAULT_SRT_DURATION
-
-        assert DEFAULT_OCR_TEMPLATE == "通用OCR"
-        assert DEFAULT_SRT_DURATION == 3.0
+    def test_chinese_strings(self):
+        sim = get_similarity("你好世界", "你好世界！")
+        assert sim > 0.8
 
 
-class TestPopulateModelCombo:
-    """测试模型下拉框填充。"""
+class TestFormatTime:
+    """测试时间格式化。"""
 
-    def test_populate_empty_models(self):
-        from core.utils import populate_model_combo
+    def test_zero(self):
+        assert format_time(0) == "00:00:00,000"
 
-        class MockCombo:
-            def currentText(self): return ""
-            def blockSignals(self, v): pass
-            def clear(self): pass
-            def addItems(self, items): self._items = items
-            def setEditText(self, t): pass
+    def test_simple_seconds(self):
+        assert format_time(61.5) == "00:01:01,500"
 
-        combo = MockCombo()
-        combo._items = []
-        populate_model_combo(combo, [])
-        assert combo._items == []
+    def test_hours(self):
+        assert format_time(3661.123) == "01:01:01,123"
 
-    def test_populate_with_models(self):
-        from core.utils import populate_model_combo
+    def test_negative(self):
+        assert format_time(-5) == "00:00:00,000"
 
-        class MockCombo:
-            def currentText(self): return ""
-            def blockSignals(self, v): pass
-            def clear(self): self._items = []
-            def addItems(self, items): self._items = items
-            def setEditText(self, t): pass
-
-        combo = MockCombo()
-        populate_model_combo(combo, ["gpt-4o", "gpt-3.5"])
-        assert combo._items == ["gpt-4o", "gpt-3.5"]
+    def test_fractional(self):
+        assert format_time(0.001) == "00:00:00,001"

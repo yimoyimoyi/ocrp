@@ -232,6 +232,7 @@ class FFmpegReader:
             self._frame_idx = frame_idx + 1
             if not self.open():
                 logger.warning("FFmpeg seek(%d): 重新打开失败", frame_idx)
+                return None
             return frame
         except Exception as e:
             logger.warning("视频 seek 失败: %s", e)

@@ -114,6 +114,19 @@ def _load_cache(cache_key: str, log_title: str):
     return result
 
 
+def _cleanup_cache_files(max_files: int = 100):
+    """清理过多的缓存文件，保留最新的 max_files 个。"""
+    try:
+        if not LLM_LOG_DIR.exists():
+            return
+        cache_files = sorted(LLM_LOG_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+        for old_file in cache_files[max_files:]:
+            old_file.unlink(missing_ok=True)
+            logger.debug("清理旧缓存文件: %s", old_file.name)
+    except Exception as e:
+        logger.warning("缓存文件清理失败: %s", e)
+
+
 def _save_cache(cache_key: str, response, log_title: str):
     """将响应写入缓存（文件 + 内存）。"""
     with CACHE_LOCK:
@@ -137,6 +150,8 @@ def _save_cache(cache_key: str, response, log_title: str):
             entries = entries[-200:]
         with open(cache_file, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)
+        # 每次保存时检查全局文件数量
+        _cleanup_cache_files()
     # 同步写入内存缓存
     with _memory_cache_lock:
         _memory_cache[cache_key] = response
@@ -157,18 +172,18 @@ class RateLimiter:
         """请求许可，若达到速率上限则阻塞等待。"""
         if self._max_rpm <= 0:
             return
-        with self._lock:
-            now = time.time()
-            cutoff = now - 60.0
-            self._timestamps = [t for t in self._timestamps if t > cutoff]
-            if len(self._timestamps) >= self._max_rpm:
-                wait = self._timestamps[0] - cutoff + 0.1
-                logger.debug("速率限制: 等待 %.1fs (%d/%d RPM)", wait, len(self._timestamps), self._max_rpm)
-                time.sleep(wait)
+        while True:
+            with self._lock:
                 now = time.time()
                 cutoff = now - 60.0
                 self._timestamps = [t for t in self._timestamps if t > cutoff]
-            self._timestamps.append(now)
+                if len(self._timestamps) < self._max_rpm:
+                    self._timestamps.append(now)
+                    return
+                wait = self._timestamps[0] - cutoff + 0.1
+            # 在锁外休眠，不阻塞其他线程的检查
+            logger.debug("速率限制: 等待 %.1fs", wait)
+            time.sleep(max(wait, 0.1))
 
     def set_max_rpm(self, max_rpm: int):
         self._max_rpm = max_rpm

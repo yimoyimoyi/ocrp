@@ -3,8 +3,11 @@
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Union
+
+_config_lock = threading.Lock()
 
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent
 CONFIG_DIR = BASE_DIR / "config"
@@ -297,7 +300,7 @@ class ConfigManager:
                 mp[key] = default
 
     def _save_settings(self, cfg: dict):
-        with open(self.settings_path, "w", encoding="utf-8") as f:
+        with _config_lock, open(self.settings_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
 
     def save_settings(self):

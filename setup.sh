@@ -162,11 +162,11 @@ else
     echo "      CPU mode - PaddlePaddle CPU index"
 fi
 
-uv sync --index-strategy unsafe-best-match $EXTRA_URL || {
+uv sync --index-strategy unsafe-best-match --extra asr $EXTRA_URL || {
     if $USE_GPU; then
         warn "GPU version failed. Retry CPU..."
         USE_GPU=false
-        uv sync --index-strategy unsafe-best-match || { err "uv sync failed."; exit 1; }
+        uv sync --index-strategy unsafe-best-match --extra asr || { err "uv sync failed."; exit 1; }
     else
         err "uv sync failed."
         exit 1

@@ -1275,7 +1275,7 @@ def _migrate_theme_name(theme_name: str) -> str:
 
 def _apply_dark_palette(app: QApplication):
     """为 Fusion 设置暗色 QPalette，覆盖所有默认控件的浅色外观。"""
-    from PyQt5.QtGui import QPalette, QColor
+    from PyQt5.QtGui import QColor, QPalette
     p = QPalette()
     p.setColor(QPalette.Window, QColor(30, 30, 30))
     p.setColor(QPalette.WindowText, QColor(224, 224, 224))
