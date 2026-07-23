@@ -65,8 +65,10 @@ def _is_meta_response(resp) -> bool:
     if not isinstance(resp, str):
         return False
     text = resp.strip()
-    if len(text) > 100:
+    if len(text) > 50:
         return False
+    if "\n" in text:
+        return False  # 多行内容不太可能是 meta-response
     meta_prefixes = ("好的，请提供", "请提供", "请问", "好的，请问", "我需要您提供", "请告诉我", "请您提供")
     return any(text.startswith(p) for p in meta_prefixes)
 
@@ -202,10 +204,13 @@ def set_global_rpm(max_rpm: int):
 
 
 def _normalize_base_url(base_url: str) -> str:
-    """标准化 base_url —— 确保以 /v1 结尾（火山引擎特殊处理）。"""
+    """标准化 base_url —— 确保路径后缀正确（保留用户自定义域名/端口/路径前缀）。"""
     url = base_url.rstrip("/")
     if "ark.cn-beijing.volces.com" in url:
-        return "https://ark.cn-beijing.volces.com/api/v3"
+        # 火山引擎 API 路径为 /api/v3，仅确保路径正确，不覆盖用户域名
+        if not url.endswith("/api/v3"):
+            return url + "/api/v3"
+        return url
     if not url.endswith("/v1"):
         return url + "/v1"
     return url
@@ -267,6 +272,7 @@ def ask_llm(
     max_tokens: int = 2048,
     image: Any = None,
     no_cache: bool = False,
+    use_rate_limiter: bool = True,
 ) -> str | dict | None:
     """通过 OpenAI 兼容 API 调用 LLM。
 
@@ -292,8 +298,12 @@ def ask_llm(
         base_url: API 端点 URL
         model: 模型名称
         timeout: 请求超时秒数（默认 120s）
-        max_tokens: 最大输出 token 数（默认 512）
+        max_tokens: 最大输出 token 数（默认 2048）
         image: 可选 numpy 图像数组，非 None 时构造 vision 格式消息
+        no_cache: 跳过缓存读取/写入
+        use_rate_limiter: 是否经过全局速率限制器。
+                          OCR 视觉引擎调用应设为 False（高频帧处理），
+                          纠错调用保持默认 True（批量操作需限速）。
 
     Returns:
         非流式：str（resp_type=None）或 dict（resp_type="json"）
@@ -316,8 +326,9 @@ def ask_llm(
     else:
         cache_key = ""
 
-    # ── 速率限制 ──
-    _global_rate_limiter.acquire()
+    # ── 速率限制（OCR 等高帧率场景不限制，纠错等批量操作限制）──
+    if use_rate_limiter:
+        _global_rate_limiter.acquire()
 
     # ── 构造请求 ──
     url = _normalize_base_url(base_url)
@@ -370,25 +381,35 @@ def ask_llm(
 
 
 def _call_stream(client, params, stream_callback, log_title, log):
-    """流式调用 LLM —— 拼接所有 chunk 并返回完整文本。"""
+    """流式调用 LLM —— 拼接所有 chunk 并返回完整文本。
+
+    注意：连接中途中断时捕获异常并返回已接收的部分内容，
+    避免 @except_handler 触发重试（重试会丢失已接收内容）。
+    """
     params["stream"] = True
-    stream_resp = client.chat.completions.create(**params)
     full_content = ""
     chunk_count = 0
-    for chunk in stream_resp:
-        choices = getattr(chunk, "choices", None)
-        if not choices:
-            continue
-        delta = getattr(choices[0], "delta", None)
-        if delta is None:
-            continue
-        content = getattr(delta, "content", None) or ""
-        if content:
-            full_content += content
-            chunk_count += 1
-            if stream_callback:
-                stream_callback(content)
-    log.info("流式接收完成 [%s]: %d chunks, %d chars", log_title, chunk_count, len(full_content))
+    try:
+        stream_resp = client.chat.completions.create(**params)
+        for chunk in stream_resp:
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None) or ""
+            if content:
+                full_content += content
+                chunk_count += 1
+                if stream_callback:
+                    stream_callback(content)
+    except Exception as e:
+        log.warning("流式传输中断 [%s]: %s，返回已接收部分 (%d chars)",
+                     log_title, e, len(full_content))
+    else:
+        log.info("流式接收完成 [%s]: %d chunks, %d chars",
+                 log_title, chunk_count, len(full_content))
     return full_content.strip()
 
 

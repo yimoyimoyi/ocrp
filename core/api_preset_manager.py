@@ -33,6 +33,14 @@ def _load_presets() -> dict:
     return {"presets": {}, "default_preset": ""}
 
 
+def _get_file_mtime() -> float:
+    """获取预设文件的修改时间戳。"""
+    try:
+        return os.path.getmtime(PRESETS_PATH) if PRESETS_PATH.exists() else 0.0
+    except Exception:
+        return 0.0
+
+
 def _save_presets(data: dict):
     PRESETS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(PRESETS_PATH, "w", encoding="utf-8") as f:
@@ -40,7 +48,7 @@ def _save_presets(data: dict):
 
 
 class APIPresetManager:
-    """API 预设管理器 —— 单例模式。"""
+    """API 预设管理器 —— 单例模式，带文件修改时间检测。"""
 
     _instance: Optional["APIPresetManager"] = None
 
@@ -48,19 +56,31 @@ class APIPresetManager:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._data = _load_presets()
+            cls._instance._loaded_mtime = _get_file_mtime()
         return cls._instance
+
+    def _check_reload(self):
+        """检查文件是否已修改，是则自动重载。"""
+        current_mtime = _get_file_mtime()
+        if current_mtime != self._loaded_mtime:
+            logger.debug("API 预设文件已修改，自动重载")
+            self._data = _load_presets()
+            self._loaded_mtime = current_mtime
 
     def reload(self):
         self._data = _load_presets()
+        self._loaded_mtime = _get_file_mtime()
 
     def save(self):
         _save_presets(self._data)
 
-    # ── 查询 ──
+    # ── 查询（每次查询前自动检查文件是否修改） ──
     def get_names(self) -> list[str]:
+        self._check_reload()
         return list(self._data.get("presets", {}).keys())
 
     def get_default_name(self) -> str:
+        self._check_reload()
         return self._data.get("default_preset", "")
 
     def set_default(self, name: str):
@@ -68,10 +88,12 @@ class APIPresetManager:
         self.save()
 
     def get_preset(self, name: str) -> dict | None:
+        self._check_reload()
         return self._data.get("presets", {}).get(name)
 
     def get_effective_config(self, name: str = "") -> dict:
         """获取预设配置，未指定则使用默认预设。"""
+        self._check_reload()
         preset = self.get_preset(name or self.get_default_name())
         if preset:
             return dict(preset)
@@ -81,6 +103,10 @@ class APIPresetManager:
             p = self.get_preset(names[0])
             return dict(p) if p else {}
         return {}
+
+    def get_all_presets(self) -> dict[str, dict]:
+        self._check_reload()
+        return dict(self._data.get("presets", {}))
 
     # ── 增删改 ──
     def add_preset(self, name: str, config: dict) -> bool:
@@ -119,5 +145,4 @@ class APIPresetManager:
         self.save()
         return True
 
-    def get_all_presets(self) -> dict[str, dict]:
-        return dict(self._data.get("presets", {}))
+

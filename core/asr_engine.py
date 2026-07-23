@@ -9,9 +9,11 @@
 import atexit
 import contextlib
 import json
+import math
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -27,7 +29,12 @@ BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
 
 _FFMPEG = find_ffmpeg("ffmpeg")
+_FFPROBE = find_ffmpeg("ffprobe")
 _DEFAULT_MODEL_DIR = DEFAULT_ASR_MODEL_DIR
+
+# ── 音频分片默认参数 ──
+_ASR_CHUNK_DURATION = 300  # 每片长度（秒），默认 5 分钟
+_ASR_CHUNK_OVERLAP = 2.0   # 片间重叠（秒），避免切断单词
 
 
 def scan_local_asr_models(model_dir: str = "") -> list[str]:
@@ -96,7 +103,11 @@ def load_asr_config() -> dict:
             from core.config_schema import validate_config
             from core.config_schemas import ASR_ENGINES_SCHEMA
 
-            validate_config(cfg, ASR_ENGINES_SCHEMA, "asr_engines.json")
+            ok, errors = validate_config(cfg, ASR_ENGINES_SCHEMA, "asr_engines.json")
+            if not ok:
+                logger.warning("ASR 引擎配置校验失败: %s", "; ".join(errors[:3]))
+            if not ok:
+                logger.warning("ASR 引擎配置校验失败: %s", "; ".join(errors[:3]))
             for k, v in _DEFAULT_CONFIG.items():
                 cfg.setdefault(k, v)
             return cfg
@@ -374,6 +385,10 @@ class WhisperXEngine(BaseASREngine):
 
             deadline = time.time() + 300
             while time.time() < deadline:
+                if self._stop_event.is_set():
+                    logger.info("ASR 流式被中断")
+                    return
+
                 if proc.poll() is not None:
                     err = f"ASR 子进程意外退出 (code={proc.poll()})"
                     logger.error(err)
@@ -383,8 +398,7 @@ class WhisperXEngine(BaseASREngine):
 
                 line = proc.stdout.readline()
                 if not line:
-                    if proc.poll() is not None:
-                        continue
+                    # 子进程已退出 / pipe 关闭 → 结束读取
                     break
 
                 try:
@@ -411,29 +425,129 @@ class WhisperXEngine(BaseASREngine):
                         error_holder[0] = err_msg
                     return
 
-            # 超时
-            logger.warning("ASR 流式超时 (300s)")
-            if error_holder is not None:
-                error_holder[0] = "ASR request timeout after 300s"
+            # 🔥 超时（或 pipe 意外关闭）→ 立即 kill 子进程防止腐败
+            logger.warning("ASR 流式超时 (300s) 或 pipe 关闭，清理子进程")
+            if error_holder is not None and error_holder[0] is None:
+                if proc.poll() is not None:
+                    error_holder[0] = f"ASR 子进程意外退出 (code={proc.poll()})"
+                else:
+                    error_holder[0] = "ASR request timeout after 300s"
+            self._stream_proc = None
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
 
         except Exception as e:
             import traceback
             logger.error("ASR transcribe_stream 异常: %s", e)
             traceback.print_exc()
-            if error_holder is not None:
+            # 异常后清理子进程
+            if error_holder is not None and error_holder[0] is None:
                 error_holder[0] = str(e)
-        finally:
-            # 不复用子进程时仅关闭旧进程引用（非缓存进程）
-            # 缓存的 _stream_proc 由 _stop_server / atexit 统一清理
-            if proc is not self._stream_proc:
+            self._stream_proc = None
+            if proc.poll() is None:
                 try:
-                    _send_json(proc.stdin, {"cmd": "shutdown"})
-                    proc.wait(timeout=10)
+                    proc.kill()
+                    proc.wait(timeout=5)
                 except Exception:
+                    pass
+        finally:
+            if proc is not self._stream_proc:
+                # 非缓存进程（通常不会走这里，缓存进程在超时/异常时已 kill）
+                if proc.poll() is None:
                     try:
-                        proc.kill()
+                        _send_json(proc.stdin, {"cmd": "shutdown"})
+                        proc.wait(timeout=10)
                     except Exception:
-                        pass
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+
+    def transcribe_long(
+        self,
+        audio_path: str,
+        on_segment: Callable | None = None,
+        error_holder: list | None = None,
+        on_progress: Callable | None = None,
+    ) -> None:
+        """长音频分片转写。将音频切分为短片段，逐段调用 transcribe_stream()。
+
+        每段完成时调用 on_progress(current_chunk, total_chunks) 报告进度。
+        segment 的时间戳已自动叠加片偏移，调用者无需额外处理。
+        """
+        chunks = split_audio(audio_path)
+        total = len(chunks)
+        if total == 1 and chunks[0]["path"] == audio_path:
+            # 未分片，直接走原路径
+            return self.transcribe_stream(audio_path, on_segment=on_segment, error_holder=error_holder)
+
+        # 清理 _stream_proc 为干净状态（避免复用上次请求的缓存）
+        self._stream_proc = None
+
+        chunk_files: list[str] = []
+        chunk_dir: str | None = None
+        try:
+            for idx, chunk in enumerate(chunks):
+                if self._stop_event.is_set():
+                    logger.info("ASR 分片转写被中断 (chunk %d/%d)", idx + 1, total)
+                    if error_holder is not None and error_holder[0] is None:
+                        error_holder[0] = "ASR processing stopped"
+                    return
+
+                chunk_path = chunk["path"]
+                offset = chunk["offset"]
+
+                # 保存分片文件路径（用于 finally 清理）
+                chunk_files.append(chunk_path)
+                _dir = os.path.dirname(chunk_path)
+                if chunk_dir is None:
+                    chunk_dir = _dir
+
+                if on_progress:
+                    on_progress(idx, total)
+
+                chunk_error = [None]
+
+                def _on_chunk_segment(seg):
+                    """偏移时间戳后回调上层 on_segment。"""
+                    if self._stop_event.is_set():
+                        return
+                    adjusted = {
+                        "start": seg["start"] + offset,
+                        "end": seg["end"] + offset,
+                        "text": seg["text"],
+                    }
+                    if on_segment:
+                        on_segment(adjusted)
+
+                self.transcribe_stream(chunk_path, on_segment=_on_chunk_segment, error_holder=chunk_error)
+
+                if chunk_error[0]:
+                    logger.error("分片转写出错 (chunk %d/%d): %s", idx + 1, total, chunk_error[0])
+                    if error_holder is not None and error_holder[0] is None:
+                        error_holder[0] = chunk_error[0]
+                    return
+
+            if on_progress:
+                on_progress(total, total)
+
+            logger.info("ASR 分片转写全部完成: %d 片", total)
+
+        finally:
+            # 清理临时分片文件
+            if chunk_dir and os.path.isdir(chunk_dir):
+                try:
+                    for f in os.listdir(chunk_dir):
+                        fp = os.path.join(chunk_dir, f)
+                        if os.path.isfile(fp):
+                            os.unlink(fp)
+                    os.rmdir(chunk_dir)
+                except Exception as e:
+                    logger.debug("清理分片临时目录失败: %s", e)
 
     def warm_up(self):
         """后台线程预加载模型（不阻塞调用线程）。
@@ -586,6 +700,95 @@ def convert_to_wav(audio_path: str, output_dir: str = None, sample_rate: int = 1
     if ext == ".wav":
         return audio_path
     return _ffmpeg_to_wav(audio_path, output_dir, sample_rate)
+
+
+def get_audio_duration(audio_path: str) -> float:
+    """获取音频时长（秒），使用 ffprobe。"""
+    if not audio_path or not os.path.isfile(audio_path):
+        return 0.0
+    try:
+        cmd = [
+            _FFPROBE, "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "csv=p=0",
+            audio_path,
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.returncode == 0 and r.stdout.strip():
+            return float(r.stdout.strip())
+    except Exception as e:
+        logger.warning("获取音频时长失败: %s", e)
+    return 0.0
+
+
+def split_audio(
+    audio_path: str,
+    chunk_duration: int = _ASR_CHUNK_DURATION,
+    overlap: float = _ASR_CHUNK_OVERLAP,
+) -> list[dict]:
+    """将音频文件分片为多个小片段，每片转写完成后合并。
+
+    Args:
+        audio_path: 输入 WAV 文件路径
+        chunk_duration: 每片长度（秒）
+        overlap: 片间重叠（秒），避免切断单词
+
+    Returns:
+        list[dict]: [{"path": "chunk_0.wav", "offset": 0.0, "duration": 300.0}, ...]
+                    每片为临时 WAV 文件，调用者负责 finally 中清理。
+    """
+    total_dur = get_audio_duration(audio_path)
+    if total_dur <= 0:
+        logger.warning("无法获取音频时长，不分片直接返回原文件")
+        return [{"path": audio_path, "offset": 0.0, "duration": 0.0}]
+
+    # 如果总时长不超过单片限制，不分片
+    if total_dur <= chunk_duration:
+        return [{"path": audio_path, "offset": 0.0, "duration": total_dur}]
+
+    chunk_dir = tempfile.mkdtemp(prefix="orcp_asr_chunks_")
+    basename = Path(audio_path).stem
+    chunks = []
+
+    stride = chunk_duration - overlap
+    n_chunks = math.ceil(total_dur / stride)
+    logger.info("音频分片: 总时长=%.0fs, 每片=%ds, 重叠=%.1fs, 共%d片",
+                total_dur, chunk_duration, overlap, n_chunks)
+
+    for i in range(n_chunks):
+        start = max(0.0, i * stride)
+        end = min(total_dur, start + chunk_duration)
+        # 最后一片不缩小小片
+        if end - start < 5.0 and i > 0:
+            logger.debug("跳过过小最后一片: start=%.1f, end=%.1f", start, end)
+            break
+
+        out_path = os.path.join(chunk_dir, f"{basename}_chunk{i:04d}.wav")
+        cmd = [
+            _FFMPEG, "-v", "error",
+            "-i", audio_path,
+            "-ss", str(start),
+            "-to", str(end),
+            "-acodec", "pcm_s16le",
+            "-ar", "16000",
+            "-ac", "1",
+            "-y", out_path,
+        ]
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+            if os.path.isfile(out_path) and os.path.getsize(out_path) > 1024:
+                chunks.append({"path": out_path, "offset": start, "duration": end - start})
+            else:
+                logger.warning("分片文件无效: %s", out_path)
+        except Exception as e:
+            logger.warning("分片失败 (chunk %d): %s", i, e)
+
+    if not chunks:
+        logger.warning("所有分片失败，回退到原始文件")
+        return [{"path": audio_path, "offset": 0.0, "duration": total_dur}]
+
+    logger.info("音频分片完成: %d 片", len(chunks))
+    return chunks
 
 
 SUPPORTED_AUDIO_EXTS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".wma", ".opus", ".aiff"}

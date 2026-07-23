@@ -77,7 +77,9 @@ def load_correction_config() -> dict:
             cfg = _load_json_with_comments(path)
             from core.config_schema import validate_config
             from core.config_schemas import AI_CORRECTION_SCHEMA
-            validate_config(cfg, AI_CORRECTION_SCHEMA, "ai_correction.json")
+            ok, errors = validate_config(cfg, AI_CORRECTION_SCHEMA, "ai_correction.json")
+            if not ok:
+                logger.warning("纠错配置校验失败: %s", "; ".join(errors[:3]))
             return cfg
         except Exception as e:
             logger.warning("加载纠错配置失败: %s", e)
@@ -285,6 +287,11 @@ class AICorrector:
     @extract_env.setter
     def extract_env(self, val: bool):
         self._extract_env = val
+
+    def clear_env_context(self):
+        """清除环境上下文。每次新视频/新内容处理前调用，防止上下文过期。"""
+        self._env_context = ""
+        logger.debug("环境上下文已清除")
 
     def _should_skip_env_extraction(self) -> bool:
         """判断是否跳过环境提取 API 调用。
@@ -542,18 +549,31 @@ class AICorrector:
         # ── JSON 模式：解析 JSON 提取实际文本 ──
         if self._json_mode and isinstance(result, dict):
             data = result
-            items = data.get("results") or data.get("items") or data.get("data") or []
+            # 支持更多可能的 key 名称（AI 可能使用不同的字段名）
+            items = (data.get("results") or data.get("items") or data.get("data")
+                     or data.get("corrections") or data.get("output") or [])
             if isinstance(items, list) and items:
                 first = items[0]
                 if isinstance(first, dict):
-                    content = first.get("text") or first.get("content") or content
+                    content = (first.get("text") or first.get("content")
+                               or first.get("corrected") or content)
+            elif isinstance(items, dict):
+                # 单个结果 dict（非 list）
+                content = (items.get("text") or items.get("content")
+                           or items.get("corrected") or content)
             elif isinstance(data, dict):
-                content = data.get("text") or data.get("content") or data.get("corrected") or content
+                content = (data.get("text") or data.get("content")
+                           or data.get("corrected") or data.get("answer")
+                           or data.get("output") or content)
 
-        # 用自定义输出格式标记剔除格式外壳
+        # 用正则剔除输出格式标记外壳（仅从头尾移除，避免误伤内容中的字符）
         fmt = self._output_format.strip()
         if fmt:
-            content = str(content).replace(fmt, "").strip()
+            import re
+            escaped = re.escape(fmt)
+            content = re.sub(f'^{escaped}[\\s\\n]*', '', str(content))
+            content = re.sub(f'[\\s\\n]*{escaped}$', '', content)
+            content = content.strip()
         if content and content != raw_text:
             return str(content)
         return raw_text
@@ -573,7 +593,7 @@ class AICorrector:
 
     def correct_batch(self, texts: list[tuple[int, str]],
                       context_window: int = 3,
-                      max_retries: int = 1,
+                      max_retries: int | None = None,
                       stream_callback: Callable[[str], None] | None = None) -> dict[int, str]:
         """批量对多条文本进行 AI 纠错/翻译。
 
@@ -590,6 +610,9 @@ class AICorrector:
         system_prompt = self._build_system_prompt(env_context=self._env_context)
         resp_type = "json" if self._json_mode else None
 
+        if max_retries is None:
+            max_retries = self._retry  # 默认从配置 retry_on_failure 读取
+
         last_error = ""
         for attempt in range(max_retries + 1):
             result = self._call_llm(
@@ -602,7 +625,9 @@ class AICorrector:
             )
             if result is None:
                 last_error = "API 返回空"
-                continue
+                logger.warning("批量纠错 API 返回空，ask_llm 内部重试已耗尽，跳出外层循环")
+                # ❌ 不继续外层重试：ask_llm 内部 @except_handler 已重试 4 次
+                break
 
             content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
 
@@ -891,6 +916,7 @@ class AICorrector:
             _tag="polish",
         )
         if result is None:
+            logger.warning("润色 API 失败 (row)，使用原文")
             return corrected_text
         content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
         return content.strip() or corrected_text

@@ -28,7 +28,9 @@ class FilterManager:
                     data = json.load(f)
                 from core.config_schema import validate_config
                 from core.config_schemas import FILTERS_SCHEMA
-                validate_config(data, FILTERS_SCHEMA, "filters.json")
+                ok, errors = validate_config(data, FILTERS_SCHEMA, "filters.json")
+                if not ok:
+                    logger.warning("过滤配置校验失败: %s", "; ".join(errors[:3]))
                 self._keywords = data.get("keywords", [])
             except Exception as e:
                 logger.warning("加载过滤配置失败: %s", e)

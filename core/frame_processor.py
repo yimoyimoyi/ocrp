@@ -131,6 +131,8 @@ class FrameProcessor:
             return ("", 0.0)
         is_paddle = ocr_engine.engine_name == "paddleocr"
         text = ocr_engine.recognize(roi) if is_paddle else ocr_engine.recognize(roi, prompt=region.get("prompt", ""))
+        if text is None:
+            text = ""  # API 调用失败，返回空字符串避免下游出错
         if is_paddle:
             conf = ocr_engine.last_confidence if hasattr(ocr_engine, "last_confidence") else 0.0
         else:

@@ -261,6 +261,9 @@ class WorkflowManager(QObject):
     def start_processing(self):
         """单文件处理入口（对应 MainWindow._on_start_processing）。"""
         self._correction_stop_requested = False
+        # 新处理会话开始时清除旧环境上下文，防止内容切换后上下文过期
+        if self._corrector and hasattr(self._corrector, "clear_env_context"):
+            self._corrector.clear_env_context()
         self._reload_all_config()
         vp = self._get_video_path()
         if not vp:
@@ -358,6 +361,7 @@ class WorkflowManager(QObject):
             audio_cache_path=self._get_audio_cache_path(),
         )
         self._audio_worker.progress.connect(lambda m: self.status_msg.emit(m))
+        self._audio_worker.progress_percent.connect(self.progress_val)
         self._audio_worker.result_item.connect(self._on_asr_result)
         self._audio_worker.finished_all.connect(self._on_asr_finished)
         self._audio_worker.error.connect(self._on_asr_error)
@@ -547,6 +551,7 @@ class WorkflowManager(QObject):
             audio_cache_path=self._get_audio_cache_path(),
         )
         self._audio_worker.progress.connect(lambda m: self.status_msg.emit(m))
+        self._audio_worker.progress_percent.connect(self.progress_val)
         self._audio_worker.result_item.connect(self._on_asr_result)
         self._audio_worker.finished_all.connect(self._on_asr_finished)
         self._audio_worker.error.connect(self._on_asr_error)
@@ -758,6 +763,11 @@ class WorkflowManager(QObject):
                         w.stop()
                     else:
                         w.quit()
+
+        # 🔥 重要：释放 ASR 引擎（停止时若 _stream_proc 仍在运行，
+        # 不释放会导致 GPU 显存泄漏，影响后续 OCR/ASR 使用）
+        if self._asr_mgr:
+            self._asr_mgr.release_all_engines()
 
         self.status_msg.emit(_("已停止"))
         self._set_buttons(start=True, stop=False, correction=True, correction_all=True, polish=True, polish_all=True)

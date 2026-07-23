@@ -38,7 +38,9 @@ def load_engines_config() -> dict:
             from core.config_schema import validate_config
             from core.config_schemas import OCR_ENGINES_SCHEMA
 
-            validate_config(cfg, OCR_ENGINES_SCHEMA, "ocr_engines.json")
+            ok, errors = validate_config(cfg, OCR_ENGINES_SCHEMA, "ocr_engines.json")
+            if not ok:
+                logger.warning("OCR 引擎配置校验失败: %s", "; ".join(errors[:3]))
             return cfg
         except Exception as e:
             logger.warning("加载 OCR 引擎配置失败: %s", e)
@@ -191,7 +193,7 @@ class BaseOCREngine(ABC):
         return self._last_confidence
 
     @abstractmethod
-    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str | None:
         pass
 
     def is_available(self) -> bool:
@@ -391,7 +393,7 @@ class PaddleOCREngine(BaseOCREngine):
                 else:
                     raise
 
-    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str | None:
         if not self._paddle_available:
             return ""
         if self._use_subprocess:
@@ -576,7 +578,7 @@ class OpenAIVisionEngine(BaseOCREngine):
             return ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o3-mini"]
         return []
 
-    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str | None:
         prompt_text = prompt or self._prompt_template
         logger.info("OpenAI Vision 请求 | model=%s | image=%dx%d", self._model, image.shape[1], image.shape[0])
         logger.debug("Prompt: %s", prompt_text[:120])
@@ -590,7 +592,11 @@ class OpenAIVisionEngine(BaseOCREngine):
             temperature=0.0,
             max_tokens=512,
             log_title="openai_vision",
+            use_rate_limiter=False,  # OCR 高频帧处理，不经过全局限速器
         )
+        if content is None:
+            logger.error("OpenAI Vision API 调用失败 (None)")
+            return None
         result = content if isinstance(content, str) else ""
         logger.info("OpenAI Vision 响应: %d chars", len(result))
         return result
@@ -616,7 +622,7 @@ class OllamaVisionEngine(BaseOCREngine):
     def get_model_list(self) -> list[str]:
         return _get_v1_model_list(self._base_url)
 
-    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str | None:
         prompt_text = prompt or self._prompt_template
         logger.info("Ollama Vision 请求 | model=%s | image=%dx%d", self._model, image.shape[1], image.shape[0])
         logger.debug("Prompt: %s", prompt_text[:120])
@@ -630,7 +636,11 @@ class OllamaVisionEngine(BaseOCREngine):
             temperature=0.0,
             max_tokens=512,
             log_title="ollama_vision",
+            use_rate_limiter=False,  # OCR 高频帧处理，不经过全局限速器
         )
+        if content is None:
+            logger.error("Ollama Vision API 调用失败 (None)")
+            return None
         result = content if isinstance(content, str) else ""
         logger.info("Ollama Vision 响应: %d chars", len(result))
         return result
@@ -655,7 +665,7 @@ class LlamaCppEngine(BaseOCREngine):
     def get_model_list(self) -> list[str]:
         return _get_v1_model_list(self._base_url, self._api_key)
 
-    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str:
+    def recognize(self, image: np.ndarray, prompt: str | None = None) -> str | None:
         prompt_text = prompt or self._prompt_template
         logger.info(
             "[llama.cpp] API 请求: %s 模型=%s 图片=%dx%d prompt=%.80s",
@@ -675,7 +685,11 @@ class LlamaCppEngine(BaseOCREngine):
             temperature=0.0,
             max_tokens=512,
             log_title="llamacpp_vision",
+            use_rate_limiter=False,  # OCR 高频帧处理，不经过全局限速器
         )
+        if content is None:
+            logger.error("LlamaCpp API 调用失败 (None)")
+            return None
         result = content if isinstance(content, str) else ""
         logger.info("[llama.cpp] 响应 %d chars", len(result))
         return result

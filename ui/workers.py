@@ -123,8 +123,11 @@ class AICorrectionWorker(QThread):
 
             if corrected and corrected != self._raw_text:
                 self.correction_ready.emit(self._result_index, self._raw_text, corrected)
+            elif corrected is None:
+                logger.error("纠错 API 调用失败 (row %d): %s", self._result_index, self._raw_text[:40])
+                self.correction_failed.emit(self._result_index, "API 调用失败")
             else:
-                self.correction_failed.emit(self._result_index, "无变化或纠错失败")
+                self.correction_failed.emit(self._result_index, "无变化")
         except Exception as e:
             self.correction_failed.emit(self._result_index, str(e))
 
@@ -369,9 +372,13 @@ class ImageProcessWorker(QThread):
 
 
 class AudioProcessWorker(QThread):
-    """WhisperX 语音识别线程 —— 从音频/视频中提取语音并转录。"""
+    """WhisperX 语音识别线程 —— 从音频/视频中提取语音并转录。
+
+    支持长音频分片（通过 transcribe_long），过程中通过 progress_percent 报告 0-100 进度。
+    """
 
     progress = pyqtSignal(str)  # 阶段描述
+    progress_percent = pyqtSignal(int)  # 0-100 进度（分片模式下平滑递增）
     result_item = pyqtSignal(float, str, str, str, str, float)  # ts, t_str, rname, ename, raw, end_sec
     log = pyqtSignal(str)
     finished_all = pyqtSignal(list)  # 返回结果列表
@@ -399,6 +406,9 @@ class AudioProcessWorker(QThread):
 
     def stop(self):
         self._stop_flag.set()
+        # 同时中断引擎的转写循环
+        if hasattr(self._asr_engine, "_stop_event"):
+            self._asr_engine._stop_event.set()
 
     def run(self):
         audio_path = None
@@ -463,9 +473,22 @@ class AudioProcessWorker(QThread):
                         }
                     )
 
-            # 🔥 流式调用：每识别出一段就实时发射 result_item
-            # transcribe 仍可用作兼容（收集全部后一次性返回）
-            if hasattr(self._asr_engine, "transcribe_stream"):
+            def _on_progress(current: int, total: int):
+                """分片进度回调：0-100 映射到进度条。"""
+                if total > 0:
+                    pct = int((current / total) * 100)
+                    self.progress_percent.emit(pct)
+                    self.progress.emit(f"语音识别 {current}/{total}")
+
+            # 🔥 优先使用分片转写（长音频自动切分为 5min 片段，避免超时）
+            if hasattr(self._asr_engine, "transcribe_long"):
+                self._asr_engine.transcribe_long(
+                    audio_path,
+                    on_segment=_on_segment,
+                    error_holder=error_holder,
+                    on_progress=_on_progress,
+                )
+            elif hasattr(self._asr_engine, "transcribe_stream"):
                 self._asr_engine.transcribe_stream(audio_path, on_segment=_on_segment, error_holder=error_holder)
             else:
                 segments, err = self._asr_engine.transcribe(audio_path)
