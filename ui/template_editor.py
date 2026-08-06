@@ -1,7 +1,7 @@
 """提示词模板编辑器弹窗。"""
 
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -19,9 +19,9 @@ from core.i18n import _
 class TemplateEditorDialog(QDialog):
     """提示词模板编辑器弹窗 —— 从 ConfigPanel 的模板 Tab 入口打开。"""
 
-    template_saved = pyqtSignal(str, str)    # (name, prompt)
-    template_deleted = pyqtSignal(str)       # (name)
-    prompt_changed = pyqtSignal(str)         # (prompt_text)
+    template_saved = Signal(str, str)  # (name, prompt)
+    template_deleted = Signal(str)  # (name)
+    prompt_changed = Signal(str)  # (prompt_text)
 
     def __init__(self, names: list[str], contents: dict[str, str], parent=None):
         super().__init__(parent)
@@ -48,8 +48,7 @@ class TemplateEditorDialog(QDialog):
         layout.addWidget(QLabel(_("提示词内容（点击下方按钮插入占位符）:")))
         self._prompt_edit = QTextEdit()
         self._prompt_edit.setPlaceholderText(_("输入提示词..."))
-        self._prompt_edit.textChanged.connect(
-            lambda: self.prompt_changed.emit(self._prompt_edit.toPlainText()))
+        self._prompt_edit.textChanged.connect(lambda: self.prompt_changed.emit(self._prompt_edit.toPlainText()))
         layout.addWidget(self._prompt_edit, 1)
 
         # ── 占位符按钮 ──
@@ -152,10 +151,16 @@ class TemplateEditorDialog(QDialog):
         name = self._combo.currentText()
         if not name:
             return
-        if QMessageBox.question(
-            self, _("确认删除"), _("确定要删除模板 '{}' 吗？").format(name),
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        ) == QMessageBox.Yes:
+        if (
+            QMessageBox.question(
+                self,
+                _("确认删除"),
+                _("确定要删除模板 '{}' 吗？").format(name),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            == QMessageBox.Yes
+        ):
             idx = self._combo.currentIndex()
             self._combo.removeItem(idx)
             self._names.remove(name)

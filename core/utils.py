@@ -5,11 +5,11 @@ import shutil
 import sys
 from pathlib import Path
 
+from rapidfuzz.fuzz import ratio  # P2-2：硬依赖移顶部导入，去重热路径不再每调用走 import 分支
+
 
 def get_similarity(a: str, b: str) -> float:
     """计算两个字符串的相似度（0.0 ~ 1.0），使用 RapidFuzz C++ 实现。"""
-    from rapidfuzz.fuzz import ratio
-
     return ratio(a, b) / 100.0 if a and b else 0.0
 
 
@@ -22,6 +22,7 @@ def format_time(seconds: float) -> str:
     s = int(seconds % 60)
     ms = int((seconds - int(seconds)) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
 
 _BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

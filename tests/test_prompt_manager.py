@@ -13,8 +13,13 @@ class TestPromptTemplateManager:
 
         data = {
             "templates": [
-                {"name": "测试模板", "category": "ocr", "description": "d",
-                 "prompt": "识别文字", "applicable_regions": []},
+                {
+                    "name": "测试模板",
+                    "category": "ocr",
+                    "description": "d",
+                    "prompt": "识别文字",
+                    "applicable_regions": [],
+                },
             ]
         }
         p = tmp_path / "prompt_templates.json"

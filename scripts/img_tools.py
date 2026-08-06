@@ -10,68 +10,19 @@ FFmpeg 高质量媒体处理工具 v3.1
 
 import json
 import os
+import sys
+from pathlib import Path
+
+# P2-6：复用 core 的状态机版 JSON 解析器（本地正则版会误删字符串内注释）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import re
 import shutil
 import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Union
 
-
-def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
-    """读取 JSON 文件，自动去除 // 行注释和 /* */ 块注释后解析"""
-    with open(filepath, encoding="utf-8") as f:
-        text = f.read()
-    # 去除 /* ... */ 块注释（非贪婪匹配）
-    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
-    # 去除 // 行注释（注意避开 http:// 之类的链接）
-    lines = []
-    for line in text.split('\n'):
-        # 查找行内第一个 // 且不在字符串内的位置（简化处理）
-        idx = line.find('//')
-        if idx >= 0:
-            # 如果 // 前面有引号包裹则不处理（含链接）
-            before = line[:idx]
-            if before.count('"') % 2 == 0 and before.count("'") % 2 == 0:
-                line = before
-        lines.append(line)
-    clean = '\n'.join(lines)
-    return json.loads(clean)
-from PyQt5.QtCore import QObject, QRunnable, Qt, QThreadPool, pyqtSignal, pyqtSlot
-from PyQt5.QtGui import QColor, QDragEnterEvent, QDropEvent, QFont, QPalette
-from PyQt5.QtWidgets import (
-    QAbstractItemView,
-    QAction,
-    QApplication,
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QFileDialog,
-    QFormLayout,
-    QGridLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QHeaderView,
-    QInputDialog,
-    QLabel,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
-    QMenuBar,
-    QMessageBox,
-    QProgressBar,
-    QPushButton,
-    QSlider,
-    QSpinBox,
-    QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
-)
+from core.config_manager import load_json_with_comments
 
 # ================= 基础路径与初始化 =================
 BASE_DIR = Path(sys.argv[0]).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
@@ -171,7 +122,7 @@ class StyleLoader:
         """返回 sizes.json 的完整元数据 dict（含 label/group/min/max）"""
         StyleLoader._ensure_default_sizes_file()
         try:
-            data = _load_json_with_comments(StyleLoader._sizes_path)
+            data = load_json_with_comments(StyleLoader._sizes_path)
             return data.get("sizes", {})
         except Exception:
             # 从内置默认值构建简易元数据
@@ -194,7 +145,7 @@ class StyleLoader:
         """
         StyleLoader._ensure_default_sizes_file()
         try:
-            data = _load_json_with_comments(StyleLoader._sizes_path)
+            data = load_json_with_comments(StyleLoader._sizes_path)
         except Exception:
             data = {"sizes": {}}
         meta = data.setdefault("sizes", {})
@@ -239,7 +190,7 @@ class StyleLoader:
         themes_path = STYLES_DIR / "themes.json"
         if themes_path.exists():
             try:
-                data = _load_json_with_comments(themes_path)
+                data = load_json_with_comments(themes_path)
                 themes = data.get("themes", {})
                 if theme_name in themes:
                     return themes[theme_name].get("label", theme_name)
@@ -298,7 +249,7 @@ class ConfigManager:
         """加载主配置，若不存在则创建默认配置"""
         if self.config_path.exists():
             try:
-                cfg = _load_json_with_comments(self.config_path)
+                cfg = load_json_with_comments(self.config_path)
                 return self._merge_defaults(cfg)
             except Exception:
                 return dict(DEFAULT_CONFIG)
@@ -329,7 +280,7 @@ class ConfigManager:
         """加载预设列表"""
         if self.presets_path.exists():
             try:
-                data = _load_json_with_comments(self.presets_path)
+                data = load_json_with_comments(self.presets_path)
                 return data.get("presets", [])
             except Exception:
                 return []
@@ -375,7 +326,7 @@ class ConfigManager:
 
     def import_config(self, filepath):
         """从指定文件导入配置"""
-        cfg = _load_json_with_comments(filepath)
+        cfg = load_json_with_comments(filepath)
         self.config = self._merge_defaults(cfg)
         self.save_config()
         return self.config
@@ -449,7 +400,7 @@ class ModeLoader:
         if ModeLoader._modes_data is not None:
             return ModeLoader._modes_data
         try:
-            data = _load_json_with_comments(ModeLoader._modes_path)
+            data = load_json_with_comments(ModeLoader._modes_path)
             ModeLoader._modes_data = data.get("modes", [])
         except Exception:
             ModeLoader._modes_data = []
@@ -521,7 +472,7 @@ class ModeLoader:
     @staticmethod
     def get_commands(index, use_gpu=True):
         """获取命令模板列表
-        
+
         优先返回 commands_gpu/commands_cpu（若存在），
         否则返回通用 commands。
         """
@@ -537,11 +488,11 @@ class ModeLoader:
     @staticmethod
     def resolve_template(cmd_tokens, ctx):
         """将命令模板中的 {{var}} 替换为实际值
-        
+
         Args:
             cmd_tokens: 字符串列表，每个元素可能含 {{var}} 或 {{var|default}}
             ctx: 上下文变量字典
-        
+
         Returns:
             替换后的字符串列表（空字符串被过滤）
         """
@@ -575,10 +526,10 @@ def time_to_seconds(time_str):
 
 # ================= 信号管理器 =================
 class WorkerSignals(QObject):
-    log = pyqtSignal(str, str)          # 文件名, 信息
-    progress = pyqtSignal(str, int)     # 文件名, 进度
-    finished = pyqtSignal(str, bool, str)  # 文件名, 是否成功, 输出目录
-    row_remove = pyqtSignal(str)        # 文件路径
+    log = Signal(str, str)          # 文件名, 信息
+    progress = Signal(str, int)     # 文件名, 进度
+    finished = Signal(str, bool, str)  # 文件名, 是否成功, 输出目录
+    row_remove = Signal(str)        # 文件路径
 
 
 # ================= 工作线程 =================
@@ -592,7 +543,7 @@ class FFmpegWorker(QRunnable):
         self.process = None
         self.is_killed = False
 
-    @pyqtSlot()
+    @Slot()
     def run(self):
         success = True
         last_out_dir = str(OUTPUT_DIR)
@@ -1566,7 +1517,7 @@ class FFmpegGUI(QWidget):
 
     def open_settings(self):
         dialog = SettingsDialog(self.config_mgr, self)
-        if dialog.exec_() == QDialog.Accepted:
+        if dialog.exec() == QDialog.Accepted:
             self.threadpool.setMaxThreadCount(
                 self.config_mgr.get_general().get("max_threads", 2)
             )
@@ -1644,7 +1595,7 @@ class FFmpegGUI(QWidget):
 
     def manage_presets(self):
         dialog = PresetDialog(self.config_mgr, self)
-        result = dialog.exec_()
+        result = dialog.exec()
         self.refresh_quick_presets()
         if result == QMessageBox.Yes and hasattr(dialog, 'selected_preset'):
             preset = self.config_mgr.apply_preset(dialog.selected_preset)
@@ -2089,4 +2040,4 @@ if __name__ == "__main__":
 
     gui = FFmpegGUI()
     gui.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())

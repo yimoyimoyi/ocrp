@@ -5,14 +5,15 @@
 
 必须在有事件循环的线程中使用：
   - 主线程：有 Qt 主事件循环，直接可用
-  - QThread：run() 中需调用 QCoreApplication.processEvents() 或 exec_()
+  - QThread：run() 中需调用 QCoreApplication.processEvents() 或 exec()
 """
 
 import json
+import threading
 import time
 from collections.abc import Callable
 
-from PyQt5.QtCore import QCoreApplication, QObject, QProcess, QProcessEnvironment, pyqtSignal
+from PySide6.QtCore import QCoreApplication, QObject, QProcess, QProcessEnvironment, Signal
 
 from core.logger import get_logger
 
@@ -35,8 +36,8 @@ class QtSubprocessManager(QObject):
         error_occurred()  —— 启动失败或进程异常退出
     """
 
-    ready = pyqtSignal()
-    error_occurred = pyqtSignal(str)
+    ready = Signal()
+    error_occurred = Signal(str)
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -129,20 +130,31 @@ class QtSubprocessManager(QObject):
         data = json.dumps(obj, ensure_ascii=False) + "\n"
         self._proc.writeData(data.encode("utf-8"))
 
-    def read_json_response(self, timeout: float = 300.0) -> dict | None:
+    def read_json_response(self, timeout: float = 300.0, request_id: int | None = None) -> dict | None:
         """同步等待一条 JSON 响应。
 
         在等待期间持续调用 processEvents() 保持事件循环活跃。
+        传入 request_id 时按 id 匹配响应（P0-T2：丢弃不匹配的响应防错配）。
         """
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self._response_queue:
-                return self._response_queue.pop(0)
+                if request_id is None:
+                    return self._response_queue.pop(0)
+                for i, resp in enumerate(self._response_queue):
+                    if resp.get("id") == request_id:
+                        del self._response_queue[i]
+                        return resp
             QCoreApplication.processEvents(QEventLoop_AllEvents, 200)
             if self._proc and self._proc.state() == QProcess.NotRunning:
-                # 进程已退出，检查剩余缓冲
+                # 进程已退出，检查剩余缓冲（优先 id 匹配）
                 if self._response_queue:
-                    return self._response_queue.pop(0)
+                    if request_id is None:
+                        return self._response_queue.pop(0)
+                    for i, resp in enumerate(self._response_queue):
+                        if resp.get("id") == request_id:
+                            del self._response_queue[i]
+                            return resp
                 return None
         logger.warning("read_json_response 超时 (%.0fs)", timeout)
         return None
@@ -280,7 +292,7 @@ class QtSubprocessManager(QObject):
 
 
 # Qt 事件循环标志常量（避免每次调用时 import）
-from PyQt5.QtCore import QEventLoop
+from PySide6.QtCore import QEventLoop
 
 QEventLoop_AllEvents = QEventLoop.AllEvents
 
@@ -323,6 +335,8 @@ class SharedMemoryManager:
         self._name = name
         self._capacity = capacity
         self._shm: SharedMemory | None = None
+        # P0-T2：写/扩展/关闭互斥，防止并发下容量扩展的 close+unlink+create 互相覆盖
+        self._lock = threading.Lock()
         self._init_shared_memory()
         import atexit
 
@@ -367,25 +381,27 @@ class SharedMemoryManager:
         """
         import numpy as np
 
-        if self._shm is None:
-            self._init_shared_memory()
-        if self._shm is None:
-            raise RuntimeError("共享内存不可用")
+        # P0-T2：整体加锁——写入与容量扩展（close+unlink+create）是同一事务
+        with self._lock:
+            if self._shm is None:
+                self._init_shared_memory()
+            if self._shm is None:
+                raise RuntimeError("共享内存不可用")
 
-        raw = np.ascontiguousarray(arr).tobytes()
-        n = len(raw)
+            raw = np.ascontiguousarray(arr).tobytes()
+            n = len(raw)
 
-        # 容量不足时自动扩展
-        if n > self._shm.size:
-            self._shm.close()
-            self._shm.unlink()
-            from multiprocessing.shared_memory import SharedMemory
+            # 容量不足时自动扩展
+            if n > self._shm.size:
+                self._shm.close()
+                self._shm.unlink()
+                from multiprocessing.shared_memory import SharedMemory
 
-            self._capacity = max(n, self._capacity * 2)
-            self._shm = SharedMemory(name=self._name, create=True, size=self._capacity)
+                self._capacity = max(n, self._capacity * 2)
+                self._shm = SharedMemory(name=self._name, create=True, size=self._capacity)
 
-        self._shm.buf[:n] = raw
-        return n
+            self._shm.buf[:n] = raw
+            return n
 
     @staticmethod
     def read_array_from(name: str, width: int, height: int, channels: int = 3):
@@ -404,20 +420,30 @@ class SharedMemoryManager:
 
         import numpy as np
 
-        shm = SharedMemory(name=name, create=False)
+        # P0-T2/M8：create=False 移入 try——块不存在时给清晰错误而非 FileNotFoundError 冒泡
+        try:
+            shm = SharedMemory(name=name, create=False)
+        except FileNotFoundError:
+            raise RuntimeError(f"共享内存块不存在: {name}（主进程可能已关闭）") from None
+        arr = None
         try:
             n = width * height * channels
             arr = np.frombuffer(shm.buf[:n], dtype=np.uint8).reshape((height, width, channels))
-            return arr.copy()  # copy 确保不持有共享内存引用
+            out = arr.copy()  # copy 确保返回值不持有共享内存引用
         finally:
+            # 回归修复：finally 先解除 numpy 对缓冲的引用再 close——
+            # 否则 Windows 上 mmap.close() 因存在导出指针抛 BufferError
+            arr = None
             shm.close()  # 只 close，不 unlink（主进程负责 unlink）
+        return out
 
     def close(self):
         """关闭并释放共享内存（主进程调用）。"""
-        if self._shm is not None:
-            try:
-                self._shm.close()
-                self._shm.unlink()
-            except Exception:
-                pass
-            self._shm = None
+        with self._lock:  # P0-T2：与 write_array 互斥，防止 close 与写竞争
+            if self._shm is not None:
+                try:
+                    self._shm.close()
+                    self._shm.unlink()
+                except Exception:
+                    pass
+                self._shm = None

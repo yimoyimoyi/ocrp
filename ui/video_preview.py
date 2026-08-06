@@ -3,14 +3,12 @@ QLabel 子类手动绘制 pixmap（保持宽高比居中）+ ROI 叠加层。
 """
 
 import os
-import subprocess
-import tempfile
 from pathlib import Path
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import QObject, QPoint, QRect, QRectF, Qt, QThread, QTimer, QUrl, pyqtSignal
-from PyQt5.QtGui import (
+from PySide6.QtCore import QObject, QPoint, QRect, QRectF, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import (
     QColor,
     QDragEnterEvent,
     QDropEvent,
@@ -23,8 +21,8 @@ from PyQt5.QtGui import (
     QPixmap,
     QResizeEvent,
 )
-from PyQt5.QtMultimedia import QMediaContent, QMediaPlayer
-from PyQt5.QtWidgets import (
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QLabel,
@@ -37,72 +35,15 @@ from PyQt5.QtWidgets import (
 
 from core.i18n import _
 from core.logger import get_logger
-from core.utils import find_ffmpeg
 
 logger = get_logger(__name__)
-
-
-class _AudioExtractWorker(QThread):
-    """后台 FFmpeg 音频提取线程。"""
-
-    finished = pyqtSignal(str)  # 临时文件路径
-    error = pyqtSignal(str)
-
-    def __init__(self, video_path: str, parent=None):
-        super().__init__(parent)
-        self._video_path = video_path
-
-    def run(self):
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-                tmp_path = tmp.name
-            ffmpeg = find_ffmpeg()
-            cmd = [
-                ffmpeg,
-                "-v",
-                "error",
-                "-i",
-                self._video_path,
-                "-f",
-                "wav",
-                "-acodec",
-                "pcm_s16le",
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                "-y",
-                tmp_path,
-            ]
-            result = subprocess.run(cmd, capture_output=True, timeout=60)
-            if result.returncode != 0 or not os.path.isfile(tmp_path):
-                stderr = result.stderr.decode(errors="replace").strip() if result.stderr else ""
-                detail = stderr[-200:] if stderr else "无输出"
-                self.error.emit(f"FFmpeg 返回码 {result.returncode}: {detail}")
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                return
-            self.finished.emit(tmp_path)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-def _imread_unicode(path: str) -> np.ndarray | None:
-    try:
-        buf = np.fromfile(path, dtype=np.uint8)
-        return cv2.imdecode(buf, cv2.IMREAD_COLOR) if buf.size > 0 else None
-    except Exception as e:
-        logger.warning("加载图片失败: %s", e)
-        return None
 
 
 class ImageLoadWorker(QThread):
     """后台加载图片（文件读取 + 解码）。"""
 
-    loaded = pyqtSignal(object, str)  # (np.ndarray, path)
-    error = pyqtSignal()
+    loaded = Signal(object, str)  # (np.ndarray, path)
+    error = Signal()
 
     def __init__(self, path: str):
         super().__init__()
@@ -116,11 +57,21 @@ class ImageLoadWorker(QThread):
             self.error.emit()
 
 
+def _imread_unicode(path: str) -> np.ndarray | None:
+    """Unicode 安全读取图片（np.fromfile + cv2.imdecode）。"""
+    try:
+        buf = np.fromfile(path, dtype=np.uint8)
+        return cv2.imdecode(buf, cv2.IMREAD_COLOR) if buf.size > 0 else None
+    except Exception as e:
+        logger.warning("加载图片失败: %s", e)
+        return None
+
+
 class AudioLoadWorker(QThread):
     """后台加载音频（ffprobe 获取时长）。"""
 
-    loaded = pyqtSignal(str, float)  # (path, duration)
-    error = pyqtSignal(str)
+    loaded = Signal(str, float)  # (path, duration)
+    error = Signal(str)
 
     def __init__(self, path: str):
         super().__init__()
@@ -139,7 +90,7 @@ class AudioLoadWorker(QThread):
 class _SeekResultBridge(QObject):
     """跨线程信号桥：后台 seek 线程将解码帧投递到主线程。"""
 
-    frame_ready = pyqtSignal(object)  # np.ndarray
+    frame_ready = Signal(object)  # np.ndarray
 
 
 class _PreviewLabel(QLabel):
@@ -166,7 +117,7 @@ class _PreviewLabel(QLabel):
         self._drawing_ref = lambda: False  # () -> bool
         self._start_point_ref = lambda: QPoint()
         self._end_point_ref = lambda: QPoint()
-        self._placeholder_text = (
+        self._placeholder_text = _(
             "拖放视频/图片文件到此处\n或 Ctrl+V 粘贴文件路径\n\nSpace 播放/暂停 · ← → 快进/退 5s · S 切换速度"
         )
 
@@ -189,7 +140,7 @@ class _PreviewLabel(QLabel):
         lw, lh = self.width(), self.height()
 
         # 背景（渐变）
-        from PyQt5.QtGui import QLinearGradient
+        from PySide6.QtGui import QLinearGradient
 
         grad = QLinearGradient(0, 0, 0, lh)
         grad.setColorAt(0, QColor(18, 18, 30))
@@ -294,10 +245,10 @@ class _PreviewLabel(QLabel):
 
 
 class VideoPreviewWidget(QWidget):
-    video_loaded = pyqtSignal(str)
-    frame_captured = pyqtSignal(object)
-    regions_changed = pyqtSignal(list)
-    files_dropped = pyqtSignal(list)  # 拖放多个文件到队列
+    video_loaded = Signal(str)
+    frame_captured = Signal(object)
+    regions_changed = Signal(list)
+    files_dropped = Signal(list)  # 拖放多个文件到队列
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -466,9 +417,7 @@ class VideoPreviewWidget(QWidget):
 
         # 音频播放（QMediaPlayer 提供真实音频输出）
         self._audio_player: QMediaPlayer | None = None
-        self._audio_timer = QTimer()
-        self._audio_timer.setInterval(100)
-        self._audio_timer.timeout.connect(self._on_audio_tick)
+        self._audio_output: QAudioOutput | None = None  # Qt6 必须显式音频输出，否则无声
         self._audio_speed: float = 1.0
         self._audio_speed_idx: int = 3
 
@@ -526,7 +475,7 @@ class VideoPreviewWidget(QWidget):
         self._video_path = None
         self._is_image = False
         self._is_audio = False
-        self._label._placeholder_text = (
+        self._label._placeholder_text = _(
             "拖放视频文件到此处\n或点击「打开视频/图片」加载文件\n\nSpace 播放/暂停 · ← → 快进/退 5s · S 切换速度"
         )
         self._label.update()
@@ -541,14 +490,14 @@ class VideoPreviewWidget(QWidget):
                 logger.debug("FFmpeg 关闭异常: %s", e)
             self._ffmpeg = None
 
-        from ui.workers import VideoLoadWorker
+        from core.workers import VideoLoadWorker
 
         self._load_worker = VideoLoadWorker(path, self._hw_accel)
         self._load_worker.loaded.connect(self._on_video_loaded)
         self._load_worker.error.connect(self._on_video_load_error)
         self._load_worker.start()
         # UI 进入加载状态
-        self._label._placeholder_text = "⏳ 加载中..."
+        self._label._placeholder_text = _("⏳ 加载中...")
         self._label.update()
 
     def _on_video_loaded(self, frame, info):
@@ -586,7 +535,7 @@ class VideoPreviewWidget(QWidget):
     def _on_video_load_error(self, msg):
         """视频加载失败（在主线程执行）。"""
         logger.error("视频加载失败: %s", msg)
-        self._label._placeholder_text = f"❌ 加载失败: {msg}\n拖放视频文件到此处"
+        self._label._placeholder_text = _(f"❌ 加载失败: {msg}\n拖放视频文件到此处")
         self._label.update()
         self._load_worker = None
 
@@ -610,7 +559,7 @@ class VideoPreviewWidget(QWidget):
         self._image_load_worker.error.connect(self._on_image_load_error)
         self._image_load_worker.start()
 
-        self._label._placeholder_text = "⏳ 加载中..."
+        self._label._placeholder_text = _("⏳ 加载中...")
         self._label.update()
 
     def _on_image_loaded(self, img, path):
@@ -625,7 +574,7 @@ class VideoPreviewWidget(QWidget):
     def _on_image_load_error(self):
         self._current_frame = None
         self._display_pixmap = None
-        self._label._placeholder_text = "❌ 无法打开图片\n拖放文件到此处"
+        self._label._placeholder_text = _("❌ 无法打开图片\n拖放文件到此处")
         self._label.update()
 
     def load_audio(self, path: str):
@@ -644,7 +593,6 @@ class VideoPreviewWidget(QWidget):
         self._display_pixmap = None
         self._current_position = 0.0
         self._player = None
-        self._audio_timer.stop()
         self._label.update()
         self._time_range_widget.hide()
 
@@ -653,7 +601,7 @@ class VideoPreviewWidget(QWidget):
         self._audio_load_worker.error.connect(self._on_audio_load_error)
         self._audio_load_worker.start()
 
-        self._label._placeholder_text = "⏳ 加载中..."
+        self._label._placeholder_text = _("⏳ 加载中...")
         self._label.update()
 
     def _on_audio_loaded(self, path: str, duration: float):
@@ -661,14 +609,14 @@ class VideoPreviewWidget(QWidget):
         self._video_duration = duration
         self._preview_slider.setRange(0, max(1, int(duration * 100)))
         self.video_loaded.emit(path)
-        self._label._placeholder_text = "🎵 已加载音频文件\n仅支持语音识别和纠错"
+        self._label._placeholder_text = _("🎵 已加载音频文件\n仅支持语音识别和纠错")
         self._label.update()
         self.show_play_controls()
 
     def _on_audio_load_error(self, msg: str):
         """音频加载失败（在主线程执行）。"""
         logger.error("音频加载失败: %s", msg)
-        self._label._placeholder_text = f"❌ 加载失败: {msg}\n拖放文件到此处"
+        self._label._placeholder_text = _(f"❌ 加载失败: {msg}\n拖放文件到此处")
         self._label.update()
 
     def capture_test_frame(self, image: np.ndarray = None):
@@ -747,8 +695,7 @@ class VideoPreviewWidget(QWidget):
                 self._player.pause()
             if self._audio_player:
                 self._audio_player.pause()
-            self._audio_timer.stop()
-            self._is_playing = False
+                self._is_playing = False
             self._btn_play.setText("▶")
         else:
             if self._current_position >= self._video_duration - 0.1:
@@ -761,121 +708,52 @@ class VideoPreviewWidget(QWidget):
             self._is_playing = True
             self._btn_play.setText("⏸")
 
-    def _start_audio_playback(self):
-        """使用 QMediaPlayer 播放音频文件（真实音频输出）。"""
+    def _ensure_audio_player(self):
+        """创建 QMediaPlayer + QAudioOutput（Qt6 必须显式音频输出，否则无声）。"""
         if self._audio_player is None:
             self._audio_player = QMediaPlayer(self)
+            self._audio_output = QAudioOutput(self)
+            self._audio_player.setAudioOutput(self._audio_output)
             self._audio_player.positionChanged.connect(self._on_audio_position)
             self._audio_player.durationChanged.connect(self._on_audio_duration)
-            self._audio_player.stateChanged.connect(self._on_audio_state)
+            self._audio_player.playbackStateChanged.connect(self._on_audio_state)
+            self._audio_player.errorOccurred.connect(self._on_video_audio_error)
+
+    def _play_audio_source(self, url: QUrl):
+        """加载并播放音频源。
+
+        Qt6 的 setSource 为异步加载，立即 setPosition 可能被忽略（从 0 播放），
+        因此监听 mediaStatusChanged(LoadedMedia) 完成定位后再继续。
+        """
         # 标记正在 seek，忽略初始的位置更新
         self._audio_seek_pending = True
-        url = QUrl.fromLocalFile(self._video_path)
-        self._audio_player.setMedia(QMediaContent(url))
-        self._audio_player.setPosition(int(self._current_position * 1000))
+        self._audio_player.setSource(url)
         self._audio_player.play()
+        self._audio_player.mediaStatusChanged.connect(self._on_audio_status_for_seek)
         # 延迟重置标记，给 QMediaPlayer 时间完成 seek
         QTimer.singleShot(200, lambda: setattr(self, "_audio_seek_pending", False))
+
+    def _on_audio_status_for_seek(self, status):
+        """媒体源加载完成后定位到当前播放位置（一次性）。"""
+        if status == QMediaPlayer.MediaStatus.LoadedMedia:
+            self._audio_player.setPosition(int(self._current_position * 1000))
+            try:
+                self._audio_player.mediaStatusChanged.disconnect(self._on_audio_status_for_seek)
+            except (TypeError, RuntimeError):
+                pass
+
+    def _start_audio_playback(self):
+        """使用 QMediaPlayer 播放音频文件（真实音频输出）。"""
+        self._ensure_audio_player()
+        self._play_audio_source(QUrl.fromLocalFile(self._video_path))
 
     def _start_video_audio(self):
         """启动视频音频播放（音频已在加载阶段预提取）。"""
-        if self._audio_player is None:
-            self._audio_player = QMediaPlayer(self)
-            self._audio_player.error.connect(self._on_video_audio_error)
+        self._ensure_audio_player()
         # 检查音频是否已预提取
         if not self._audio_temp:
             return  # 无音频流（静音播放）
-        # 标记正在 seek，忽略初始的位置更新
-        self._audio_seek_pending = True
-        url = QUrl.fromLocalFile(self._audio_temp)
-        self._audio_player.setMedia(QMediaContent(url))
-        self._audio_player.setPosition(int(self._current_position * 1000))
-        self._audio_player.play()
-        # 延迟重置标记，给 QMediaPlayer 时间完成 seek
-        QTimer.singleShot(200, lambda: setattr(self, "_audio_seek_pending", False))
-
-    def _extract_full_audio_async(self):
-        """异步抽取视频完整音轨到临时 WAV 文件（不阻塞 UI）。"""
-        self._cleanup_audio_temp()
-        self._audio_extract_worker = _AudioExtractWorker(self._video_path, self)
-        self._audio_extract_worker.finished.connect(self._on_audio_extracted)
-        self._audio_extract_worker.error.connect(self._on_audio_extract_error)
-        self._audio_extract_worker.start()
-
-    def _on_audio_extracted(self, path: str):
-        """音频提取完成回调。"""
-        self._audio_temp = path
-        if self._is_playing:
-            # 标记正在 seek，忽略初始的位置更新
-            self._audio_seek_pending = True
-            url = QUrl.fromLocalFile(self._audio_temp)
-            self._audio_player.setMedia(QMediaContent(url))
-            self._audio_player.setPosition(int(self._current_position * 1000))
-            self._audio_player.play()
-            # 延迟重置标记，给 QMediaPlayer 时间完成 seek
-            QTimer.singleShot(200, lambda: setattr(self, "_audio_seek_pending", False))
-
-    def _on_audio_extract_error(self, err: str):
-        """音频提取失败回调。"""
-        # 返回码 -22 通常表示视频没有音频流，降级为 info 级别
-        if "-22" in err or "4294967274" in err:
-            logger.info("视频无音频流，将静音播放")
-        else:
-            logger.warning("FFmpeg 音频提取失败: %s", err)
-        self._cleanup_audio_temp()
-
-    def _cleanup_audio_temp(self):
-        """清理临时音频文件。"""
-        if hasattr(self, "_audio_temp") and self._audio_temp:
-            try:
-                os.unlink(self._audio_temp)
-            except OSError:
-                pass
-            self._audio_temp = None
-
-    def _on_video_audio_error(self, error):
-        """视频音频播放出错时静默忽略。"""
-        logger.warning("视频音频播放失败 (QMediaPlayer error %d), 继续静音播放", error)
-
-    def _on_audio_position(self, ms: int):
-        """QMediaPlayer 位置更新 → 同步滑块。"""
-        # 忽略 seek 期间的初始位置更新（防止进度条跳到开头）
-        if self._audio_seek_pending:
-            return
-        if self._is_playing and not self._slider_dragging:
-            self._current_position = ms / 1000.0
-            self._set_slider(self._current_position)
-            self._update_preview_label()
-
-    def _on_audio_duration(self, ms: int):
-        """QMediaPlayer 时长回调。"""
-        dur = ms / 1000.0
-        if dur > 0:
-            self._video_duration = dur
-            self._preview_slider.setRange(0, max(1, int(dur * 100)))
-
-    def _on_audio_state(self, state):
-        """QMediaPlayer 播放结束。"""
-        if state == QMediaPlayer.StoppedState and self._is_playing:
-            self._is_playing = False
-            self._btn_play.setText("▶")
-            self._set_slider(self._video_duration)
-
-    def _on_audio_tick(self):
-        """保留作为后备（QMediaPlayer 不可用时）。"""
-        if not self._is_playing or not self._is_audio:
-            self._audio_timer.stop()
-            return
-        if self._audio_player and self._audio_player.state() == QMediaPlayer.PlayingState:
-            return  # QMediaPlayer 驱动，无需 timer
-        self._current_position += 0.1 * self._audio_speed
-        if self._current_position >= self._video_duration:
-            self._current_position = 0.0
-            self._audio_timer.stop()
-            self._is_playing = False
-            self._btn_play.setText("▶")
-        self._set_slider(self._current_position)
-        self._update_preview_label()
+        self._play_audio_source(QUrl.fromLocalFile(self._audio_temp))
 
     def _on_stop_playback(self):
         """停止播放并回到起点。"""
@@ -883,7 +761,6 @@ class VideoPreviewWidget(QWidget):
             self._player.stop()
         if self._audio_player:
             self._audio_player.stop()
-        self._audio_timer.stop()
         self._is_playing = False
         self._btn_play.setText("▶")
         self._current_position = 0.0
@@ -939,7 +816,6 @@ class VideoPreviewWidget(QWidget):
     def _on_player_finished(self):
         """播放器自然结束。"""
         self._is_playing = False
-        self._audio_timer.stop()
         if self._audio_player:
             self._audio_player.stop()
         self._btn_play.setText("▶")
@@ -1324,7 +1200,7 @@ class VideoPreviewWidget(QWidget):
         except Exception:
             self._video_duration = 0.0
         self._preview_slider.setRange(0, max(1, int(self._video_duration * 100)))
-        self._label._placeholder_text = "🎵 已加载音频文件\n仅支持语音识别和纠错"
+        self._label._placeholder_text = _("🎵 已加载音频文件\n仅支持语音识别和纠错")
         self._label.update()
         self._time_range_widget.hide()
         self._play_bar_widget.show()
@@ -1451,8 +1327,6 @@ class VideoPreviewWidget(QWidget):
         """关闭预览控件 —— 清理播放器和 FFmpeg。"""
         logger.info("清理播放器/FFmpeg...")
         # 停止定时器
-        if hasattr(self, "_audio_timer"):
-            self._audio_timer.stop()
         if hasattr(self, "_drag_seek_timer"):
             self._drag_seek_timer.stop()
         # 停止后台 worker
@@ -1463,13 +1337,6 @@ class VideoPreviewWidget(QWidget):
             except Exception as e:
                 logger.debug("load_worker 终止异常: %s", e)
             self._load_worker = None
-        if hasattr(self, "_audio_extract_worker") and self._audio_extract_worker:
-            try:
-                self._audio_extract_worker.terminate()
-                self._audio_extract_worker.wait(2000)
-            except Exception as e:
-                logger.debug("audio_extract_worker 终止异常: %s", e)
-            self._audio_extract_worker = None
         # 停止播放器
         if self._player:
             try:
@@ -1484,6 +1351,8 @@ class VideoPreviewWidget(QWidget):
             except Exception as e:
                 logger.debug("音频播放器停止异常: %s", e)
             self._audio_player = None
+        if hasattr(self, "_audio_output") and self._audio_output:
+            self._audio_output = None
         # 清理临时文件
         if hasattr(self, "_audio_temp") and self._audio_temp:
             try:

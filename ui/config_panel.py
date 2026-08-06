@@ -7,7 +7,7 @@ SettingsDialog 是唯一的设置 UI 入口；ConfigPanel 负责：
   - 发射信号通知外部状态变更
 """
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PySide6.QtCore import QObject, Signal
 
 from core.config_manager import MODE_PARAMS_DEFAULTS
 
@@ -15,18 +15,13 @@ from core.config_manager import MODE_PARAMS_DEFAULTS
 class ConfigPanel(QObject):
     """纯状态管理类，替代原先隐藏的 QWidget ConfigPanel。"""
 
-    prompt_changed = pyqtSignal(str)
-    mode_changed = pyqtSignal(dict)
-    hw_accel_changed = pyqtSignal(bool)
-    template_created = pyqtSignal(str)
-    template_saved = pyqtSignal(str, str)
-    template_deleted = pyqtSignal(str)
-    filter_add_requested = pyqtSignal(str)
-    filter_remove_requested = pyqtSignal(str)
-    extract_env_clicked = pyqtSignal()
-    collapse_requested = pyqtSignal()
-    template_edit_requested = pyqtSignal()
-    template_selected_for_correction = pyqtSignal(str)
+    prompt_changed = Signal(str)
+    mode_changed = Signal(dict)
+    template_saved = Signal(str, str)
+    template_deleted = Signal(str)
+    filter_add_requested = Signal(str)
+    filter_remove_requested = Signal(str)
+    extract_env_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -88,10 +83,21 @@ class ConfigPanel(QObject):
 
     @property
     def subtitle_mode(self) -> str:
-        return str(self._params.get("subtitle_mode", "流式字幕（去重）"))
+        """字幕模式（内部标识 stream/regular，兼容旧配置中的翻译文本，P21 解耦）。"""
+        v = str(self._params.get("subtitle_mode", "stream"))
+        if "流式" in v:
+            return "stream"
+        if "常规" in v:
+            return "regular"
+        return v
 
     @subtitle_mode.setter
     def subtitle_mode(self, val: str):
+        # 统一存储内部标识，避免配置值与 UI 语言绑定（P21）
+        if "流式" in val:
+            val = "stream"
+        elif "常规" in val:
+            val = "regular"
         self._params["subtitle_mode"] = val
 
     @property
@@ -183,20 +189,12 @@ class ConfigPanel(QObject):
     def _open_template_editor(self):
         """打开模板编辑器弹窗（延迟导入避免循环）。"""
         from ui.template_editor import TemplateEditorDialog
+
         dlg = TemplateEditorDialog(self._template_names, self._template_contents)
         dlg.template_saved.connect(self.template_saved.emit)
         dlg.template_deleted.connect(self.template_deleted.emit)
         dlg.prompt_changed.connect(self.prompt_changed.emit)
-        dlg.exec_()
-
-    def _on_corr_template_selected(self, name: str):
-        """AI 纠错模板选择：将选中模板内容注入到 corrector。"""
-        if not name or name == "（选择模板）":
-            self.template_selected_for_correction.emit("")
-            return
-        content = self._template_contents.get(name, "")
-        if content:
-            self.template_selected_for_correction.emit(content)
+        dlg.exec()
 
     # ── 排序规则 ──
 
@@ -208,4 +206,3 @@ class ConfigPanel(QObject):
 
     def set_region_names(self, names: list[str]):
         self._region_names = list(names)
-

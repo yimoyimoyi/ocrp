@@ -1,10 +1,17 @@
-"""参数设置对话框 —— 唯一的设置 UI 入口，通过 ConfigPanel 公共 API 同步数据。"""
+"""参数设置对话框 —— 字段描述器驱动的数据驱动表单。
+
+UI 控件由 _FIELDS / _ENGINE_FIELDS 描述表声明式生成：
+  - _build_field()        按 spec 构建控件并绑定到 self.<attr>
+  - _load_initial_values() 通用循环：描述表 → 控件
+  - _sync_values_to_cp()   通用循环：控件 → mode_params
+特殊面板（引擎联动 / 关键词过滤 / 排序拖放列表）保留专用构建方法。
+"""
 
 import os
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
@@ -34,26 +41,985 @@ BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.i18n import _
 from core.utils import fetch_models_from_url, populate_model_combo
 from ui.collapsible_group import CollapsibleGroup
-from ui.widget_helpers import safe_set_widget
+
+# ══════════════════════════════════════════════════════════════════
+# 字段描述表
+#
+# 每个字段 spec 的键：
+#   key         mode_params（或 _corr_cfg，若 source="corr"）中的键
+#   tab/group   所属 tab 与分组（分组顺序见 _TAB_GROUPS）
+#   attr        控件绑定属性名（self.<attr>）
+#   widget      combo / combo_edit / combo_data / preset_combo / spin /
+#               double_spin / line / check / text / button /
+#               btn_asr_refresh / corr_model_row
+#   label       行标签（form 布局）；check 的行标签为空字符串，文本在 text
+#   options     下拉选项（原文，tr_options=True 时构建期翻译）
+#   default     默认值；min/max/step/decimals/suffix 数值范围
+#   tooltip/placeholder/suffix/text  显示文本（tr_* 标志控制是否翻译）
+#   source      "corr" 表示读写 correction_config 而非 mode_params
+#   load=False  不参与 _load_initial_values（如引擎字段、按钮行）
+#   sync=False  不参与 _sync_values_to_cp
+#   load_map    加载值预处理回调；on_load 加载后回调（方法名）
+#   sync_get    收集值回调（widget）-> value
+# ══════════════════════════════════════════════════════════════════
 
 
-def _safe_set(widget, value, setter=None):
-    """安全设置 widget 值。"""
-    if setter:
-        try:
-            setter(value)
-        except RuntimeError:
-            pass
+def _map_subtitle_mode(value) -> str:
+    """字幕模式加载：兼容内部标识（stream/regular，4c.3）与历史翻译文本。"""
+    v = str(value)
+    if v == "regular" or "常规" in v:
+        return _("常规字幕（固定间隔）")
+    return _("流式字幕（去重）")  # stream / 旧流式文本
+
+
+def _clean_summary_load(value) -> str:
+    """环境提示词加载：清洗历史版本写入的字面量 "None"（旧 P2 bug 污染）。"""
+    v = str(value or "")
+    if v.strip().lower() in ("none", "null"):
+        return ""
+    return v
+
+
+_FIELDS: list[dict] = [
+    # ── Tab 1: 基础设置 ──
+    dict(
+        key="process_mode",
+        tab="basic",
+        group="处理模式",
+        attr="_process_mode",
+        widget="combo",
+        label="处理模式:",
+        tr_label=True,
+        options=("OCR + ASR（完整流程）", "仅 OCR", "仅语音识别 (ASR)"),
+        tr_options=True,
+        default="OCR + ASR（完整流程）",
+        tooltip="选择开始处理时运行的流程模式",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="frame_interval",
+        tab="basic",
+        group="处理模式",
+        attr="_frame_interval",
+        widget="double_spin",
+        label="帧间隔:",
+        tr_label=True,
+        min=0.02,
+        max=10.0,
+        step=0.1,
+        decimals=2,
+        default=0.1,
+        suffix=" 秒",
+        tr_suffix=True,
+        tooltip="每隔多少秒处理一帧",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="subtitle_duration",
+        tab="basic",
+        group="输出控制",
+        attr="_subtitle_duration",
+        widget="double_spin",
+        label="字幕时长:",
+        tr_label=True,
+        min=0.5,
+        max=30.0,
+        step=0.5,
+        decimals=2,
+        default=3.0,
+        suffix=" 秒",
+        tr_suffix=True,
+    ),
+    dict(
+        key="srt_export_mode",
+        tab="basic",
+        group="输出控制",
+        attr="_srt_export",
+        widget="combo",
+        label="SRT 导出:",
+        tr_label=True,
+        options=("仅纠正结果", "仅原文", "双语对照（原文+纠正）", "原文 换行 纠正"),
+        tr_options=True,
+        default="仅纠正结果",
+        tooltip="SRT 导出时的字幕内容模式",
+        tr_tooltip=True,
+    ),
+    # ── Tab 2: 语音识别 ──
+    dict(
+        key="subtitle_mode",
+        tab="asr",
+        group="字幕模式",
+        attr="_subtitle_mode",
+        widget="combo",
+        label="字幕模式:",
+        tr_label=True,
+        options=("流式字幕（去重）", "常规字幕（固定间隔）"),
+        tr_options=True,
+        default="流式字幕（去重）",
+        tooltip="流式：哨兵去重实时输出\n常规：固定间隔采样",
+        tr_tooltip=True,
+        load_map=_map_subtitle_mode,
+        on_load="_on_subtitle_mode_changed",
+        on_change="_on_subtitle_mode_changed",
+    ),
+    dict(
+        key="sentinel_enabled",
+        tab="asr",
+        group="流式参数（哨兵去重）",
+        attr="_s_sentinel",
+        widget="check",
+        text="启用哨兵去重（骤降/缓冲区/相似度）",
+        tr_text=True,
+        label="",
+        default=True,
+    ),
+    dict(
+        key="s_drop_ratio",
+        tab="asr",
+        group="流式参数（哨兵去重）",
+        attr="_s_drop_ratio",
+        widget="double_spin",
+        label="字数骤降比:",
+        tr_label=True,
+        min=0.01,
+        max=1.0,
+        step=0.05,
+        decimals=2,
+        default=0.5,
+        tooltip="文本长度骤降到上一帧的此比例时强制触发输出",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="s_buffer_size",
+        tab="asr",
+        group="流式参数（哨兵去重）",
+        attr="_s_buffer",
+        widget="spin",
+        label="连续缓冲区:",
+        tr_label=True,
+        min=1,
+        max=100,
+        default=8,
+        tooltip="连续相同文本的缓冲区大小，超过后强制输出",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="s_sim_threshold",
+        tab="asr",
+        group="流式参数（哨兵去重）",
+        attr="_s_sim",
+        widget="double_spin",
+        label="相似度阈值:",
+        tr_label=True,
+        min=0.0,
+        max=1.0,
+        step=0.05,
+        decimals=2,
+        default=0.85,
+    ),
+    dict(
+        key="s_min_text_len",
+        tab="asr",
+        group="流式参数（哨兵去重）",
+        attr="_s_min_text",
+        widget="spin",
+        label="最小文字长度:",
+        tr_label=True,
+        min=1,
+        max=100,
+        default=2,
+    ),
+    dict(
+        key="r_dedup",
+        tab="asr",
+        group="常规参数（固定间隔）",
+        attr="_r_dedup",
+        widget="check",
+        text="启用基本去重（相似文本合并）",
+        tr_text=True,
+        label="",
+        default=True,
+    ),
+    dict(
+        key="r_sim_threshold",
+        tab="asr",
+        group="常规参数（固定间隔）",
+        attr="_r_sim",
+        widget="double_spin",
+        label="相似度阈值:",
+        tr_label=True,
+        min=0.0,
+        max=1.0,
+        step=0.05,
+        decimals=2,
+        default=0.9,
+    ),
+    dict(
+        key="r_buffer_size",
+        tab="asr",
+        group="常规参数（固定间隔）",
+        attr="_r_buffer",
+        widget="spin",
+        label="连续缓冲区:",
+        tr_label=True,
+        min=1,
+        max=100,
+        default=5,
+    ),
+    dict(
+        key="r_min_text_len",
+        tab="asr",
+        group="常规参数（固定间隔）",
+        attr="_r_min_text",
+        widget="spin",
+        label="最小文字长度:",
+        tr_label=True,
+        min=1,
+        max=100,
+        default=2,
+    ),
+    dict(
+        key="r_interval",
+        tab="asr",
+        group="常规参数（固定间隔）",
+        attr="_r_interval",
+        widget="double_spin",
+        label="输出间隔:",
+        tr_label=True,
+        min=0.1,
+        max=60.0,
+        step=0.5,
+        decimals=1,
+        default=2.0,
+        suffix=" 秒",
+        tr_suffix=True,
+        tooltip="每隔多少秒输出一次当前帧的全部识别结果",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="asr_model_dir",
+        tab="asr",
+        group="ASR 语音识别引擎",
+        attr="_asr_model_dir",
+        widget="line",
+        label="模型目录:",
+        tr_label=True,
+        default="models/asr",
+        placeholder="留空使用默认缓存",
+        tr_placeholder=True,
+        sync_get=lambda w: w.text().strip() or "models/asr",
+    ),
+    dict(
+        key="asr_model_path",
+        tab="asr",
+        group="ASR 语音识别引擎",
+        attr="_asr_model",
+        widget="combo_data",
+        label="可用模型:",
+        tr_label=True,
+        default="",
+        on_load="_load_asr_model_value",
+    ),
+    dict(
+        tab="asr",
+        group="ASR 语音识别引擎",
+        attr="_asr_refresh_btn",
+        widget="btn_asr_refresh",
+        label="",
+    ),
+    dict(
+        key="asr_language",
+        tab="asr",
+        group="ASR 语音识别引擎",
+        attr="_asr_lang",
+        widget="combo",
+        label="语言:",
+        tr_label=True,
+        options=("auto", "zh", "en", "ja", "ko"),
+        default="zh",
+        init_text="zh",
+    ),
+    dict(
+        key="asr_region_name",
+        tab="asr",
+        group="ASR 语音识别引擎",
+        attr="_asr_region",
+        widget="line",
+        label="区域名:",
+        tr_label=True,
+        default="语音",
+        tooltip="ASR 结果在表格中显示的区域名称",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="asr_beam_size",
+        tab="asr",
+        group="解码参数",
+        attr="_asr_beam",
+        widget="spin",
+        label="Beam Size:",
+        tr_label=True,
+        min=1,
+        max=20,
+        default=5,
+        tooltip="Beam size，越大精度越高但越慢",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="asr_word_ts",
+        tab="asr",
+        group="解码参数",
+        attr="_asr_word_ts",
+        widget="check",
+        text="字级时间戳",
+        tr_text=True,
+        label="",
+        default=True,
+    ),
+    dict(
+        key="asr_condition_prev",
+        tab="asr",
+        group="解码参数",
+        attr="_asr_condition",
+        widget="check",
+        text="基于上文条件解码",
+        tr_text=True,
+        label="",
+        default=True,
+    ),
+    dict(
+        key="asr_no_speech_thresh",
+        tab="asr",
+        group="解码参数",
+        attr="_asr_no_speech",
+        widget="double_spin",
+        label="无语音阈值:",
+        tr_label=True,
+        min=0.0,
+        max=1.0,
+        step=0.1,
+        default=0.6,
+        tooltip="越高越容易跳过无声音片段",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="asr_comp_ratio_thresh",
+        tab="asr",
+        group="解码参数",
+        attr="_asr_comp_ratio",
+        widget="double_spin",
+        label="压缩比阈值:",
+        tr_label=True,
+        min=0.0,
+        max=10.0,
+        step=0.1,
+        default=2.4,
+    ),
+    dict(
+        key="asr_temperature",
+        tab="asr",
+        group="解码参数",
+        attr="_asr_temp",
+        widget="line",
+        label="温度:",
+        tr_label=True,
+        default="0.0,0.2,0.4,0.6,0.8,1.0",
+        placeholder="0.0,0.2,0.4,0.6,0.8,1.0",
+        tr_placeholder=True,
+        tooltip="温度参数（逗号分隔），越低越确定",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="asr_hotwords",
+        tab="asr",
+        group="解码参数",
+        attr="_asr_hotwords",
+        widget="line",
+        label="热词:",
+        tr_label=True,
+        placeholder="热词，逗号分隔",
+        tr_placeholder=True,
+        tooltip="提升特定词汇的识别率",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="asr_initial_prompt",
+        tab="asr",
+        group="解码参数",
+        attr="_asr_prompt",
+        widget="line",
+        label="初始提示:",
+        tr_label=True,
+        placeholder="初始提示词，如: 以下是普通话的转录",
+        tr_placeholder=True,
+    ),
+    dict(
+        key="asr_vad",
+        tab="asr",
+        group="VAD (语音活动检测)",
+        attr="_asr_vad",
+        widget="check",
+        text="启用 VAD（跳过静音段）",
+        tr_text=True,
+        label="",
+        tr_label=True,
+        default=False,
+        tooltip="自动检测并跳过静音部分，加速处理",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="asr_vad_min_silence",
+        tab="asr",
+        group="VAD (语音活动检测)",
+        attr="_asr_vad_silence",
+        widget="spin",
+        label="最小静音:",
+        tr_label=True,
+        min=100,
+        max=5000,
+        step=100,
+        default=500,
+        suffix=" ms",
+        tr_suffix=True,
+    ),
+    dict(
+        key="asr_vad_threshold",
+        tab="asr",
+        group="VAD (语音活动检测)",
+        attr="_asr_vad_thresh",
+        widget="double_spin",
+        label="VAD 阈值:",
+        tr_label=True,
+        min=0.0,
+        max=1.0,
+        step=0.05,
+        default=0.5,
+    ),
+    # ── Tab 3: OCR 字幕处理 ──
+    dict(
+        key="post_sim_dedup",
+        tab="ocr",
+        group="后处理参数",
+        attr="_post_sim_dedup",
+        widget="check",
+        text="启用相似度去重（合并相似文本）",
+        tr_text=True,
+        label="",
+        default=True,
+    ),
+    dict(
+        key="post_conf_enabled",
+        tab="ocr",
+        group="后处理参数",
+        attr="_post_conf_check",
+        widget="check",
+        text="启用置信度过滤（仅 PaddleOCR）",
+        tr_text=True,
+        label="",
+        default=False,
+    ),
+    dict(
+        key="post_conf_threshold",
+        tab="ocr",
+        group="后处理参数",
+        attr="_post_conf_threshold",
+        widget="double_spin",
+        label="置信度阈值:",
+        tr_label=True,
+        min=0.0,
+        max=1.0,
+        step=0.05,
+        decimals=2,
+        default=0.6,
+    ),
+    dict(
+        key="post_sim_threshold",
+        tab="ocr",
+        group="后处理参数",
+        attr="_post_sim_threshold",
+        widget="double_spin",
+        label="去重相似度阈值:",
+        tr_label=True,
+        min=0.0,
+        max=1.0,
+        step=0.05,
+        decimals=2,
+        default=0.9,
+    ),
+    dict(
+        key="post_min_text_len",
+        tab="ocr",
+        group="后处理参数",
+        attr="_post_min_text_len",
+        widget="spin",
+        label="最小文字长度:",
+        tr_label=True,
+        min=1,
+        max=100,
+        default=2,
+    ),
+    # ── Tab 4: AI 纠错 ──
+    dict(
+        key="corr_enabled",
+        tab="correction",
+        group="纠错模式",
+        attr="_corr_enabled",
+        widget="check",
+        text="启用 AI 纠错",
+        tr_text=True,
+        default=False,
+        tooltip="总开关：开启后将使用 LLM 对 OCR 结果进行纠错",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="corr_translate",
+        tab="correction",
+        group="纠错模式",
+        attr="_corr_translate",
+        widget="check",
+        text="🌐 翻译模式（将结果翻译为中文）",
+        tr_text=True,
+        default=False,
+        tooltip="开启后 LLM 将把 OCR 结果翻译为中文，纠错提示词仅作参考",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="corr_stream",
+        tab="correction",
+        group="纠错模式",
+        attr="_corr_stream",
+        widget="check",
+        text="🔴 流式输出模式（实时逐字显示 API 响应）",
+        tr_text=True,
+        default=False,
+    ),
+    dict(
+        key="corr_json",
+        tab="correction",
+        group="纠错模式",
+        attr="_corr_json",
+        widget="check",
+        text="📋 JSON 输出模式（API 返回结构化 JSON）",
+        tr_text=True,
+        default=False,
+    ),
+    dict(
+        key="corr_extract_env",
+        tab="correction",
+        group="纠错模式",
+        attr="_corr_extract_env",
+        widget="check",
+        text="提取全文环境（领域/氛围/内容摘要作为参考）",
+        tr_text=True,
+        default=False,
+    ),
+    dict(
+        key="enable_polish",
+        tab="correction",
+        group="纠错模式",
+        attr="_corr_polish",
+        widget="check",
+        text="✨ 润色模式（纠错/翻译后二次润色质量）",
+        tr_text=True,
+        default=False,
+        source="corr",
+        sync=False,
+        tooltip="开启后 LLM 将对纠错/翻译结果进行二次润色，使表达更自然流畅",
+        tr_tooltip=True,
+    ),
+    dict(
+        tab="correction",
+        group="纠错模式",
+        attr="_btn_extract_env",
+        widget="button",
+        text="🔍 立即提取全文环境",
+        on_click="_on_extract_env_clicked",
+    ),
+    dict(
+        key="corr_summary_prompt",
+        tab="correction",
+        group="纠错模式",
+        attr="_corr_summary_prompt",
+        widget="text",
+        min_height=50,
+        max_height=80,
+        # source="corr"：与 ai_correction.json 的 summary_prompt 同源读写，
+        # 避免从未持久化的 mode_params 读到 "None"（设置同步 P2/P3 修复）
+        source="corr",
+        default="",
+        load_map=_clean_summary_load,  # 清洗历史脏值 "None"
+        placeholder="点击上方按钮自动提取环境信息，也可手动编辑...",
+        tr_placeholder=True,
+        tooltip="自动提取的全文环境信息（领域/氛围/摘要），可手动修改，随设置保存",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="corr_system_prompt",
+        tab="correction",
+        group="提示词配置",
+        attr="_corr_system_prompt",
+        widget="text",
+        label="系统提示词:",
+        tr_label=True,
+        min_height=60,
+        max_height=100,
+        placeholder="自定义纠错系统提示词（可选）",
+        tr_placeholder=True,
+    ),
+    dict(
+        key="corr_prompt",
+        tab="correction",
+        group="提示词配置",
+        attr="_corr_prompt",
+        widget="text",
+        label="用户提示词:",
+        tr_label=True,
+        min_height=60,
+        max_height=100,
+        placeholder="自定义纠错提示词（可选）",
+        tr_placeholder=True,
+    ),
+    dict(
+        key="corr_output_format",
+        tab="correction",
+        group="提示词配置",
+        attr="_corr_output_format",
+        widget="line",
+        label="输出格式:",
+        tr_label=True,
+        placeholder="[纠正后文本]",
+        tr_placeholder=True,
+    ),
+    dict(
+        key="corr_preset",
+        tab="correction",
+        group="批量参数",
+        attr="_corr_preset",
+        widget="preset_combo",
+        label="API 预设:",
+        tr_label=True,
+        tooltip="选择纠错使用的 API 连接预设",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="corr_batch_size",
+        tab="correction",
+        group="批量参数",
+        attr="_corr_batch",
+        widget="spin",
+        label="批量条数:",
+        tr_label=True,
+        min=1,
+        max=50,
+        default=5,
+        suffix=" 条/次",
+        tr_suffix=True,
+    ),
+    dict(
+        key="corr_retry",
+        tab="correction",
+        group="批量参数",
+        attr="_corr_retry",
+        widget="spin",
+        label="失败重试:",
+        tr_label=True,
+        min=0,
+        max=10,
+        default=2,
+    ),
+    dict(
+        key="corr_concurrency",
+        tab="correction",
+        group="批量参数",
+        attr="_corr_concurrency",
+        widget="spin",
+        label="并发数:",
+        tr_label=True,
+        min=1,
+        max=8,
+        default=4,
+        suffix=" 并发",
+        tr_suffix=True,
+        tooltip="同时运行的批次数（滑动窗口并发）",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="corr_rpm",
+        tab="correction",
+        group="批量参数",
+        attr="_corr_rpm",
+        widget="spin",
+        label="RPM 限制:",
+        tr_label=True,
+        min=0,
+        max=120,
+        default=30,
+        suffix=" RPM",
+        tr_suffix=True,
+        tooltip="每分钟最大请求数，0 表示不限制",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="seg_time_gap",
+        tab="correction",
+        group="批量参数",
+        attr="_seg_time_gap",
+        widget="double_spin",
+        label="上下文时间间隔:",
+        tr_label=True,
+        min=0.0,
+        max=60.0,
+        default=3.0,
+        suffix=" 秒",
+        tr_suffix=True,
+        tooltip="上下文窗口中，跳过时间间隔超过此值的行",
+        tr_tooltip=True,
+    ),
+    dict(
+        key="api_key",
+        tab="correction",
+        group="API 连接",
+        attr="_corr_api_key",
+        widget="line",
+        label="API Key:",
+        tr_label=True,
+        placeholder="sk-xxx（可选）",
+        tr_placeholder=True,
+        echo="password",
+        source="corr",
+        sync=False,
+    ),
+    dict(
+        key="base_url",
+        tab="correction",
+        group="API 连接",
+        attr="_corr_api_url",
+        widget="line",
+        label="Base URL:",
+        tr_label=True,
+        placeholder="http://127.0.0.1:8080",
+        tr_placeholder=True,
+        default="http://127.0.0.1:8080",
+        source="corr",
+        sync=False,
+    ),
+    dict(
+        key="model",
+        tab="correction",
+        group="API 连接",
+        attr="_corr_api_model",
+        widget="corr_model_row",
+        label="模型:",
+        tr_label=True,
+        source="corr",
+        sync=False,
+    ),
+    dict(
+        key="timeout",
+        tab="correction",
+        group="API 连接",
+        attr="_corr_api_timeout",
+        widget="spin",
+        label="超时:",
+        tr_label=True,
+        min=1,
+        max=300,
+        default=30,
+        suffix=" 秒",
+        tr_suffix=True,
+        source="corr",
+        sync=False,
+    ),
+    dict(
+        key="retry_on_failure",
+        tab="correction",
+        group="API 连接",
+        attr="_corr_api_retry",
+        widget="spin",
+        label="重试次数:",
+        tr_label=True,
+        min=0,
+        max=10,
+        default=2,
+        source="corr",
+        sync=False,
+    ),
+]
+
+# ── 引擎字段：可见性矩阵 + 值填充/收集声明（_on_engine_changed / get_engine_config）──
+#   visible_when(is_local, is_paddle) -> bool  字段可见性
+#   engine_get(widget, eng_cfg)                引擎切换时回填
+#   engine_out=(cfg_key, getter(widget))       收集到 get_engine_config()
+_VER_MAP = {0: None, 1: "PP-OCRv5_mobile", 2: "PP-OCRv4"}
+
+
+def _fill_paddle_version(widget, cfg: dict):
+    """按 ocr_version 文本回填模型版本下拉框。"""
+    ver = cfg.get("ocr_version") or ""
+    if "v4" in ver:
+        widget.setCurrentIndex(2)
+    elif "mobile" in ver:
+        widget.setCurrentIndex(1)
     else:
-        safe_set_widget(widget, value)
+        widget.setCurrentIndex(0)
+
+
+def _paddle_version_out(widget):
+    """将模型版本下拉框索引映射为 ocr_version 配置值。"""
+    return _VER_MAP.get(widget.currentIndex())
+
+
+_ENGINE_FIELDS: list[dict] = [
+    dict(
+        attr="_eng_api_key",
+        widget="line",
+        label="API Key:",
+        tr_label=True,
+        placeholder="sk-xxx",
+        tr_placeholder=True,
+        echo="password",
+        visible_when=lambda is_local, is_paddle: not is_local,
+        engine_get=lambda w, cfg: w.setText(cfg.get("api_key", "")),
+        engine_out=("api_key", lambda w: w.text()),
+    ),
+    dict(
+        attr="_eng_base_url",
+        widget="line",
+        label="Base URL:",
+        tr_label=True,
+        placeholder="https://api.openai.com/v1",
+        tr_placeholder=True,
+        visible_when=lambda is_local, is_paddle: not is_local,
+        engine_get=lambda w, cfg: w.setText(cfg.get("base_url", "")),
+        engine_out=("base_url", lambda w: w.text()),
+    ),
+    dict(
+        attr="_eng_model",
+        row_attr="_eng_model_row",
+        widget="combo_edit",
+        label="模型:",
+        tr_label=True,
+        placeholder="gpt-4o",
+        tr_placeholder=True,
+        visible_when=lambda is_local, is_paddle: not is_local,
+        engine_get=lambda w, cfg: w.setEditText(cfg.get("model", "")),
+        engine_out=("model", lambda w: w.currentText()),
+    ),
+    dict(
+        attr="_eng_timeout",
+        widget="spin",
+        label="超时:",
+        tr_label=True,
+        min=1,
+        max=300,
+        default=30,
+        suffix=" 秒",
+        tr_suffix=True,
+        visible_when=lambda is_local, is_paddle: not is_local,
+        engine_get=lambda w, cfg: w.setValue(cfg.get("timeout", 30)),
+        engine_out=("timeout", lambda w: w.value()),
+    ),
+    dict(
+        attr="_eng_gpu",
+        widget="check",
+        label="",
+        text="启用 GPU 加速",
+        tr_text=True,
+        visible_when=lambda is_local, is_paddle: is_local,
+        engine_get=lambda w, cfg: w.setChecked(cfg.get("device") == "gpu" or cfg.get("use_gpu", False)),
+        engine_out=("device", lambda w: "gpu" if w.isChecked() else "cpu"),
+    ),
+    dict(
+        attr="_eng_paddle_version",
+        widget="combo",
+        label="模型版本:",
+        tr_label=True,
+        options=["PP-OCRv5_server (高精度/慢)", "PP-OCRv5_mobile (平衡)", "PP-OCRv4 (快速)"],
+        visible_when=lambda is_local, is_paddle: is_paddle,
+        engine_get=_fill_paddle_version,
+        engine_out=("ocr_version", _paddle_version_out),
+    ),
+    dict(
+        attr="_eng_angle",
+        widget="check",
+        label="",
+        text="启用角度检测",
+        tr_text=True,
+        default=True,
+        visible_when=lambda is_local, is_paddle: is_paddle,
+        engine_get=lambda w, cfg: w.setChecked(cfg.get("use_angle_cls", True)),
+        engine_out=("use_angle_cls", lambda w: w.isChecked()),
+    ),
+    dict(
+        attr="_eng_save_preset",
+        widget="button",
+        label="",
+        text="💾 保存为 API 预设",
+        tr_text=True,
+        tooltip="将当前 API 配置保存为预设，供纠错等功能使用",
+        visible_when=lambda is_local, is_paddle: not is_local,
+    ),
+]
+
+# ── Tab / 分组布局声明 ──
+_TABS = (
+    ("basic", "⚙ 基础"),
+    ("asr", "🎙 语音识别"),
+    ("ocr", "🔤 OCR 处理"),
+    ("correction", "✏ AI 纠错"),
+    ("sort", "📊 结果输出"),
+)
+
+# kind: group（form 布局）/ vbox（无标签垂直布局）/ panel（专用构建方法）
+# tr=True 时组标题构建期翻译；collapsed=True 默认折叠；spacing 表单行间距
+_TAB_GROUPS: dict[str, list[dict]] = {
+    "basic": [
+        dict(kind="group", title="处理模式", tr=True),
+        dict(kind="panel", name="engine"),
+        dict(kind="group", title="输出控制", tr=True),
+    ],
+    "asr": [
+        dict(kind="group", title="字幕模式", tr=True),
+        dict(kind="group", title="流式参数（哨兵去重）", bind="_s_group"),
+        dict(kind="group", title="常规参数（固定间隔）", bind="_r_group"),
+        dict(kind="group", title="ASR 语音识别引擎", tr=True),
+        dict(kind="group", title="解码参数", collapsed=True, spacing=6),
+        dict(kind="group", title="VAD (语音活动检测)", collapsed=True, spacing=6),
+    ],
+    "ocr": [
+        dict(kind="group", title="后处理参数", tr=True),
+        dict(kind="panel", name="filter"),
+    ],
+    "correction": [
+        dict(kind="vbox", title="纠错模式", tr=True, spacing=6),
+        dict(kind="group", title="提示词配置", collapsed=True),
+        dict(kind="group", title="批量参数", tr=True),
+        dict(kind="group", title="API 连接", tr=True, collapsed=True, spacing=6),
+    ],
+    "sort": [
+        dict(kind="panel", name="sort"),
+    ],
+}
+
+_PANEL_BUILDERS = {
+    "engine": "_build_engine_panel",
+    "filter": "_build_filter_panel",
+    "sort": "_build_sort_panel",
+}
 
 
 class SettingsDialog(QDialog):
     """参数设置对话框，集中管理处理参数 + 纠错 API 配置。"""
 
-    def __init__(self, config_panel, correction_config: dict = None, parent=None,
-                 filter_keywords: list[str] | None = None,
-                 engine_manager=None, current_engine: str = ""):
+    def __init__(
+        self,
+        config_panel,
+        correction_config: dict = None,
+        parent=None,
+        filter_keywords: list[str] | None = None,
+        engine_manager=None,
+        current_engine: str = "",
+    ):
         super().__init__(parent)
         self.setWindowTitle(_("⚙ 参数设置"))
         self.setMinimumSize(800, 640)
@@ -84,46 +1050,72 @@ class SettingsDialog(QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
+    # ── 通用字段读写 ──
+
+    @staticmethod
+    def _t(spec: dict, key: str) -> str:
+        """按 tr_<key> 标志返回构建期翻译后的显示文本。"""
+        text = spec[key]
+        return _(text) if spec.get("tr_" + key) else text
+
+    def _set_field_value(self, spec: dict, widget, value):
+        """按控件类型设置值（等价 safe_set_widget 行为）。"""
+        wtype = spec["widget"]
+        try:
+            if wtype in ("combo", "preset_combo"):
+                widget.setCurrentText(str(value))
+            elif wtype == "combo_edit":
+                widget.setEditText(str(value))
+            elif wtype == "combo_data":
+                pass  # data 绑定控件由 on_load 钩子处理
+            elif wtype == "check":
+                widget.setChecked(bool(value))
+            elif wtype == "spin":
+                widget.setValue(int(value))
+            elif wtype == "double_spin":
+                widget.setValue(float(value))
+            elif wtype == "line":
+                widget.setText(str(value))
+            elif wtype == "text":
+                widget.setPlainText(str(value))
+        except RuntimeError:
+            pass
+
+    def _field_value(self, spec: dict, widget):
+        """按控件类型收集当前值。"""
+        wtype = spec["widget"]
+        if wtype == "check":
+            return widget.isChecked()
+        if wtype == "combo":
+            return self._rev_map(widget.currentText(), *spec["options"])
+        if wtype == "combo_data":
+            return widget.currentData() or ""
+        if wtype in ("combo_edit", "preset_combo"):
+            return widget.currentText()
+        if wtype == "spin":
+            return widget.value()
+        if wtype == "double_spin":
+            return widget.value()
+        if wtype == "line":
+            return widget.text()
+        if wtype == "text":
+            return widget.toPlainText()
+        return None
+
     def _load_initial_values(self):
-        """从 ConfigPanel 的公共属性读取所有参数初始值。"""
-        cp = self._cp
-        mp = cp.get_mode_params()
-
-        # ── 基础设置 ──
-        _safe_set(self._frame_interval, mp.get("frame_interval", 0.1))
-        _safe_set(self._process_mode, mp.get("process_mode", "OCR + ASR（完整流程）"))
-        _safe_set(self._subtitle_duration, mp.get("subtitle_duration", 3.0))
-        _safe_set(self._srt_export, mp.get("srt_export_mode", "仅纠正结果"))
-        _safe_set(self._post_sim_dedup, mp.get("post_sim_dedup", True))
-        _safe_set(self._corr_enabled, mp.get("corr_enabled", False))
-
-        # ── 字幕模式 ──
-        subtitle_mode = mp.get("subtitle_mode", "流式字幕（去重）")
-        if "流式" in subtitle_mode:
-            _safe_set(self._subtitle_mode, _("流式字幕（去重）"))
-        else:
-            _safe_set(self._subtitle_mode, _("常规字幕（固定间隔）"))
-        self._on_subtitle_mode_changed(_("流式字幕（去重）") if "流式" in subtitle_mode else _("常规字幕（固定间隔）"))
-
-        # ── 流式参数 ──
-        _safe_set(self._s_sentinel, mp.get("sentinel_enabled", True))
-        _safe_set(self._s_drop_ratio, mp.get("s_drop_ratio", 0.5))
-        _safe_set(self._s_buffer, mp.get("s_buffer_size", 8))
-        _safe_set(self._s_sim, mp.get("s_sim_threshold", 0.85))
-        _safe_set(self._s_min_text, mp.get("s_min_text_len", 2))
-
-        # ── 常规参数 ──
-        _safe_set(self._r_dedup, mp.get("r_dedup", True))
-        _safe_set(self._r_sim, mp.get("r_sim_threshold", 0.9))
-        _safe_set(self._r_buffer, mp.get("r_buffer_size", 5))
-        _safe_set(self._r_min_text, mp.get("r_min_text_len", 2))
-        _safe_set(self._r_interval, mp.get("r_interval", 2.0))
-
-        # ── 后处理 ──
-        _safe_set(self._post_conf_check, mp.get("post_conf_enabled", False))
-        _safe_set(self._post_conf_threshold, mp.get("post_conf_threshold", 0.6))
-        _safe_set(self._post_sim_threshold, mp.get("post_sim_threshold", 0.9))
-        _safe_set(self._post_min_text_len, mp.get("post_min_text_len", 2))
+        """从 ConfigPanel 的公共属性读取所有参数初始值（描述表驱动）。"""
+        mp = self._cp.get_mode_params()
+        for spec in _FIELDS:
+            widget = getattr(self, spec.get("attr"), None)
+            if widget is None or "key" not in spec or spec.get("load") is False:
+                continue
+            source = self._corr_cfg if spec.get("source") == "corr" else mp
+            value = source.get(spec["key"], spec.get("default"))
+            if spec.get("load_map"):
+                value = spec["load_map"](value)
+            self._set_field_value(spec, widget, value)
+            if spec.get("on_load"):
+                getattr(self, spec["on_load"])(value)
 
         # ── 过滤器 ──
         self._filter_items.clear()
@@ -133,48 +1125,10 @@ class SettingsDialog(QDialog):
             self._filter_items.append(kw)
             self._filter_list.addItem(kw)
 
-        # ── AI 纠错 ──
-        _safe_set(self._corr_translate, mp.get("corr_translate", False))
-        _safe_set(self._corr_stream, mp.get("corr_stream", False))
-        _safe_set(self._corr_json, mp.get("corr_json", False))
-        _safe_set(self._corr_extract_env, mp.get("corr_extract_env", False))
-        _safe_set(self._corr_polish, self._corr_cfg.get("enable_polish", False))
-        _safe_set(self._corr_summary_prompt, mp.get("corr_summary_prompt", ""))
-        _safe_set(self._corr_system_prompt, mp.get("corr_system_prompt", ""))
-        _safe_set(self._corr_output_format, mp.get("corr_output_format", ""))
-        _safe_set(self._corr_preset, mp.get("corr_preset", ""))
-        _safe_set(self._corr_batch, mp.get("corr_batch_size", 5))
-        _safe_set(self._corr_context, mp.get("corr_context_window", 3))
-        _safe_set(self._corr_retry, mp.get("corr_retry", 2))
-        _safe_set(self._corr_concurrency, mp.get("corr_concurrency", 4))
-        _safe_set(self._corr_rpm, mp.get("corr_rpm", 30))
-        _safe_set(self._seg_time_gap, mp.get("seg_time_gap", 3.0))
-        _safe_set(self._corr_prompt, mp.get("corr_prompt", ""))
-
-        # ── ASR ──
-        _safe_set(self._asr_model_dir, mp.get("asr_model_dir", "models/asr"))
-        self._refresh_asr_models()
-        model_path = mp.get("asr_model_path", "")
-        if model_path:
-            self._select_combo_by_data(self._asr_model, model_path)
-        _safe_set(self._asr_lang, mp.get("asr_language", "zh"))
-        _safe_set(self._asr_beam, mp.get("asr_beam_size", 5))
-        _safe_set(self._asr_word_ts, mp.get("asr_word_ts", True))
-        _safe_set(self._asr_condition, mp.get("asr_condition_prev", True))
-        _safe_set(self._asr_no_speech, mp.get("asr_no_speech_thresh", 0.6))
-        _safe_set(self._asr_comp_ratio, mp.get("asr_comp_ratio_thresh", 2.4))
-        _safe_set(self._asr_temp, mp.get("asr_temperature", "0.0,0.2,0.4,0.6,0.8,1.0"))
-        _safe_set(self._asr_hotwords, mp.get("asr_hotwords", ""))
-        _safe_set(self._asr_prompt, mp.get("asr_initial_prompt", ""))
-        _safe_set(self._asr_vad, mp.get("asr_vad", False))
-        _safe_set(self._asr_vad_silence, mp.get("asr_vad_min_silence", 500))
-        _safe_set(self._asr_vad_thresh, mp.get("asr_vad_threshold", 0.5))
-        _safe_set(self._asr_region, mp.get("asr_region_name", "语音"))
-
         # ── 排序 ──
         self._sort_items.clear()
         self._sort_list.clear()
-        for prefix, name, suffix in cp.get_sort_rules():
+        for prefix, name, suffix in self._cp.get_sort_rules():
             self._sort_items.append((prefix, name, suffix))
             self._add_sort_row(name, prefix, suffix)
 
@@ -187,85 +1141,30 @@ class SettingsDialog(QDialog):
         return translated
 
     def _sync_values_to_cp(self):
-        """将对话框中的值通过 ConfigPanel 公共 API 写回。"""
+        """将对话框中的值通过 ConfigPanel 公共 API 写回（描述表驱动）。"""
         params = {}
-
-        # ── 基础设置 ──
-        params["frame_interval"] = self._frame_interval.value()
-        params["process_mode"] = self._rev_map(self._process_mode.currentText(),
-            ("OCR + ASR（完整流程）", "仅 OCR", "仅语音识别 (ASR)"))
-        params["subtitle_duration"] = self._subtitle_duration.value()
-        params["srt_export_mode"] = self._rev_map(self._srt_export.currentText(),
-            ("仅纠正结果", "仅原文", "双语对照（原文+纠正）", "原文 换行 纠正"))
-        params["post_sim_dedup"] = self._post_sim_dedup.isChecked()
-        params["corr_enabled"] = self._corr_enabled.isChecked()
-
-        # ── 字幕模式 ──
-        params["subtitle_mode"] = self._rev_map(self._subtitle_mode.currentText(),
-            ("流式字幕（去重）", "常规字幕（固定间隔）"))
-        params["sentinel_enabled"] = self._s_sentinel.isChecked()
-
-        # ── 流式参数 ──
-        params["s_drop_ratio"] = self._s_drop_ratio.value()
-        params["s_buffer_size"] = self._s_buffer.value()
-        params["s_sim_threshold"] = self._s_sim.value()
-        params["s_min_text_len"] = self._s_min_text.value()
-
-        # ── 常规参数 ──
-        params["r_dedup"] = self._r_dedup.isChecked()
-        params["r_sim_threshold"] = self._r_sim.value()
-        params["r_buffer_size"] = self._r_buffer.value()
-        params["r_min_text_len"] = self._r_min_text.value()
-        params["r_interval"] = self._r_interval.value()
-
-        # ── 后处理 ──
-        params["post_conf_enabled"] = self._post_conf_check.isChecked()
-        params["post_conf_threshold"] = self._post_conf_threshold.value()
-        params["post_sim_threshold"] = self._post_sim_threshold.value()
-        params["post_min_text_len"] = self._post_min_text_len.value()
-
-        # ── AI 纠错 ──
-        params["corr_translate"] = self._corr_translate.isChecked()
-        params["corr_stream"] = self._corr_stream.isChecked()
-        params["corr_json"] = self._corr_json.isChecked()
-        params["corr_extract_env"] = self._corr_extract_env.isChecked()
-        params["corr_summary_prompt"] = self._corr_summary_prompt.toPlainText()
-        params["corr_system_prompt"] = self._corr_system_prompt.toPlainText()
-        params["corr_output_format"] = self._corr_output_format.text()
-        params["corr_preset"] = self._corr_preset.currentText()
-        params["corr_batch_size"] = self._corr_batch.value()
-        params["corr_context_window"] = self._corr_context.value()
-        params["corr_retry"] = self._corr_retry.value()
-        params["corr_concurrency"] = self._corr_concurrency.value()
-        params["corr_rpm"] = self._corr_rpm.value()
-        params["seg_time_gap"] = self._seg_time_gap.value()
-        params["corr_prompt"] = self._corr_prompt.toPlainText()
-
-        # ── ASR ──
-        params["asr_model_dir"] = self._asr_model_dir.text().strip() or "models/asr"
-        params["asr_model_path"] = self._asr_model.currentData() or ""
-        params["asr_language"] = self._asr_lang.currentText()
-        params["asr_beam_size"] = self._asr_beam.value()
-        params["asr_word_ts"] = self._asr_word_ts.isChecked()
-        params["asr_condition_prev"] = self._asr_condition.isChecked()
-        params["asr_no_speech_thresh"] = self._asr_no_speech.value()
-        params["asr_comp_ratio_thresh"] = self._asr_comp_ratio.value()
-        params["asr_temperature"] = self._asr_temp.text()
-        params["asr_hotwords"] = self._asr_hotwords.text()
-        params["asr_initial_prompt"] = self._asr_prompt.text()
-        params["asr_vad"] = self._asr_vad.isChecked()
-        params["asr_vad_min_silence"] = self._asr_vad_silence.value()
-        params["asr_vad_threshold"] = self._asr_vad_thresh.value()
-        params["asr_region_name"] = self._asr_region.text()
+        for spec in _FIELDS:
+            if "key" not in spec or spec.get("sync") is False or spec.get("source") == "corr":
+                continue
+            widget = getattr(self, spec["attr"], None)
+            if widget is None:
+                continue
+            getter = spec.get("sync_get")
+            value = getter(widget) if getter else self._field_value(spec, widget)
+            params[spec["key"]] = value
 
         # ── 排序 ──
         self._collect_sort_items()
         params["region_order"] = "\n".join(
-            f"{prefix}：{name}：{suffix}" if prefix and suffix
-            else f"{prefix}：{name}" if prefix
-            else f"{name}：{suffix}" if suffix
+            f"{prefix}：{name}：{suffix}"
+            if prefix and suffix
+            else f"{prefix}：{name}"
+            if prefix
+            else f"{name}：{suffix}"
+            if suffix
             else name
-            for prefix, name, suffix in self._sort_items if name
+            for prefix, name, suffix in self._sort_items
+            if name
         )
 
         # 通过公共 API 写入 ConfigPanel
@@ -273,7 +1172,7 @@ class SettingsDialog(QDialog):
         cp.apply_mode_params(params)
 
         # ── 过滤器差异同步 ──
-        original = getattr(self, '_filter_original', [])
+        original = getattr(self, "_filter_original", [])
         current = list(self._filter_items)
         for kw in set(original) - set(current):
             cp.filter_remove_requested.emit(kw)
@@ -283,7 +1182,152 @@ class SettingsDialog(QDialog):
         # ── 排序规则同步 ──
         cp.set_sort_rules(list(self._sort_items))
 
-    # ── helpers ──
+    # ── Tab 构建 ──
+    def _build_tabs(self):
+        for tab_name, title in _TABS:
+            self._tabs.addTab(self._wrap_scroll(self._build_tab(tab_name)), title)
+
+    def _build_tab(self, tab_name: str) -> QWidget:
+        """按 _TAB_GROUPS 声明的分组顺序构建一个 tab。"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        for item in _TAB_GROUPS[tab_name]:
+            if item["kind"] == "panel":
+                getattr(self, _PANEL_BUILDERS[item["name"]])(layout)
+                continue
+            title = self._t(item, "title")
+            fields = [s for s in _FIELDS if s["tab"] == tab_name and s.get("group") == item["title"]]
+            group = self._build_group(item, title, fields)
+            if item.get("bind"):
+                setattr(self, item["bind"], group)
+            layout.addWidget(group)
+        layout.addStretch()
+        return tab
+
+    def _build_group(self, item: dict, title: str, fields: list) -> CollapsibleGroup:
+        """构建一个 CollapsibleGroup：form 布局（带标签行）或 vbox 布局。"""
+        group = CollapsibleGroup(title, collapsed=bool(item.get("collapsed")))
+        spacing = item.get("spacing", 8)
+        if item["kind"] == "vbox":
+            fl = QVBoxLayout()
+            fl.setSpacing(spacing)
+            for spec in fields:
+                fl.addWidget(self._build_field(spec))
+        else:
+            fl = QFormLayout()
+            fl.setSpacing(spacing)
+            for spec in fields:
+                fl.addRow(self._t(spec, "label"), self._build_field(spec))
+        group.addLayout(fl)
+        return group
+
+    def _build_field(self, spec: dict):
+        """根据字段描述构建控件，并绑定到 self.<attr>。"""
+        wtype = spec["widget"]
+        if wtype == "combo":
+            w = QComboBox()
+            if spec.get("tr_options"):
+                w.addItems([_(o) for o in spec["options"]])
+            else:
+                w.addItems(list(spec["options"]))
+            if spec.get("init_text"):
+                w.setCurrentText(spec["init_text"])
+            if spec.get("on_change"):
+                w.currentTextChanged.connect(getattr(self, spec["on_change"]))
+        elif wtype == "preset_combo":
+            from core.api_preset_manager import APIPresetManager
+
+            mgr = APIPresetManager()
+            w = QComboBox()
+            w.addItems(mgr.get_names())
+            default_name = mgr.get_default_name()
+            if default_name:
+                w.setCurrentText(default_name)
+            w.currentTextChanged.connect(self._on_preset_changed)
+        elif wtype == "combo_edit":
+            w = QComboBox()
+            w.setEditable(True)
+            w.setInsertPolicy(QComboBox.NoInsert)
+            w.lineEdit().setPlaceholderText(self._t(spec, "placeholder"))
+            w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        elif wtype == "combo_data":
+            w = QComboBox()
+        elif wtype == "spin":
+            w = QSpinBox()
+            w.setRange(spec["min"], spec["max"])
+            w.setValue(spec.get("default", 0))
+            if "step" in spec:
+                w.setSingleStep(spec["step"])
+            if "suffix" in spec:
+                w.setSuffix(self._t(spec, "suffix"))
+        elif wtype == "double_spin":
+            w = QDoubleSpinBox()
+            w.setRange(spec["min"], spec["max"])
+            if "step" in spec:
+                w.setSingleStep(spec["step"])
+            if "decimals" in spec:
+                w.setDecimals(spec["decimals"])
+            w.setValue(spec.get("default", 0.0))
+            if "suffix" in spec:
+                w.setSuffix(self._t(spec, "suffix"))
+        elif wtype == "line":
+            w = QLineEdit()
+            if spec.get("placeholder"):
+                w.setPlaceholderText(self._t(spec, "placeholder"))
+            if spec.get("echo") == "password":
+                w.setEchoMode(QLineEdit.Password)
+            if "default" in spec:
+                w.setText(str(spec["default"]))
+        elif wtype == "check":
+            w = QCheckBox(self._t(spec, "text"))
+            w.setChecked(spec.get("default", False))
+        elif wtype == "text":
+            w = QTextEdit()
+            if spec.get("placeholder"):
+                w.setPlaceholderText(self._t(spec, "placeholder"))
+            if "max_height" in spec:
+                w.setMaximumHeight(spec["max_height"])
+            if "min_height" in spec:
+                w.setMinimumHeight(spec["min_height"])
+        elif wtype == "button":
+            w = QPushButton(self._t(spec, "text"))
+            w.clicked.connect(getattr(self, spec["on_click"]))
+        elif wtype == "btn_asr_refresh":
+            w = QPushButton("🔄 刷新模型列表")
+            w.clicked.connect(self._refresh_asr_models)
+        elif wtype == "corr_model_row":
+            w = self._build_corr_model_row(spec)
+        else:
+            raise ValueError(f"未知字段类型: {wtype}")
+        if spec.get("tooltip") and wtype not in ("button", "corr_model_row"):
+            w.setToolTip(self._t(spec, "tooltip"))
+        if spec.get("attr") and not hasattr(self, spec["attr"]):
+            setattr(self, spec["attr"], w)
+        return w
+
+    def _build_corr_model_row(self, spec: dict) -> QWidget:
+        """纠错 API 模型行：可编辑下拉 + 状态标签 + 获取模型按钮。"""
+        w = QWidget()
+        row = QHBoxLayout(w)
+        row.setContentsMargins(0, 0, 0, 0)
+        self._corr_api_model = QComboBox()
+        self._corr_api_model.setEditable(True)
+        self._corr_api_model.setInsertPolicy(QComboBox.NoInsert)
+        self._corr_api_model.lineEdit().setPlaceholderText(_("gpt-4o / gemma 等"))
+        self._corr_api_model.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        row.addWidget(self._corr_api_model, 1)
+        self._corr_model_status = QLabel("")
+        self._corr_model_status.setMinimumWidth(100)
+        btn_fetch = QPushButton(_("📋 获取模型"))
+        btn_fetch.setToolTip("从 Base URL 获取可用模型列表")
+        btn_fetch.clicked.connect(self._on_fetch_corr_models)
+        row.addWidget(self._corr_model_status)
+        row.addWidget(btn_fetch)
+        self._corr_api_model_row = w
+        return w
+
     def _wrap_scroll(self, widget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -292,39 +1336,93 @@ class SettingsDialog(QDialog):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         return scroll
 
-    # ── 引擎配置 ──
+    # ── Tab 1: 引擎面板（专用构建，联动 _ENGINE_FIELDS）──
+    def _build_engine_panel(self, layout: QVBoxLayout):
+        """OCR 引擎组：引擎选择 + 引擎配置字段。"""
+        group = CollapsibleGroup(_("OCR 引擎"))
+        ef = QFormLayout()
+        ef.setSpacing(8)
+        self._engine_combo = QComboBox()
+        if self._engine_mgr:
+            self._engine_combo.addItems(self._engine_mgr.get_engine_names())
+            if self._current_engine:
+                self._engine_combo.setCurrentText(self._current_engine)
+        self._engine_combo.currentTextChanged.connect(self._on_engine_changed)
+        ef.addRow(_("引擎:"), self._engine_combo)
+        for spec in _ENGINE_FIELDS:
+            ef.addRow(self._t(spec, "label"), self._build_engine_field(spec))
+        group.addLayout(ef)
+        layout.addWidget(group)
+        # 初始化引擎字段可见性
+        self._on_engine_changed(self._engine_combo.currentText())
+
+    def _build_engine_field(self, spec: dict):
+        """构建引擎配置字段，并绑定到 self.<attr>（combo_edit 时绑定容器行）。"""
+        wtype = spec["widget"]
+        if wtype == "line":
+            w = QLineEdit()
+            if spec.get("placeholder"):
+                w.setPlaceholderText(self._t(spec, "placeholder"))
+            if spec.get("echo") == "password":
+                w.setEchoMode(QLineEdit.Password)
+        elif wtype == "spin":
+            w = QSpinBox()
+            w.setRange(spec["min"], spec["max"])
+            w.setValue(spec.get("default", 0))
+            if "suffix" in spec:
+                w.setSuffix(self._t(spec, "suffix"))
+        elif wtype == "check":
+            w = QCheckBox(self._t(spec, "text"))
+            w.setChecked(spec.get("default", False))
+        elif wtype == "combo":
+            w = QComboBox()
+            w.addItems(spec["options"])
+        elif wtype == "combo_edit":
+            # 模型行：可编辑下拉 + 状态标签 + 获取模型按钮（整体作为容器行）
+            w = QWidget()
+            row = QHBoxLayout(w)
+            row.setContentsMargins(0, 0, 0, 0)
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.setInsertPolicy(QComboBox.NoInsert)
+            combo.lineEdit().setPlaceholderText(self._t(spec, "placeholder"))
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            row.addWidget(combo, 1)
+            self._eng_model_status = QLabel("")
+            self._eng_model_status.setMinimumWidth(80)
+            btn_fetch = QPushButton(_("📋 获取模型"))
+            btn_fetch.clicked.connect(self._on_fetch_eng_models)
+            row.addWidget(self._eng_model_status)
+            row.addWidget(btn_fetch)
+            setattr(self, spec["attr"], combo)
+            setattr(self, spec["row_attr"], w)
+            return w
+        elif wtype == "button":
+            w = QPushButton(self._t(spec, "text"))
+            if spec.get("tooltip"):
+                w.setToolTip(spec["tooltip"])
+            w.clicked.connect(self._on_save_eng_preset)
+        else:
+            raise ValueError(f"未知引擎字段类型: {wtype}")
+        if spec.get("tooltip") and wtype != "button":
+            w.setToolTip(self._t(spec, "tooltip"))
+        setattr(self, spec["attr"], w)
+        return w
+
     def _on_engine_changed(self, name: str):
-        """引擎切换时更新字段可见性和值。"""
+        """引擎切换时更新字段可见性和值（声明式遍历 _ENGINE_FIELDS）。"""
         if not self._engine_mgr or not name:
             return
         eng_cfg = self._engine_mgr._config.get("engines", {}).get(name, {})
         cfg = eng_cfg.get("config", {})
         is_local = eng_cfg.get("type") == "local"
         is_paddle = name == "paddleocr"
-        # 填充字段
-        self._eng_api_key.setText(cfg.get("api_key", ""))
-        self._eng_base_url.setText(cfg.get("base_url", ""))
-        self._eng_model.setEditText(cfg.get("model", ""))
-        self._eng_timeout.setValue(cfg.get("timeout", 30))
-        self._eng_gpu.setChecked(cfg.get("device") == "gpu" or cfg.get("use_gpu", False))
-        ver = cfg.get("ocr_version") or ""
-        if "v4" in ver:
-            self._eng_paddle_version.setCurrentIndex(2)
-        elif "mobile" in ver:
-            self._eng_paddle_version.setCurrentIndex(1)
-        else:
-            self._eng_paddle_version.setCurrentIndex(0)
-        self._eng_angle.setChecked(cfg.get("use_angle_cls", True))
-        # 可见性
-        self._eng_api_key.setVisible(not is_local)
-        self._eng_base_url.setVisible(not is_local)
-        self._eng_model.setVisible(not is_local)
-        self._eng_model_status.setVisible(not is_local)
-        self._eng_timeout.setVisible(not is_local)
-        self._eng_gpu.setVisible(is_local)
-        self._eng_paddle_version.setVisible(is_paddle)
-        self._eng_angle.setVisible(is_paddle)
-        self._eng_save_preset.setVisible(not is_local)
+        for spec in _ENGINE_FIELDS:
+            widget = getattr(self, spec["attr"])
+            target = getattr(self, spec.get("row_attr", spec["attr"]))
+            target.setVisible(spec["visible_when"](is_local, is_paddle))
+            if spec.get("engine_get"):
+                spec["engine_get"](widget, cfg)
 
     def _on_fetch_eng_models(self):
         """从当前引擎 Base URL 获取可用模型列表。"""
@@ -335,20 +1433,24 @@ class SettingsDialog(QDialog):
         self._eng_model_status.setText(_("⏳ 获取中..."))
         import threading
 
-        from PyQt5.QtCore import QObject as _QObject
+        from PySide6.QtCore import QObject as _QObject
+
         class _Bridge(_QObject):
-            done = pyqtSignal(object)
-            err = pyqtSignal(str)
+            done = Signal(object)
+            err = Signal(str)
+
         bridge = _Bridge(self)
         bridge.done.connect(self._on_eng_models_done)
         bridge.err.connect(lambda m: self._eng_model_status.setText(f"❌ {m[:20]}"))
         api_key = self._eng_api_key.text()
+
         def _fetch():
             try:
                 models = fetch_models_from_url(base_url, api_key)
                 bridge.done.emit(models)
             except Exception as e:
                 bridge.err.emit(str(e))
+
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _on_eng_models_done(self, models):
@@ -361,325 +1463,57 @@ class SettingsDialog(QDialog):
     def _on_save_eng_preset(self):
         """将当前引擎 API 配置保存为预设。"""
         from core.api_preset_manager import APIPresetManager
+
         mgr = APIPresetManager()
         name = f"{self._engine_combo.currentText()} 预设"
-        mgr.add_preset(name, {
-            "api_key": self._eng_api_key.text(),
-            "base_url": self._eng_base_url.text(),
-            "model": self._eng_model.currentText(),
-            "timeout": self._eng_timeout.value(),
-        })
+        mgr.add_preset(
+            name,
+            {
+                "api_key": self._eng_api_key.text(),
+                "base_url": self._eng_base_url.text(),
+                "model": self._eng_model.currentText(),
+                "timeout": self._eng_timeout.value(),
+            },
+        )
         self._eng_model_status.setText(f"✅ 已保存: {name}")
 
     def get_engine_config(self) -> tuple[str, dict]:
         """返回 (engine_name, config_dict) 供主窗口保存。"""
         name = self._engine_combo.currentText()
-        ver_map = {0: None, 1: "PP-OCRv5_mobile", 2: "PP-OCRv4"}
-        cfg = {
-            "api_key": self._eng_api_key.text(),
-            "base_url": self._eng_base_url.text(),
-            "model": self._eng_model.currentText(),
-            "timeout": self._eng_timeout.value(),
-            "device": "gpu" if self._eng_gpu.isChecked() else "cpu",
-            "ocr_version": ver_map.get(self._eng_paddle_version.currentIndex()),
-            "use_angle_cls": self._eng_angle.isChecked(),
-        }
+        cfg = {}
+        for spec in _ENGINE_FIELDS:
+            out = spec.get("engine_out")
+            if out:
+                cfg[out[0]] = out[1](getattr(self, spec["attr"]))
         return name, cfg
 
-    # ── Tab 构建 ──
-    def _build_tabs(self):
-        self._tabs.addTab(self._wrap_scroll(self._build_basic_tab()), "⚙ 基础")
-        self._tabs.addTab(self._wrap_scroll(self._build_asr_tab()), "🎙 语音识别")
-        self._tabs.addTab(self._wrap_scroll(self._build_ocr_tab()), "🔤 OCR 处理")
-        self._tabs.addTab(self._wrap_scroll(self._build_correction_tab()), "✏ AI 纠错")
-        self._tabs.addTab(self._wrap_scroll(self._build_sort_tab()), "📊 结果输出")
-
-    # ── Tab 1: 基础设置 ──
-    def _build_basic_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(10)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # ── 处理模式组 ──
-        mode_group = CollapsibleGroup(_("处理模式"))
-        mf = QFormLayout()
-        mf.setSpacing(8)
-        self._process_mode = QComboBox()
-        self._process_mode.addItems([_("OCR + ASR（完整流程）"), _("仅 OCR"), _("仅语音识别 (ASR)")])
-        self._process_mode.setToolTip(_("选择开始处理时运行的流程模式"))
-        mf.addRow(_("处理模式:"), self._process_mode)
-        self._frame_interval = QDoubleSpinBox()
-        self._frame_interval.setRange(0.02, 10.0)
-        self._frame_interval.setSingleStep(0.1)
-        self._frame_interval.setDecimals(2)
-        self._frame_interval.setValue(0.1)
-        self._frame_interval.setSuffix(_(" 秒"))
-        self._frame_interval.setToolTip(_("每隔多少秒处理一帧"))
-        mf.addRow(_("帧间隔:"), self._frame_interval)
-        mode_group.addLayout(mf)
-        layout.addWidget(mode_group)
-
-        # ── OCR 引擎组 ──
-        engine_group = CollapsibleGroup(_("OCR 引擎"))
-        ef = QFormLayout()
-        ef.setSpacing(8)
-        self._engine_combo = QComboBox()
-        if self._engine_mgr:
-            self._engine_combo.addItems(self._engine_mgr.get_engine_names())
-            if self._current_engine:
-                self._engine_combo.setCurrentText(self._current_engine)
-        self._engine_combo.currentTextChanged.connect(self._on_engine_changed)
-        ef.addRow(_("引擎:"), self._engine_combo)
-        self._eng_api_key = QLineEdit()
-        self._eng_api_key.setPlaceholderText(_("sk-xxx"))
-        self._eng_api_key.setEchoMode(QLineEdit.Password)
-        ef.addRow(_("API Key:"), self._eng_api_key)
-        self._eng_base_url = QLineEdit()
-        self._eng_base_url.setPlaceholderText(_("https://api.openai.com/v1"))
-        ef.addRow(_("Base URL:"), self._eng_base_url)
-        model_row = QHBoxLayout()
-        self._eng_model = QComboBox()
-        self._eng_model.setEditable(True)
-        self._eng_model.setInsertPolicy(QComboBox.NoInsert)
-        self._eng_model.lineEdit().setPlaceholderText(_("gpt-4o"))
-        self._eng_model.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        model_row.addWidget(self._eng_model, 1)
-        self._eng_model_status = QLabel("")
-        self._eng_model_status.setMinimumWidth(80)
-        btn_fetch = QPushButton(_("📋 获取模型"))
-        btn_fetch.clicked.connect(self._on_fetch_eng_models)
-        model_row.addWidget(self._eng_model_status)
-        model_row.addWidget(btn_fetch)
-        ef.addRow(_("模型:"), model_row)
-        self._eng_timeout = QSpinBox()
-        self._eng_timeout.setRange(1, 300)
-        self._eng_timeout.setValue(30)
-        self._eng_timeout.setSuffix(_(" 秒"))
-        ef.addRow(_("超时:"), self._eng_timeout)
-        self._eng_gpu = QCheckBox(_("启用 GPU 加速"))
-        ef.addRow("", self._eng_gpu)
-        self._eng_paddle_version = QComboBox()
-        self._eng_paddle_version.addItems(["PP-OCRv5_server (高精度/慢)", "PP-OCRv5_mobile (平衡)", "PP-OCRv4 (快速)"])
-        ef.addRow(_("模型版本:"), self._eng_paddle_version)
-        self._eng_angle = QCheckBox(_("启用角度检测"))
-        self._eng_angle.setChecked(True)
-        ef.addRow("", self._eng_angle)
-        self._eng_save_preset = QPushButton(_("💾 保存为 API 预设"))
-        self._eng_save_preset.setToolTip("将当前 API 配置保存为预设，供纠错等功能使用")
-        self._eng_save_preset.clicked.connect(self._on_save_eng_preset)
-        ef.addRow("", self._eng_save_preset)
-        engine_group.addLayout(ef)
-        layout.addWidget(engine_group)
-        # 初始化引擎字段可见性
-        self._on_engine_changed(self._engine_combo.currentText())
-
-        # ── 输出控制组 ──
-        out_group = CollapsibleGroup(_("输出控制"))
-        of = QFormLayout()
-        of.setSpacing(8)
-        self._subtitle_duration = QDoubleSpinBox()
-        self._subtitle_duration.setRange(0.5, 30.0)
-        self._subtitle_duration.setSingleStep(0.5)
-        self._subtitle_duration.setValue(3.0)
-        self._subtitle_duration.setSuffix(_(" 秒"))
-        of.addRow(_("字幕时长:"), self._subtitle_duration)
-        self._srt_export = QComboBox()
-        self._srt_export.addItems([_("仅纠正结果"), _("仅原文"), _("双语对照（原文+纠正）"), _("原文 换行 纠正")])
-        self._srt_export.setToolTip(_("SRT 导出时的字幕内容模式"))
-        of.addRow(_("SRT 导出:"), self._srt_export)
-        out_group.addLayout(of)
-        layout.addWidget(out_group)
-
-        layout.addStretch()
-        return tab
-
-    # ── Tab 2: 语音识别 ──
-    def _build_asr_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(10)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # ── 字幕模式选择 ──
-        mode_group = CollapsibleGroup(_("字幕模式"))
-        mode_form = QFormLayout()
-        mode_form.setSpacing(8)
-        self._subtitle_mode = QComboBox()
-        self._subtitle_mode.addItems([_("流式字幕（去重）"), _("常规字幕（固定间隔）")])
-        self._subtitle_mode.setToolTip(_("流式：哨兵去重实时输出\n常规：固定间隔采样"))
-        self._subtitle_mode.currentTextChanged.connect(self._on_subtitle_mode_changed)
-        mode_form.addRow(_("字幕模式:"), self._subtitle_mode)
-        mode_group.addLayout(mode_form)
-        layout.addWidget(mode_group)
-
-        # ── 流式参数组 ──
-        self._s_group = CollapsibleGroup("流式参数（哨兵去重）")
-        s_layout = QFormLayout()
-        s_layout.setSpacing(8)
-        self._s_sentinel = QCheckBox("启用哨兵去重（骤降/缓冲区/相似度）")
-        self._s_sentinel.setChecked(True)
-        s_layout.addRow("", self._s_sentinel)
-        self._s_drop_ratio = QDoubleSpinBox()
-        self._s_drop_ratio.setRange(0.01, 1.0)
-        self._s_drop_ratio.setSingleStep(0.05)
-        self._s_drop_ratio.setDecimals(2)
-        self._s_drop_ratio.setValue(0.5)
-        self._s_drop_ratio.setToolTip("文本长度骤降到上一帧的此比例时强制触发输出")
-        s_layout.addRow("字数骤降比:", self._s_drop_ratio)
-        self._s_buffer = QSpinBox()
-        self._s_buffer.setRange(1, 100)
-        self._s_buffer.setValue(8)
-        self._s_buffer.setToolTip("连续相同文本的缓冲区大小，超过后强制输出")
-        s_layout.addRow("连续缓冲区:", self._s_buffer)
-        self._s_sim = QDoubleSpinBox()
-        self._s_sim.setRange(0.0, 1.0)
-        self._s_sim.setSingleStep(0.05)
-        self._s_sim.setDecimals(2)
-        self._s_sim.setValue(0.85)
-        s_layout.addRow("相似度阈值:", self._s_sim)
-        self._s_min_text = QSpinBox()
-        self._s_min_text.setRange(1, 100)
-        self._s_min_text.setValue(2)
-        s_layout.addRow("最小文字长度:", self._s_min_text)
-        self._s_group.addLayout(s_layout)
-        layout.addWidget(self._s_group)
-
-        # ── 常规参数组 ──
-        self._r_group = CollapsibleGroup("常规参数（固定间隔）")
-        r_layout = QFormLayout()
-        r_layout.setSpacing(8)
-        self._r_dedup = QCheckBox("启用基本去重（相似文本合并）")
-        self._r_dedup.setChecked(True)
-        r_layout.addRow("", self._r_dedup)
-        self._r_sim = QDoubleSpinBox()
-        self._r_sim.setRange(0.0, 1.0)
-        self._r_sim.setSingleStep(0.05)
-        self._r_sim.setDecimals(2)
-        self._r_sim.setValue(0.9)
-        r_layout.addRow("相似度阈值:", self._r_sim)
-        self._r_buffer = QSpinBox()
-        self._r_buffer.setRange(1, 100)
-        self._r_buffer.setValue(5)
-        r_layout.addRow("连续缓冲区:", self._r_buffer)
-        self._r_min_text = QSpinBox()
-        self._r_min_text.setRange(1, 100)
-        self._r_min_text.setValue(2)
-        r_layout.addRow("最小文字长度:", self._r_min_text)
-        self._r_interval = QDoubleSpinBox()
-        self._r_interval.setRange(0.1, 60.0)
-        self._r_interval.setSingleStep(0.5)
-        self._r_interval.setDecimals(1)
-        self._r_interval.setValue(2.0)
-        self._r_interval.setSuffix(" 秒")
-        self._r_interval.setToolTip("每隔多少秒输出一次当前帧的全部识别结果")
-        r_layout.addRow("输出间隔:", self._r_interval)
-        self._r_group.addLayout(r_layout)
-        layout.addWidget(self._r_group)
-
-        # ── ASR 模型配置 ──
-        asr_group = CollapsibleGroup(_("ASR 语音识别引擎"))
-        asr_form = QFormLayout()
-        asr_form.setSpacing(8)
-        self._asr_model_dir = QLineEdit("models/asr")
-        self._asr_model_dir.setPlaceholderText("留空使用默认缓存")
-        asr_form.addRow("模型目录:", self._asr_model_dir)
-        self._asr_model = QComboBox()
-        self._asr_model.setEditable(False)
-        asr_form.addRow("可用模型:", self._asr_model)
-        btn_refresh = QPushButton("🔄 刷新模型列表")
-        btn_refresh.clicked.connect(self._refresh_asr_models)
-        asr_form.addRow("", btn_refresh)
-        self._asr_lang = QComboBox()
-        self._asr_lang.setEditable(False)
-        self._asr_lang.addItems(["auto", "zh", "en", "ja", "ko"])
-        self._asr_lang.setCurrentText("zh")
-        asr_form.addRow("语言:", self._asr_lang)
-        self._asr_region = QLineEdit("语音")
-        self._asr_region.setToolTip("ASR 结果在表格中显示的区域名称")
-        asr_form.addRow("区域名:", self._asr_region)
-        asr_group.addLayout(asr_form)
-        layout.addWidget(asr_group)
-
-        # ── 解码参数 ──
-        gf = CollapsibleGroup("解码参数", collapsed=True)
-        gfl = QFormLayout()
-        gfl.setSpacing(6)
-        self._asr_beam = QSpinBox()
-        self._asr_beam.setRange(1, 20)
-        self._asr_beam.setValue(5)
-        self._asr_beam.setToolTip("Beam size，越大精度越高但越慢")
-        gfl.addRow("Beam Size:", self._asr_beam)
-        self._asr_word_ts = QCheckBox("字级时间戳")
-        self._asr_word_ts.setChecked(True)
-        gfl.addRow("", self._asr_word_ts)
-        self._asr_condition = QCheckBox("基于上文条件解码")
-        self._asr_condition.setChecked(True)
-        gfl.addRow("", self._asr_condition)
-        self._asr_no_speech = QDoubleSpinBox()
-        self._asr_no_speech.setRange(0.0, 1.0)
-        self._asr_no_speech.setSingleStep(0.1)
-        self._asr_no_speech.setValue(0.6)
-        self._asr_no_speech.setToolTip("越高越容易跳过无声音片段")
-        gfl.addRow("无语音阈值:", self._asr_no_speech)
-        self._asr_comp_ratio = QDoubleSpinBox()
-        self._asr_comp_ratio.setRange(0.0, 10.0)
-        self._asr_comp_ratio.setSingleStep(0.1)
-        self._asr_comp_ratio.setValue(2.4)
-        gfl.addRow("压缩比阈值:", self._asr_comp_ratio)
-        self._asr_temp = QLineEdit("0.0,0.2,0.4,0.6,0.8,1.0")
-        self._asr_temp.setPlaceholderText("0.0,0.2,0.4,0.6,0.8,1.0")
-        self._asr_temp.setToolTip("温度参数（逗号分隔），越低越确定")
-        gfl.addRow("温度:", self._asr_temp)
-        self._asr_hotwords = QLineEdit()
-        self._asr_hotwords.setPlaceholderText("热词，逗号分隔")
-        self._asr_hotwords.setToolTip("提升特定词汇的识别率")
-        gfl.addRow("热词:", self._asr_hotwords)
-        self._asr_prompt = QLineEdit()
-        self._asr_prompt.setPlaceholderText("初始提示词，如: 以下是普通话的转录")
-        gfl.addRow("初始提示:", self._asr_prompt)
-        gf.addLayout(gfl)
-        layout.addWidget(gf)
-
-        # ── VAD 参数 ──
-        vg = CollapsibleGroup("VAD (语音活动检测)", collapsed=True)
-        vgl = QFormLayout()
-        vgl.setSpacing(6)
-        self._asr_vad = QCheckBox("启用 VAD（跳过静音段）")
-        self._asr_vad.setChecked(False)
-        self._asr_vad.setToolTip("自动检测并跳过静音部分，加速处理")
-        vgl.addRow("", self._asr_vad)
-        self._asr_vad_silence = QSpinBox()
-        self._asr_vad_silence.setRange(100, 5000)
-        self._asr_vad_silence.setSingleStep(100)
-        self._asr_vad_silence.setValue(500)
-        self._asr_vad_silence.setSuffix(" ms")
-        vgl.addRow("最小静音:", self._asr_vad_silence)
-        self._asr_vad_thresh = QDoubleSpinBox()
-        self._asr_vad_thresh.setRange(0.0, 1.0)
-        self._asr_vad_thresh.setSingleStep(0.05)
-        self._asr_vad_thresh.setValue(0.5)
-        vgl.addRow("VAD 阈值:", self._asr_vad_thresh)
-        vg.addLayout(vgl)
-        layout.addWidget(vg)
-
-        layout.addStretch()
-        return tab
-
+    # ── Tab 2: 字幕模式联动 ──
     def _on_subtitle_mode_changed(self, mode: str):
-        is_streaming = (mode == _("流式字幕（去重）") or "流式" in mode)
+        is_streaming = mode == _("流式字幕（去重）") or "流式" in mode
         self._s_group.setVisible(is_streaming)
         self._r_group.setVisible(not is_streaming)
 
     # faster-whisper 标准模型大小（可自动下载）
     _STANDARD_ASR_MODELS = [
-        "tiny", "tiny.en", "base", "base.en", "small", "small.en",
-        "medium", "medium.en", "large-v1", "large-v2", "large-v3",
-        "distil-small.en", "distil-medium.en", "distil-large-v2",
+        "tiny",
+        "tiny.en",
+        "base",
+        "base.en",
+        "small",
+        "small.en",
+        "medium",
+        "medium.en",
+        "large-v1",
+        "large-v2",
+        "large-v3",
+        "distil-small.en",
+        "distil-medium.en",
+        "distil-large-v2",
     ]
 
     def _refresh_asr_models(self):
         from core.asr_engine import scan_local_asr_models
+
         model_dir = self._asr_model_dir.text().strip() or "models/asr"
         base = BASE_DIR
         full_dir = str(base / model_dir) if not os.path.isabs(model_dir) else model_dir
@@ -700,6 +1534,12 @@ class SettingsDialog(QDialog):
             self._asr_model.setCurrentIndex(0)
         self._asr_model.blockSignals(False)
 
+    def _load_asr_model_value(self, value: str):
+        """ASR 模型字段加载钩子：刷新列表后按 data 值选中。"""
+        self._refresh_asr_models()
+        if value:
+            self._select_combo_by_data(self._asr_model, value)
+
     @staticmethod
     def _select_combo_by_data(combo: QComboBox, data_value: str):
         """通过 item data 值设置 QComboBox 选中项（而非显示文本）。"""
@@ -708,44 +1548,9 @@ class SettingsDialog(QDialog):
                 combo.setCurrentIndex(i)
                 return
 
-    # ── Tab 3: OCR 字幕处理 ──
-    def _build_ocr_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(10)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # ── 后处理参数 ──
-        post_group = CollapsibleGroup(_("后处理参数"))
-        pf = QFormLayout()
-        pf.setSpacing(8)
-        self._post_sim_dedup = QCheckBox("启用相似度去重（合并相似文本）")
-        self._post_sim_dedup.setChecked(True)
-        pf.addRow("", self._post_sim_dedup)
-        self._post_conf_check = QCheckBox("启用置信度过滤（仅 PaddleOCR）")
-        self._post_conf_check.setChecked(False)
-        pf.addRow("", self._post_conf_check)
-        self._post_conf_threshold = QDoubleSpinBox()
-        self._post_conf_threshold.setRange(0.0, 1.0)
-        self._post_conf_threshold.setSingleStep(0.05)
-        self._post_conf_threshold.setDecimals(2)
-        self._post_conf_threshold.setValue(0.6)
-        pf.addRow("置信度阈值:", self._post_conf_threshold)
-        self._post_sim_threshold = QDoubleSpinBox()
-        self._post_sim_threshold.setRange(0.0, 1.0)
-        self._post_sim_threshold.setSingleStep(0.05)
-        self._post_sim_threshold.setDecimals(2)
-        self._post_sim_threshold.setValue(0.9)
-        pf.addRow("去重相似度阈值:", self._post_sim_threshold)
-        self._post_min_text_len = QSpinBox()
-        self._post_min_text_len.setRange(1, 100)
-        self._post_min_text_len.setValue(2)
-        pf.addRow("最小文字长度:", self._post_min_text_len)
-        post_group.addLayout(pf)
-        layout.addWidget(post_group)
-
-        # ── 关键词过滤 ──
-        filter_group = CollapsibleGroup(_("关键词过滤"))
+    # ── Tab 3: 关键词过滤面板（专用构建）──
+    def _build_filter_panel(self, layout: QVBoxLayout):
+        group = CollapsibleGroup(_("关键词过滤"))
         fl = QVBoxLayout()
         fl.setSpacing(6)
 
@@ -775,11 +1580,8 @@ class SettingsDialog(QDialog):
         filter_btns.addWidget(btn_clear)
         filter_btns.addStretch()
         fl.addLayout(filter_btns)
-        filter_group.addLayout(fl)
-        layout.addWidget(filter_group)
-
-        layout.addStretch()
-        return tab
+        group.addLayout(fl)
+        layout.addWidget(group)
 
     def _on_add_filter(self):
         kw = self._filter_input.text().strip()
@@ -798,172 +1600,18 @@ class SettingsDialog(QDialog):
             self._filter_list.takeItem(row)
 
     def _on_clear_filters(self):
-        if QMessageBox.question(self, "确认清空", "确定要清空所有过滤关键词吗？",
-                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+        if (
+            QMessageBox.question(
+                self, "确认清空", "确定要清空所有过滤关键词吗？", QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            == QMessageBox.Yes
+        ):
             self._filter_items.clear()
             self._filter_list.clear()
 
-    # ── Tab 4: AI 纠错 ──
-    def _build_correction_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(10)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # ── 行为模式 ──
-        mode_group = CollapsibleGroup(_("纠错模式"))
-        mf = QVBoxLayout()
-        mf.setSpacing(6)
-        self._corr_enabled = QCheckBox("启用 AI 纠错")
-        self._corr_enabled.setChecked(False)
-        self._corr_enabled.setToolTip("总开关：开启后将使用 LLM 对 OCR 结果进行纠错")
-        mf.addWidget(self._corr_enabled)
-        self._corr_translate = QCheckBox("🌐 翻译模式（将结果翻译为中文）")
-        self._corr_translate.setToolTip("开启后 LLM 将把 OCR 结果翻译为中文，纠错提示词仅作参考")
-        mf.addWidget(self._corr_translate)
-        self._corr_stream = QCheckBox("🔴 流式输出模式（实时逐字显示 API 响应）")
-        mf.addWidget(self._corr_stream)
-        self._corr_json = QCheckBox("📋 JSON 输出模式（API 返回结构化 JSON）")
-        mf.addWidget(self._corr_json)
-        self._corr_extract_env = QCheckBox("提取全文环境（领域/氛围/内容摘要作为参考）")
-        mf.addWidget(self._corr_extract_env)
-        self._corr_polish = QCheckBox("✨ 润色模式（纠错/翻译后二次润色质量）")
-        self._corr_polish.setToolTip("开启后 LLM 将对纠错/翻译结果进行二次润色，使表达更自然流畅")
-        mf.addWidget(self._corr_polish)
-        self._btn_extract_env = QPushButton("🔍 立即提取全文环境")
-        self._btn_extract_env.clicked.connect(lambda: self._cp.extract_env_clicked.emit())
-        mf.addWidget(self._btn_extract_env)
-        self._corr_summary_prompt = QTextEdit()
-        self._corr_summary_prompt.setPlaceholderText("点击上方按钮自动提取环境信息，也可手动编辑...")
-        self._corr_summary_prompt.setMaximumHeight(80)
-        self._corr_summary_prompt.setMinimumHeight(50)
-        self._corr_summary_prompt.setToolTip("自动提取的全文环境信息（领域/氛围/摘要），可手动修改，不随设置保存")
-        mf.addWidget(self._corr_summary_prompt)
-        mode_group.addLayout(mf)
-        layout.addWidget(mode_group)
-
-        # ── 提示词配置 ──
-        prompt_group = CollapsibleGroup("提示词配置", collapsed=True)
-        pf = QFormLayout()
-        pf.setSpacing(8)
-        self._corr_system_prompt = QTextEdit()
-        self._corr_system_prompt.setPlaceholderText("自定义纠错系统提示词（可选）")
-        self._corr_system_prompt.setMaximumHeight(100)
-        self._corr_system_prompt.setMinimumHeight(60)
-        pf.addRow("系统提示词:", self._corr_system_prompt)
-        self._corr_prompt = QTextEdit()
-        self._corr_prompt.setPlaceholderText("自定义纠错提示词（可选）")
-        self._corr_prompt.setMaximumHeight(100)
-        self._corr_prompt.setMinimumHeight(60)
-        pf.addRow("用户提示词:", self._corr_prompt)
-        self._corr_output_format = QLineEdit()
-        self._corr_output_format.setPlaceholderText("[纠正后文本]")
-        pf.addRow("输出格式:", self._corr_output_format)
-        prompt_group.addLayout(pf)
-        layout.addWidget(prompt_group)
-
-        # ── 批量参数 ──
-        batch_group = CollapsibleGroup(_("批量参数"))
-        bf = QFormLayout()
-        bf.setSpacing(8)
-        self._corr_preset = QComboBox()
-        self._corr_preset.setToolTip("选择纠错使用的 API 连接预设")
-        from core.api_preset_manager import APIPresetManager
-        preset_mgr = APIPresetManager()
-        self._corr_preset.addItems(preset_mgr.get_names())
-        default_name = preset_mgr.get_default_name()
-        if default_name:
-            self._corr_preset.setCurrentText(default_name)
-        self._corr_preset.currentTextChanged.connect(self._on_preset_changed)
-        bf.addRow("API 预设:", self._corr_preset)
-        self._corr_batch = QSpinBox()
-        self._corr_batch.setRange(1, 50)
-        self._corr_batch.setValue(5)
-        self._corr_batch.setSuffix(" 条/次")
-        bf.addRow("批量条数:", self._corr_batch)
-        self._corr_context = QSpinBox()
-        self._corr_context.setRange(0, 10)
-        self._corr_context.setValue(3)
-        self._corr_context.setSuffix(" 条")
-        bf.addRow("上下文窗口:", self._corr_context)
-        self._corr_retry = QSpinBox()
-        self._corr_retry.setRange(0, 10)
-        self._corr_retry.setValue(2)
-        bf.addRow("失败重试:", self._corr_retry)
-        self._corr_concurrency = QSpinBox()
-        self._corr_concurrency.setRange(1, 8)
-        self._corr_concurrency.setValue(4)
-        self._corr_concurrency.setSuffix(" 并发")
-        self._corr_concurrency.setToolTip("同时运行的批次数（滑动窗口并发）")
-        bf.addRow("并发数:", self._corr_concurrency)
-        self._corr_rpm = QSpinBox()
-        self._corr_rpm.setRange(0, 120)
-        self._corr_rpm.setValue(30)
-        self._corr_rpm.setSuffix(" RPM")
-        self._corr_rpm.setToolTip("每分钟最大请求数，0 表示不限制")
-        bf.addRow("RPM 限制:", self._corr_rpm)
-        self._seg_time_gap = QDoubleSpinBox()
-        self._seg_time_gap.setRange(0.0, 60.0)
-        self._seg_time_gap.setValue(3.0)
-        self._seg_time_gap.setSuffix(" 秒")
-        self._seg_time_gap.setToolTip("上下文窗口中，跳过时间间隔超过此值的行")
-        bf.addRow("上下文时间间隔:", self._seg_time_gap)
-        batch_group.addLayout(bf)
-        layout.addWidget(batch_group)
-
-        # ── API 连接 ──
-        api_group = CollapsibleGroup(_("API 连接"), collapsed=True)
-        af = QFormLayout()
-        af.setSpacing(6)
-        self._corr_api_key = QLineEdit()
-        self._corr_api_key.setPlaceholderText(_("sk-xxx（可选）"))
-        self._corr_api_key.setEchoMode(QLineEdit.Password)
-        self._corr_api_key.setText(self._corr_cfg.get("api_key", ""))
-        af.addRow("API Key:", self._corr_api_key)
-        self._corr_api_url = QLineEdit()
-        self._corr_api_url.setPlaceholderText(_("http://127.0.0.1:8080"))
-        self._corr_api_url.setText(self._corr_cfg.get("base_url", "http://127.0.0.1:8080"))
-        af.addRow("Base URL:", self._corr_api_url)
-        model_row = QHBoxLayout()
-        self._corr_api_model = QComboBox()
-        self._corr_api_model.setEditable(True)
-        self._corr_api_model.setInsertPolicy(QComboBox.NoInsert)
-        self._corr_api_model.lineEdit().setPlaceholderText(_("gpt-4o / gemma 等"))
-        self._corr_api_model.setEditText(self._corr_cfg.get("model", ""))
-        self._corr_api_model.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        model_row.addWidget(self._corr_api_model, 1)
-        self._corr_model_status = QLabel("")
-        self._corr_model_status.setMinimumWidth(100)
-        btn_corr_models = QPushButton(_("📋 获取模型"))
-        btn_corr_models.setToolTip("从 Base URL 获取可用模型列表")
-        btn_corr_models.clicked.connect(self._on_fetch_corr_models)
-        model_row.addWidget(self._corr_model_status)
-        model_row.addWidget(btn_corr_models)
-        af.addRow("模型:", model_row)
-        self._corr_api_timeout = QSpinBox()
-        self._corr_api_timeout.setRange(1, 300)
-        self._corr_api_timeout.setValue(self._corr_cfg.get("timeout", 30))
-        self._corr_api_timeout.setSuffix(" 秒")
-        af.addRow("超时:", self._corr_api_timeout)
-        self._corr_api_retry = QSpinBox()
-        self._corr_api_retry.setRange(0, 10)
-        self._corr_api_retry.setValue(self._corr_cfg.get("retry_on_failure", 2))
-        af.addRow("重试次数:", self._corr_api_retry)
-        api_group.addLayout(af)
-        layout.addWidget(api_group)
-
-        layout.addStretch()
-        return tab
-
-    # ── Tab 5: 结果输出 ──
-    def _build_sort_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(10)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # ── 排序规则 ──
-        sort_group = CollapsibleGroup(_("排序规则"))
+    # ── Tab 5: 排序规则面板（专用构建，拖放列表）──
+    def _build_sort_panel(self, layout: QVBoxLayout):
+        group = CollapsibleGroup(_("排序规则"))
         sl = QVBoxLayout()
         sl.setSpacing(6)
 
@@ -978,11 +1626,8 @@ class SettingsDialog(QDialog):
         self._sort_list.setSelectionMode(QAbstractItemView.SingleSelection)
         self._sort_list.setMinimumHeight(200)
         sl.addWidget(self._sort_list, 1)
-        sort_group.addLayout(sl)
-        layout.addWidget(sort_group)
-
-        layout.addStretch()
-        return tab
+        group.addLayout(sl)
+        layout.addWidget(group)
 
     def _add_sort_row(self, name: str, prefix: str = "", suffix: str = ""):
         row = QWidget()
@@ -1049,12 +1694,16 @@ class SettingsDialog(QDialog):
                 if info[1]:
                     self._sort_items.append(info)
 
-    # ── API ──
+    # ── API 连接（纠错预设联动）──
+    def _on_extract_env_clicked(self):
+        self._cp.extract_env_clicked.emit()
+
     def _on_preset_changed(self, name: str):
         """预设切换时回填 API 连接字段。"""
         if not name:
             return
         from core.api_preset_manager import APIPresetManager
+
         preset = APIPresetManager().get_preset(name)
         if not preset:
             return
@@ -1066,17 +1715,25 @@ class SettingsDialog(QDialog):
     def _sync_preset(self):
         """将当前 API 连接字段回写到选中预设。"""
         from core.api_preset_manager import APIPresetManager
+
         preset_name = self._corr_preset.currentText()
         if preset_name:
-            APIPresetManager().update_preset(preset_name, {
-                "api_key": self._corr_api_key.text(),
-                "base_url": self._corr_api_url.text(),
-                "model": self._corr_api_model.currentText(),
-                "timeout": self._corr_api_timeout.value(),
-            })
+            APIPresetManager().update_preset(
+                preset_name,
+                {
+                    "api_key": self._corr_api_key.text(),
+                    "base_url": self._corr_api_url.text(),
+                    "model": self._corr_api_model.currentText(),
+                    "timeout": self._corr_api_timeout.value(),
+                },
+            )
 
     def get_corr_api_config(self) -> dict:
-        """获取 API 连接配置（纯读取）。"""
+        """获取 API 连接配置（纯读取）。
+
+        stream_mode/json_mode 一并返回：重建 AICorrector 时保持
+        与 UI 勾选一致（设置同步 P9 修复，配合 AICorrector.__init__ 读配置）。
+        """
         return {
             "enabled": self._corr_enabled.isChecked(),
             "api_key": self._corr_api_key.text(),
@@ -1087,6 +1744,8 @@ class SettingsDialog(QDialog):
             "summary_prompt": self._corr_summary_prompt.toPlainText(),
             "correction_system_prompt": self._corr_system_prompt.toPlainText(),
             "output_format": self._corr_output_format.text(),
+            "stream_mode": self._corr_stream.isChecked(),
+            "json_mode": self._corr_json.isChecked(),
         }
 
     def _on_fetch_corr_models(self):
@@ -1100,8 +1759,8 @@ class SettingsDialog(QDialog):
         import threading
 
         class _FetchBridge(QObject):
-            done = pyqtSignal(object)
-            err = pyqtSignal(str)
+            done = Signal(object)
+            err = Signal(str)
 
         bridge = _FetchBridge()
         bridge.done.connect(self._on_corr_fetch_done)
@@ -1129,8 +1788,22 @@ class SettingsDialog(QDialog):
         populate_model_combo(self._corr_api_model, models)
 
     def _on_accept(self):
-        """确认时：同步数据到 ConfigPanel 并触发应用。"""
+        """确认时：同步数据到 ConfigPanel 并触发应用。
+
+        顺序说明（设置同步 P1 修复）：set_polish_enabled 必须在
+        _sync_values_to_cp 之前调用——后者 emit mode_changed 时携带的
+        是全量 _params 快照，先写入 corr_polish 才能进入保存链路。
+        """
+        # 模型非空校验：空模型会导致所有纠错/润色调用失败（llm_client 模型名称未设置）
+        if not self._corr_api_model.currentText().strip():
+            QMessageBox.warning(
+                self,
+                _("模型名称未设置"),
+                _("请先填写 API 模型名称（如 deepseek-chat / gpt-4o），\n或选择包含模型的 API 预设。"),
+            )
+            self._tabs.setCurrentIndex(3)  # 跳到 AI 纠错 tab
+            return
+        self._cp.set_polish_enabled(self._corr_polish.isChecked())
         self._sync_values_to_cp()
         self._sync_preset()
-        self._cp.set_polish_enabled(self._corr_polish.isChecked())
         self.accept()

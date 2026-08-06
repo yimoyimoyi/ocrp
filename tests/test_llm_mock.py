@@ -6,6 +6,7 @@ from core.ai_correction import AICorrector, _clean_content
 
 # ── 辅助工具 ──
 
+
 def _make_corrector(**overrides) -> AICorrector:
     """构造最小可用的 AICorrector 实例（mock 配置）。"""
     config = {
@@ -30,6 +31,7 @@ def _make_corrector(**overrides) -> AICorrector:
 
 
 # ── 单条纠错 ──
+
 
 class TestCorrectSingle:
     """测试 AICorrector.correct() 单条纠错。"""
@@ -74,6 +76,7 @@ class TestCorrectSingle:
 
 # ── 翻译模式 ──
 
+
 class TestTranslateMode:
     """测试翻译模式下的纠错。"""
 
@@ -102,6 +105,7 @@ class TestTranslateMode:
 
 
 # ── 批量纠错 ──
+
 
 class TestCorrectBatch:
     """测试 AICorrector.correct_batch() 批量纠错。"""
@@ -149,6 +153,7 @@ class TestCorrectBatch:
 
 # ── 润色 ──
 
+
 class TestPolish:
     """测试 AICorrector.polish() 润色功能。"""
 
@@ -184,6 +189,7 @@ class TestPolish:
 
 # ── 环境提取跳过逻辑 ──
 
+
 class TestShouldSkipEnvExtraction:
     """测试 _should_skip_env_extraction() 条件判断。"""
 
@@ -200,13 +206,20 @@ class TestShouldSkipEnvExtraction:
         c = _make_corrector(correction_prompt="请参考{环境信息}进行纠正。")
         assert c._should_skip_env_extraction() is True
 
-    def test_skip_when_summary_contains_domain(self):
+    def test_no_skip_when_summary_contains_domain_word(self):
+        """宽泛词（领域/氛围）不再是跳过判据——默认 summary_prompt 恰含这些词，
+        否则自动提取永远被跳过（实测回归修复）。"""
         c = _make_corrector(summary_prompt="请总结领域类型。")
+        assert c._should_skip_env_extraction() is False
+
+    def test_skip_when_summary_contains_placeholder(self):
+        c = _make_corrector(summary_prompt="请参考{环境描述}进行总结。")
         assert c._should_skip_env_extraction() is True
 
-    def test_skip_when_polish_contains_env(self):
+    def test_no_skip_when_polish_contains_env_word(self):
+        """不带花括号的环境词不触发跳过（需明确占位符）。"""
         c = _make_corrector(polish_prompt="请参考环境描述进行润色。")
-        assert c._should_skip_env_extraction() is True
+        assert c._should_skip_env_extraction() is False
 
     def test_no_skip_when_all_empty(self):
         c = _make_corrector(
@@ -220,6 +233,7 @@ class TestShouldSkipEnvExtraction:
 
 
 # ── 占位符替换 ──
+
 
 class TestResolvePlaceholders:
     """测试 AICorrector._resolve_placeholders() 占位符替换。"""
@@ -248,13 +262,20 @@ class TestResolvePlaceholders:
     def test_replace_all_placeholders(self):
         tpl = "{原始结果}{上下文}{环境信息}{时间戳}{区域}{引擎}{语言}"
         result = AICorrector._resolve_placeholders(
-            tpl, raw_text="a", context="b", env_context="c",
-            timestamp="t", region="r", engine="e", language="l",
+            tpl,
+            raw_text="a",
+            context="b",
+            env_context="c",
+            timestamp="t",
+            region="r",
+            engine="e",
+            language="l",
         )
         assert result == "abctrel"
 
 
 # ── 清理标记 ──
+
 
 class TestCleanContent:
     """测试 _clean_content() 标记清理。"""
@@ -273,6 +294,7 @@ class TestCleanContent:
 
 
 # ── 缓存 key 包含 max_tokens ──
+
 
 class TestCacheKey:
     """测试缓存 key 计算包含所有关键参数。"""
@@ -330,7 +352,35 @@ class TestMetaResponseFilter:
         assert _is_meta_response(long_text) is False
 
 
+# ── 构造时从 config 读取流式/JSON 模式 ──
+
+
+class TestConfigModes:
+    """测试 stream_mode/json_mode 从配置读取（设置同步 P9 修复）。"""
+
+    def test_stream_json_mode_read_from_config(self):
+        c = _make_corrector(stream_mode=True, json_mode=True)
+        assert c._stream_mode is True
+        assert c._json_mode is True
+
+    def test_stream_json_mode_default_false(self):
+        c = _make_corrector()
+        assert c._stream_mode is False
+        assert c._json_mode is False
+
+    def test_stream_mode_only(self):
+        c = _make_corrector(stream_mode=True)
+        assert c._stream_mode is True
+        assert c._json_mode is False
+
+    def test_truthy_config_values_coerced_to_bool(self):
+        c = _make_corrector(stream_mode=1, json_mode="true")
+        assert c._stream_mode is True
+        assert c._json_mode is True
+
+
 # ── reload_config 保留运行时状态 ──
+
 
 class TestReloadConfig:
     """测试 reload_config() 保留运行时状态。"""
@@ -357,6 +407,7 @@ class TestReloadConfig:
 
 
 # ── 系统 prompt 构建 ──
+
 
 class TestBuildSystemPrompt:
     """测试 _build_system_prompt() 构建逻辑。"""

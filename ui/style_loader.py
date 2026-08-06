@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STYLES_DIR = BASE_DIR / "styles"
@@ -17,23 +17,23 @@ STYLES_DIR = BASE_DIR / "styles"
 # 用户友好的主题名 → qt-material XML 文件名
 THEME_MAP = {
     # 深色系
-    "dark_teal":    "dark_teal.xml",
-    "dark_blue":    "dark_blue.xml",
-    "dark_cyan":    "dark_cyan.xml",
-    "dark_purple":  "dark_purple.xml",
-    "dark_pink":    "dark_pink.xml",
-    "dark_red":     "dark_red.xml",
-    "dark_amber":   "dark_amber.xml",
-    "dark_yellow":  "dark_yellow.xml",
+    "dark_teal": "dark_teal.xml",
+    "dark_blue": "dark_blue.xml",
+    "dark_cyan": "dark_cyan.xml",
+    "dark_purple": "dark_purple.xml",
+    "dark_pink": "dark_pink.xml",
+    "dark_red": "dark_red.xml",
+    "dark_amber": "dark_amber.xml",
+    "dark_yellow": "dark_yellow.xml",
     "dark_lightgreen": "dark_lightgreen.xml",
     # 浅色系
-    "light_teal":   "light_teal.xml",
-    "light_blue":   "light_blue.xml",
-    "light_cyan":   "light_cyan.xml",
+    "light_teal": "light_teal.xml",
+    "light_blue": "light_blue.xml",
+    "light_cyan": "light_cyan.xml",
     "light_purple": "light_purple.xml",
-    "light_pink":   "light_pink.xml",
-    "light_red":    "light_red.xml",
-    "light_amber":  "light_amber.xml",
+    "light_pink": "light_pink.xml",
+    "light_red": "light_red.xml",
+    "light_amber": "light_amber.xml",
     "light_yellow": "light_yellow.xml",
     "light_lightgreen": "light_lightgreen.xml",
     "light_cyan_500": "light_cyan_500.xml",
@@ -46,24 +46,24 @@ DEFAULT_THEME = "default"
 
 # 主题显示名（中文）
 THEME_DISPLAY_NAMES = {
-    "default":      "经典",
+    "default": "经典",
     "default_dark": "经典 · 暗",
-    "dark_teal":    "深色 · 青绿",
-    "dark_blue":    "深色 · 蓝",
-    "dark_cyan":    "深色 · 天蓝",
-    "dark_purple":  "深色 · 紫",
-    "dark_pink":    "深色 · 粉",
-    "dark_red":     "深色 · 红",
-    "dark_amber":   "深色 · 琥珀",
-    "dark_yellow":  "深色 · 黄",
+    "dark_teal": "深色 · 青绿",
+    "dark_blue": "深色 · 蓝",
+    "dark_cyan": "深色 · 天蓝",
+    "dark_purple": "深色 · 紫",
+    "dark_pink": "深色 · 粉",
+    "dark_red": "深色 · 红",
+    "dark_amber": "深色 · 琥珀",
+    "dark_yellow": "深色 · 黄",
     "dark_lightgreen": "深色 · 浅绿",
-    "light_teal":   "浅色 · 青绿",
-    "light_blue":   "浅色 · 蓝",
-    "light_cyan":   "浅色 · 天蓝",
+    "light_teal": "浅色 · 青绿",
+    "light_blue": "浅色 · 蓝",
+    "light_cyan": "浅色 · 天蓝",
     "light_purple": "浅色 · 紫",
-    "light_pink":   "浅色 · 粉",
-    "light_red":    "浅色 · 红",
-    "light_amber":  "浅色 · 琥珀",
+    "light_pink": "浅色 · 粉",
+    "light_red": "浅色 · 红",
+    "light_amber": "浅色 · 琥珀",
     "light_yellow": "浅色 · 黄",
     "light_lightgreen": "浅色 · 浅绿",
     "light_cyan_500": "浅色 · 天蓝500",
@@ -72,27 +72,27 @@ THEME_DISPLAY_NAMES = {
 # ─── 主题预览色（用于卡片选择器）───
 # 每个主题 3 个代表色：[主色, 次色, 背景色]
 THEME_COLORS = {
-    "default":         ["#555555", "#888888", "#f0f0f0"],
-    "default_dark":    ["#888888", "#555555", "#1e1e1e"],
-    "dark_teal":       ["#26a69a", "#00796b", "#1e1e1e"],
-    "dark_blue":       ["#42a5f5", "#1565c0", "#1e1e1e"],
-    "dark_cyan":       ["#26c6da", "#00838f", "#1e1e1e"],
-    "dark_purple":     ["#ab47bc", "#7b1fa2", "#1e1e1e"],
-    "dark_pink":       ["#ec407a", "#c2185b", "#1e1e1e"],
-    "dark_red":        ["#ef5350", "#c62828", "#1e1e1e"],
-    "dark_amber":      ["#ffca28", "#ff8f00", "#1e1e1e"],
-    "dark_yellow":     ["#ffee58", "#f9a825", "#1e1e1e"],
+    "default": ["#555555", "#888888", "#f0f0f0"],
+    "default_dark": ["#888888", "#555555", "#1e1e1e"],
+    "dark_teal": ["#26a69a", "#00796b", "#1e1e1e"],
+    "dark_blue": ["#42a5f5", "#1565c0", "#1e1e1e"],
+    "dark_cyan": ["#26c6da", "#00838f", "#1e1e1e"],
+    "dark_purple": ["#ab47bc", "#7b1fa2", "#1e1e1e"],
+    "dark_pink": ["#ec407a", "#c2185b", "#1e1e1e"],
+    "dark_red": ["#ef5350", "#c62828", "#1e1e1e"],
+    "dark_amber": ["#ffca28", "#ff8f00", "#1e1e1e"],
+    "dark_yellow": ["#ffee58", "#f9a825", "#1e1e1e"],
     "dark_lightgreen": ["#66bb6a", "#2e7d32", "#1e1e1e"],
-    "light_teal":      ["#00897b", "#004d40", "#f3f3f3"],
-    "light_blue":      ["#1e88e5", "#0d47a1", "#f3f3f3"],
-    "light_cyan":      ["#00acc1", "#006064", "#f3f3f3"],
-    "light_purple":    ["#8e24aa", "#4a148c", "#f3f3f3"],
-    "light_pink":      ["#d81b60", "#880e4f", "#f3f3f3"],
-    "light_red":       ["#e53935", "#b71c1c", "#f3f3f3"],
-    "light_amber":     ["#ffa000", "#e65100", "#f3f3f3"],
-    "light_yellow":    ["#fdd835", "#f57f17", "#f3f3f3"],
-    "light_lightgreen":["#43a047", "#1b5e20", "#f3f3f3"],
-    "light_cyan_500":  ["#00bcd4", "#006064", "#f3f3f3"],
+    "light_teal": ["#00897b", "#004d40", "#f3f3f3"],
+    "light_blue": ["#1e88e5", "#0d47a1", "#f3f3f3"],
+    "light_cyan": ["#00acc1", "#006064", "#f3f3f3"],
+    "light_purple": ["#8e24aa", "#4a148c", "#f3f3f3"],
+    "light_pink": ["#d81b60", "#880e4f", "#f3f3f3"],
+    "light_red": ["#e53935", "#b71c1c", "#f3f3f3"],
+    "light_amber": ["#ffa000", "#e65100", "#f3f3f3"],
+    "light_yellow": ["#fdd835", "#f57f17", "#f3f3f3"],
+    "light_lightgreen": ["#43a047", "#1b5e20", "#f3f3f3"],
+    "light_cyan_500": ["#00bcd4", "#006064", "#f3f3f3"],
 }
 
 # ─── 项目自定义 CSS（叠加在 qt-material 之上）───
@@ -1275,7 +1275,8 @@ def _migrate_theme_name(theme_name: str) -> str:
 
 def _apply_dark_palette(app: QApplication):
     """为 Fusion 设置暗色 QPalette，覆盖所有默认控件的浅色外观。"""
-    from PyQt5.QtGui import QColor, QPalette
+    from PySide6.QtGui import QColor, QPalette
+
     p = QPalette()
     p.setColor(QPalette.Window, QColor(30, 30, 30))
     p.setColor(QPalette.WindowText, QColor(224, 224, 224))
@@ -1295,9 +1296,9 @@ def _apply_dark_palette(app: QApplication):
     app.setPalette(p)
 
 
-def apply_theme(app: QApplication, theme_name: str = "dark_teal",
-                font_family: str = "Microsoft YaHei UI",
-                density_scale: str = "0"):
+def apply_theme(
+    app: QApplication, theme_name: str = "dark_teal", font_family: str = "Microsoft YaHei UI", density_scale: str = "0"
+):
     """应用 qt-material 主题 + 项目自定义覆盖。
 
     Args:
@@ -1324,20 +1325,18 @@ def apply_theme(app: QApplication, theme_name: str = "dark_teal",
     xml_name = THEME_MAP.get(theme_name, "dark_teal.xml")
 
     extra = {
-        'font_family': font_family,
-        'density_scale': density_scale,
+        "font_family": font_family,
+        "density_scale": density_scale,
     }
 
     # 使用 build_stylesheet 构建基础样式，避免 qt-material 内部 open(css_file) 的 GBK 编码问题
     from qt_material import build_stylesheet
+
     stylesheet = build_stylesheet(xml_name, invert_secondary=False, extra=extra, parent="theme")
     if stylesheet is None:
         return
 
-    # qt_material 只对 PySide6/PyQt6 注册 icon: 搜索路径；
-    # PyQt5 下 GUI=False，需要手动注册，否则 Qt 无法解析样式表中的 icon:/ 引用
-    from PyQt5.QtCore import QDir
-    QDir.addSearchPath("icon", str(Path.home() / ".qt_material" / "theme"))
+    # 注：qt-material 在 PySide6 下自动注册 icon: 搜索路径（PyQt5 遗留的手动注册已删除）
 
     # 手动追加自定义 CSS
     custom_css = get_custom_css(theme_name)

@@ -34,7 +34,7 @@ _DEFAULT_MODEL_DIR = DEFAULT_ASR_MODEL_DIR
 
 # ── 音频分片默认参数 ──
 _ASR_CHUNK_DURATION = 300  # 每片长度（秒），默认 5 分钟
-_ASR_CHUNK_OVERLAP = 2.0   # 片间重叠（秒），避免切断单词
+_ASR_CHUNK_OVERLAP = 2.0  # 片间重叠（秒），避免切断单词
 
 
 def scan_local_asr_models(model_dir: str = "") -> list[str]:
@@ -65,7 +65,7 @@ def scan_local_asr_models(model_dir: str = "") -> list[str]:
     return models
 
 
-from core.config_manager import _load_json_with_comments
+from core.config_manager import atomic_write_json, load_json_with_comments
 
 # ── 不在模块级别加载任何 torch/cuda DLL ──
 # 子进程 server 有自己隔离的 DLL 环境
@@ -99,7 +99,7 @@ def load_asr_config() -> dict:
     p = CONFIG_DIR / "asr_engines.json"
     if p.exists():
         try:
-            cfg = _load_json_with_comments(p)
+            cfg = load_json_with_comments(p)
             from core.config_schema import validate_config
             from core.config_schemas import ASR_ENGINES_SCHEMA
 
@@ -142,6 +142,10 @@ class BaseASREngine(ABC):
     @abstractmethod
     def warm_up(self): ...
 
+    def close(self):
+        """释放引擎全部资源（P0-T1：统一关闭接口，幂等）。"""
+        pass
+
 
 class WhisperXEngine(BaseASREngine):
     """子进程隔离版 ASR 引擎。
@@ -178,6 +182,10 @@ class WhisperXEngine(BaseASREngine):
         self._hw_accel = True
         self._warmup_thread = None
         self._stop_event = threading.Event()  # 用于中断 warm_up
+        # P0-T3：子进程 stderr 排空（环形缓冲最后 50 行 + ready 事件）
+        self._stderr_lines: list[str] = []
+        self._stderr_lock = threading.Lock()
+        self._ready_evt = threading.Event()
         atexit.register(self._stop_server)
 
     @staticmethod
@@ -219,11 +227,10 @@ class WhisperXEngine(BaseASREngine):
         """将当前 device/compute_type 写回 asr_engines.json。"""
         cfg_path = CONFIG_DIR / "asr_engines.json"
         try:
-            cfg = _load_json_with_comments(cfg_path) if cfg_path.exists() else {}
+            cfg = load_json_with_comments(cfg_path) if cfg_path.exists() else {}
             cfg["device"] = self._device
             cfg["compute_type"] = self._compute_type
-            with open(cfg_path, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            atomic_write_json(cfg_path, cfg)
         except Exception as e:
             logger.warning("保存 ASR device 配置失败: %s", e)
 
@@ -265,6 +272,11 @@ class WhisperXEngine(BaseASREngine):
             except Exception:
                 pass
             self._stream_proc = None
+
+    def close(self):
+        """完整释放（P0-T1：统一接口，复用 _stop_server）。"""
+        self._stop_server()
+        self._subproc = None
 
     def _send_request(self, req: dict, timeout: float = 300.0) -> dict:
         """发送请求并等待响应（基于 QProcess，无手动线程）。"""
@@ -317,33 +329,66 @@ class WhisperXEngine(BaseASREngine):
         _ASR_SERVER = str(BASE_DIR / "core" / "asr_server.py")
         _CONFIG_PATH = str(CONFIG_DIR / "asr_engines.json")
         _PYTHON = sys.executable
-        _cmd = [_PYTHON, _ASR_SERVER, "--config", _CONFIG_PATH,
-                "--device", self._device, "--compute-type", self._compute_type]
+        _cmd = [
+            _PYTHON,
+            _ASR_SERVER,
+            "--config",
+            _CONFIG_PATH,
+            "--device",
+            self._device,
+            "--compute-type",
+            self._compute_type,
+        ]
         _env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 
         proc = subprocess.Popen(
-            _cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, encoding="utf-8",
-            errors="replace", bufsize=1, env=_env)
+            _cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=_env,
+        )
 
-        # 等待 ready
+        # P0-T3：启动排空线程持续消费 stderr——转写阶段父进程不读 stderr，
+        # 裸 Popen + 不消费会让管道写满导致子进程阻塞、readline 永久挂死
+        self._ready_evt.clear()
+        self._startup_error = [""]
+
+        def _drain(p):
+            assert p.stderr is not None
+            for line in p.stderr:  # EOF（进程退出/管道关闭）自然结束
+                with self._stderr_lock:
+                    self._stderr_lines.append(line.rstrip())
+                    if len(self._stderr_lines) > 50:
+                        self._stderr_lines.pop(0)
+                if "ready" in line:
+                    self._ready_evt.set()
+                if "error" in line.lower() and "failed" in line.lower() and not self._startup_error[0]:
+                    self._startup_error[0] = line.rstrip()[:200]
+
+        threading.Thread(target=_drain, args=(proc,), daemon=True).start()
+
+        # 等待 ready（非阻塞轮询，deadline / 退出 / 中断检查始终有效）
         deadline = time.time() + 120
         while time.time() < deadline:
-            if proc.poll() is not None:
-                logger.error("ASR 子进程提前退出 (code=%d)", proc.poll())
-                return None
-            line = proc.stderr.readline()
-            if not line:
-                time.sleep(0.1)
-                continue
-            if "ready" in line:
-                self._stream_proc = proc
-                return proc
-            if "error" in line.lower() and "failed" in line.lower():
-                logger.error("ASR 子进程启动失败: %s", line.rstrip()[:200])
+            if self._stop_event.is_set():
+                logger.debug("ASR 子进程启动被中断")
                 proc.kill()
                 return None
-        logger.error("ASR 子进程启动超时")
+            if proc.poll() is not None:
+                err = "\n".join(self._stderr_lines[-10:])[-300:]
+                logger.error("ASR 子进程提前退出 (code=%d): %s", proc.poll(), err)
+                return None
+            if self._ready_evt.is_set():
+                self._stream_proc = proc
+                return proc
+            time.sleep(0.1)
+        err = "\n".join(self._stderr_lines[-10:])[-300:]
+        logger.error("ASR 子进程启动超时: %s", err)
         proc.kill()
         return None
 
@@ -390,7 +435,9 @@ class WhisperXEngine(BaseASREngine):
                     return
 
                 if proc.poll() is not None:
-                    err = f"ASR 子进程意外退出 (code={proc.poll()})"
+                    with self._stderr_lock:
+                        tail = "\n".join(self._stderr_lines[-20:])[-300:]
+                    err = f"ASR 子进程意外退出 (code={proc.poll()}): {tail}"
                     logger.error(err)
                     if error_holder is not None:
                         error_holder[0] = err
@@ -426,12 +473,14 @@ class WhisperXEngine(BaseASREngine):
                     return
 
             # 🔥 超时（或 pipe 意外关闭）→ 立即 kill 子进程防止腐败
-            logger.warning("ASR 流式超时 (300s) 或 pipe 关闭，清理子进程")
+            with self._stderr_lock:
+                tail = "\n".join(self._stderr_lines[-20:])[-300:]
+            logger.warning("ASR 流式超时 (300s) 或 pipe 关闭，清理子进程: %s", tail)
             if error_holder is not None and error_holder[0] is None:
                 if proc.poll() is not None:
-                    error_holder[0] = f"ASR 子进程意外退出 (code={proc.poll()})"
+                    error_holder[0] = f"ASR 子进程意外退出 (code={proc.poll()}): {tail}"
                 else:
-                    error_holder[0] = "ASR request timeout after 300s"
+                    error_holder[0] = f"ASR request timeout after 300s: {tail}"
             self._stream_proc = None
             if proc.poll() is None:
                 try:
@@ -442,6 +491,7 @@ class WhisperXEngine(BaseASREngine):
 
         except Exception as e:
             import traceback
+
             logger.error("ASR transcribe_stream 异常: %s", e)
             traceback.print_exc()
             # 异常后清理子进程
@@ -587,8 +637,18 @@ class WhisperXEngine(BaseASREngine):
                     bufsize=1,
                     env=_env,
                 )
+                # P0-T3：排空线程收集 stderr 并检测 ready，主循环非阻塞轮询
+                # （原裸 readline 阻塞时 deadline/stop_event 检查永不执行）
+                ready_evt = threading.Event()
+
+                def _drain(p):
+                    assert p.stderr is not None
+                    for line in p.stderr:
+                        if "ready" in line:
+                            ready_evt.set()
+
+                threading.Thread(target=_drain, args=(proc,), daemon=True).start()
                 deadline = time.time() + 120
-                stderr_lines = []
                 while time.time() < deadline:
                     if self._stop_event.is_set():
                         logger.debug("ASR warm_up 被中断")
@@ -597,12 +657,7 @@ class WhisperXEngine(BaseASREngine):
                     if proc.poll() is not None:
                         logger.warning("ASR warm_up 子进程提前退出 (code=%d)", proc.poll())
                         return
-                    line = proc.stderr.readline()
-                    if not line:
-                        time.sleep(0.1)
-                        continue
-                    stderr_lines.append(line.rstrip())
-                    if "ready" in line:
+                    if ready_evt.is_set():
                         elapsed = time.time() - t0
                         logger.info("ASR warm_up 完成 (%.1fs)", elapsed)
                         try:
@@ -611,6 +666,7 @@ class WhisperXEngine(BaseASREngine):
                         except Exception:
                             proc.kill()
                         return
+                    time.sleep(0.1)
                 logger.warning("ASR warm_up 超时 (120s)")
                 proc.kill()
             except Exception as e:
@@ -708,9 +764,13 @@ def get_audio_duration(audio_path: str) -> float:
         return 0.0
     try:
         cmd = [
-            _FFPROBE, "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "csv=p=0",
+            _FFPROBE,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
             audio_path,
         ]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -752,8 +812,7 @@ def split_audio(
 
     stride = chunk_duration - overlap
     n_chunks = math.ceil(total_dur / stride)
-    logger.info("音频分片: 总时长=%.0fs, 每片=%ds, 重叠=%.1fs, 共%d片",
-                total_dur, chunk_duration, overlap, n_chunks)
+    logger.info("音频分片: 总时长=%.0fs, 每片=%ds, 重叠=%.1fs, 共%d片", total_dur, chunk_duration, overlap, n_chunks)
 
     for i in range(n_chunks):
         start = max(0.0, i * stride)
@@ -765,14 +824,23 @@ def split_audio(
 
         out_path = os.path.join(chunk_dir, f"{basename}_chunk{i:04d}.wav")
         cmd = [
-            _FFMPEG, "-v", "error",
-            "-i", audio_path,
-            "-ss", str(start),
-            "-to", str(end),
-            "-acodec", "pcm_s16le",
-            "-ar", "16000",
-            "-ac", "1",
-            "-y", out_path,
+            _FFMPEG,
+            "-v",
+            "error",
+            "-i",
+            audio_path,
+            "-ss",
+            str(start),
+            "-to",
+            str(end),
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-y",
+            out_path,
         ]
         try:
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
@@ -827,9 +895,9 @@ class ASREngineManager:
         """释放指定的 ASR 引擎（停止子进程并清理资源）。"""
         en = name or self._default_name
         eng = self._engines.pop(en, None)
-        if eng and hasattr(eng, "_stop_server"):
+        if eng:
             try:
-                eng._stop_server()
+                eng.close()  # P0-T1：统一关闭接口（含 _stop_event + 子进程清理）
                 logger.info("ASR 引擎已释放: %s", en)
             except Exception as e:
                 logger.debug("释放 ASR 引擎失败: %s", e)
@@ -837,14 +905,10 @@ class ASREngineManager:
     def release_all_engines(self):
         """释放所有 ASR 引擎。"""
         for eng in list(self._engines.values()):
-            # 先设置 stop_event 中断 warm_up，再停止服务器
-            if hasattr(eng, "_stop_event"):
-                eng._stop_event.set()
-            if hasattr(eng, "_stop_server"):
-                try:
-                    eng._stop_server()
-                except Exception as e:
-                    logger.debug("停止 ASR 引擎失败: %s", e)
+            try:
+                eng.close()  # P0-T1：统一关闭接口
+            except Exception as e:
+                logger.debug("停止 ASR 引擎失败: %s", e)
         self._engines.clear()
         logger.info("所有 ASR 引擎已释放")
 

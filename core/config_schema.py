@@ -12,8 +12,12 @@ logger = get_logger(__name__)
 def _validate_type(value: Any, expected: str, path: str) -> str | None:
     """验证值的类型，返回错误信息或 None。"""
     type_map = {
-        "str": str, "int": int, "float": float, "bool": bool,
-        "list": list, "dict": dict,
+        "str": str,
+        "int": int,
+        "float": float,
+        "bool": bool,
+        "list": list,
+        "dict": dict,
     }
     if expected not in type_map:
         return None
@@ -43,9 +47,9 @@ def _validate_value(value: Any, rule: dict, path: str) -> list[str]:
         errors.append(f"{path}: 值 {value!r} 不在允许范围 {rule['enum']}")
 
     # 数值范围
-    if "min" in rule and isinstance(value, (int, float)) and value < rule["min"]:
+    if "min" in rule and isinstance(value, int | float) and value < rule["min"]:
         errors.append(f"{path}: 值 {value} < 最小值 {rule['min']}")
-    if "max" in rule and isinstance(value, (int, float)) and value > rule["max"]:
+    if "max" in rule and isinstance(value, int | float) and value > rule["max"]:
         errors.append(f"{path}: 值 {value} > 最大值 {rule['max']}")
 
     return errors
@@ -124,6 +128,7 @@ def validate_config(data: dict, schema: dict, name: str = "") -> tuple[bool, lis
 def validate_config_file(path: Path, schema: dict) -> dict:
     """加载 JSON 文件并验证其结构。验证失败时返回空 dict。"""
     import json
+
     name = path.name if isinstance(path, Path) else str(path)
     try:
         with open(path, encoding="utf-8") as f:

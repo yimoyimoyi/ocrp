@@ -23,7 +23,7 @@ BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
 _CORE_DLL_DIR = os.path.dirname(os.path.abspath(__file__))
 
-from core.config_manager import _load_json_with_comments
+from core.config_manager import load_json_with_comments
 from core.llm_utils import ask_llm
 from core.logger import get_logger
 
@@ -34,7 +34,7 @@ def load_engines_config() -> dict:
     path = CONFIG_DIR / "ocr_engines.json"
     if path.exists():
         try:
-            cfg = _load_json_with_comments(path)
+            cfg = load_json_with_comments(path)
             from core.config_schema import validate_config
             from core.config_schemas import OCR_ENGINES_SCHEMA
 
@@ -208,6 +208,14 @@ class BaseOCREngine(ABC):
     def warm_up(self):
         pass
 
+    def close(self):
+        """释放引擎全部资源（子进程/共享内存/模型对象）。幂等，可重复调用。
+
+        P0-T1 修复：release_engine/release_all_engines 统一走此接口，
+        不再用 hasattr 探测私有方法（此前探测永不命中导致资源泄漏）。
+        """
+        pass
+
 
 # ═══════════════ PaddleOCR 本地引擎 ═══════════════
 class PaddleOCREngine(BaseOCREngine):
@@ -223,6 +231,10 @@ class PaddleOCREngine(BaseOCREngine):
         cfg = config.get("config", {})
         self._ocr = None
         self._init_lock = threading.Lock()
+        # P0-T2：识别互斥锁——多区域并行对同一实例并发 predict 非线程安全；
+        # 同时将子进程模式的"写共享内存→发送→读响应"锁成原子事务
+        self._infer_lock = threading.Lock()
+        self._req_id = 0  # 子进程请求递增 id（响应按 id 匹配）
         self._lang = cfg.get("lang", "ch")
         self._device = cfg.get("device") or ("gpu" if cfg.get("use_gpu") else "cpu")
         self._ocr_version = cfg.get("ocr_version") or None
@@ -321,6 +333,13 @@ class PaddleOCREngine(BaseOCREngine):
             self._shm_mgr.close()
             self._shm_mgr = None
 
+    def close(self):
+        """完整释放（P0-T1）：子进程 + 共享内存 + 进程内模型对象。"""
+        self._stop_server()
+        self._subproc = None
+        self._ocr = None
+        self._paddle_available = True  # 允许下次按新配置重新初始化
+
     def _check_process_alive(self):
         """检查子进程是否存活。"""
         if self._subproc and not self._subproc.is_running():
@@ -396,9 +415,11 @@ class PaddleOCREngine(BaseOCREngine):
     def recognize(self, image: np.ndarray, prompt: str | None = None) -> str | None:
         if not self._paddle_available:
             return ""
-        if self._use_subprocess:
-            return self._recognize_subprocess(image)
-        return self._recognize_in_process(image)
+        # P0-T2：引擎实例级锁串行化（PaddleOCR 单实例不可并发 predict）
+        with self._infer_lock:
+            if self._use_subprocess:
+                return self._recognize_subprocess(image)
+            return self._recognize_in_process(image)
 
     def _recognize_in_process(self, image: np.ndarray) -> str:
         """进程内直接调用 PaddleOCR，零 IPC（默认，最快）。"""
@@ -443,11 +464,15 @@ class PaddleOCREngine(BaseOCREngine):
                     return ""
             h, w = image.shape[:2]
             c = image.shape[2] if image.ndim == 3 else 1
+            # P0-T2：请求递增 id，响应按 id 匹配（双保险，防图像/响应错配）
+            self._req_id += 1
+            req_id = self._req_id
             # 写入共享内存（零 base64 编码开销）
             self._shm_mgr.write_array(image)
             self._subproc.send_json(
                 {
                     "cmd": "recognize",
+                    "id": req_id,
                     "shm_name": self._shm_mgr.name,
                     "width": w,
                     "height": h,
@@ -456,7 +481,7 @@ class PaddleOCREngine(BaseOCREngine):
                     "device": self._device,
                 }
             )
-            resp = self._subproc.read_json_response(timeout=60)
+            resp = self._subproc.read_json_response(timeout=60, request_id=req_id)
             if resp and resp.get("status") == "result":
                 self._last_confidence = resp.get("confidence", 0.0)
                 return resp.get("text", "")
@@ -495,6 +520,17 @@ class PaddleOCREngine(BaseOCREngine):
                         bufsize=1,
                         env={**os.environ, "PYTHONIOENCODING": "utf-8"},
                     )
+                    # P0-T3：排空线程收集 stderr 并检测 ready，主循环非阻塞轮询
+                    # （原裸 readline 阻塞时 deadline/stop_event 检查永不执行）
+                    ready_evt = threading.Event()
+
+                    def _drain(p):
+                        assert p.stderr is not None
+                        for line in p.stderr:
+                            if "ready" in line:
+                                ready_evt.set()
+
+                    threading.Thread(target=_drain, args=(proc,), daemon=True).start()
                     deadline = time.time() + 120
                     while time.time() < deadline:
                         if self._stop_event.is_set():
@@ -504,11 +540,7 @@ class PaddleOCREngine(BaseOCREngine):
                         if proc.poll() is not None:
                             logger.warning("OCR warm_up 子进程提前退出 (code=%d)", proc.poll())
                             return
-                        line = proc.stderr.readline()
-                        if not line:
-                            time.sleep(0.1)
-                            continue
-                        if "ready" in line:
+                        if ready_evt.is_set():
                             elapsed = time.time() - t0
                             logger.info("OCR warm_up 完成 (%.1fs)", elapsed)
                             try:
@@ -517,6 +549,7 @@ class PaddleOCREngine(BaseOCREngine):
                             except Exception:
                                 proc.kill()
                             return
+                        time.sleep(0.1)
                     logger.warning("OCR warm_up 超时 (120s)")
                     proc.kill()
                 except Exception as e:
@@ -717,8 +750,9 @@ class OCREngineManager:
         self._hw_accel_enabled: bool = False
 
     def reload_config(self):
+        # P0-T1 修复：先释放旧引擎（子进程/共享内存），再加载新配置
+        self.release_all_engines()
         self._config = load_engines_config()
-        self._engines.clear()
 
     def get_engine_names(self) -> list[str]:
         engines_cfg = self._config.get("engines", {})
@@ -783,21 +817,19 @@ class OCREngineManager:
         en = name or self._current_name
         eng = self._engines.pop(en, None)
         if eng:
-            if hasattr(eng, "close"):
-                try:
-                    eng.close()
-                except Exception as e:
-                    logger.debug("关闭 OCR 引擎失败: %s", e)
+            try:
+                eng.close()  # P0-T1：基类保证存在，不再 hasattr 探测
+            except Exception as e:
+                logger.debug("关闭 OCR 引擎失败: %s", e)
             logger.info("OCR 引擎已释放: %s", en)
 
     def release_all_engines(self):
         """释放所有 OCR 引擎。"""
         for eng in list(self._engines.values()):
-            if hasattr(eng, "close"):
-                try:
-                    eng.close()
-                except Exception as e:
-                    logger.debug("关闭 OCR 引擎失败: %s", e)
+            try:
+                eng.close()  # P0-T1：基类保证存在，不再 hasattr 探测
+            except Exception as e:
+                logger.debug("关闭 OCR 引擎失败: %s", e)
         self._engines.clear()
         logger.info("所有 OCR 引擎已释放")
 

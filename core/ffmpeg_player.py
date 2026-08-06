@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 
 import numpy as np
-from PyQt5.QtCore import QThread, pyqtSignal
+from PySide6.QtCore import QThread, Signal
 
 from core.ffmpeg_reader import _FFMPEG, _get_video_info
 from core.logger import get_logger
@@ -29,9 +29,9 @@ logger = get_logger(__name__)
 class _DecoderThread(QThread):
     """后台线程：持续从 FFmpeg stdout 读取 rawvideo 帧。"""
 
-    frame_ready = pyqtSignal(object, float)  # (np.ndarray BGR, timestamp_sec)
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
+    frame_ready = Signal(object, float)  # (np.ndarray BGR, timestamp_sec)
+    finished = Signal()
+    error = Signal(str)
 
     def __init__(self, path: str, hw_accel: bool = False, start_sec: float = 0.0, parent=None):
         super().__init__(parent)
@@ -105,13 +105,19 @@ class _DecoderThread(QThread):
         ss_args = ["-ss", f"{start_sec:.3f}"] if start_sec > 0.01 else []
 
         cmd = [
-            _FFMPEG, "-v", "error",
+            _FFMPEG,
+            "-v",
+            "error",
             *vcodec,
             *ss_args,
-            "-i", self._path,
-            "-f", "rawvideo",
-            "-pix_fmt", "bgr24",
-            "-vsync", "0",
+            "-i",
+            self._path,
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgr24",
+            "-vsync",
+            "0",
             "pipe:1",
         ]
 
@@ -178,8 +184,7 @@ class _DecoderThread(QThread):
                         raw.extend(chunk)
                     if len(raw) < frame_size:
                         break
-                    frame = np.frombuffer(bytes(raw), dtype=np.uint8).reshape(
-                        (self._height, self._width, 3))
+                    frame = np.frombuffer(bytes(raw), dtype=np.uint8).reshape((self._height, self._width, 3))
                 except Exception as e:
                     logger.warning("解码线程读取帧失败: %s", e)
                     break
@@ -306,8 +311,7 @@ class FFmpegPlayer:
 
     def set_speed(self, speed: float):
         """设置播放速度。"""
-        self._current_speed_idx = min(range(len(self.SPEEDS)),
-                                       key=lambda i: abs(self.SPEEDS[i] - speed))
+        self._current_speed_idx = min(range(len(self.SPEEDS)), key=lambda i: abs(self.SPEEDS[i] - speed))
         if self._decoder:
             self._decoder.set_speed(self.speed)
 

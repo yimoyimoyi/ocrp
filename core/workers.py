@@ -6,7 +6,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from PyQt5.QtCore import QObject, QThread, pyqtSignal
+from PySide6.QtCore import QObject, QThread, Signal
 
 from core.logger import get_logger
 
@@ -21,19 +21,19 @@ def _recognize_roi(engine, roi, prompt: str = "") -> str:
 class WorkerSignals(QObject):
     """工作线程信号集合。"""
 
-    started = pyqtSignal()
-    finished = pyqtSignal()
-    error = pyqtSignal(str)
-    result = pyqtSignal(object)
-    progress = pyqtSignal(int, int)
-    log = pyqtSignal(str)
+    started = Signal()
+    finished = Signal()
+    error = Signal(str)
+    result = Signal(object)
+    progress = Signal(int, int)
+    log = Signal(str)
 
 
 class OCRWorker(QThread):
     """单帧 OCR 识别线程。"""
 
-    result_ready = pyqtSignal(float, str, str, str, str)
-    ocr_error = pyqtSignal(float, str)
+    result_ready = Signal(float, str, str, str, str)
+    ocr_error = Signal(float, str)
 
     def __init__(self, engine, frame: np.ndarray, region: dict, timestamp: float, engine_name: str):
         super().__init__()
@@ -69,9 +69,9 @@ class OCRWorker(QThread):
 class AICorrectionWorker(QThread):
     """AI 纠错线程 —— 支持 API 文本纠错和本地引擎图像重识别。"""
 
-    correction_ready = pyqtSignal(int, str, str)
-    correction_failed = pyqtSignal(int, str)
-    correction_stream = pyqtSignal(int, str)  # row, partial_text (流式增量更新)
+    correction_ready = Signal(int, str, str)
+    correction_failed = Signal(int, str)
+    correction_stream = Signal(int, str)  # row, partial_text (流式增量更新)
 
     def __init__(
         self,
@@ -135,22 +135,20 @@ class AICorrectionWorker(QThread):
 class BatchCorrectionWorker(QThread):
     """批量 AI 纠错线程 —— 使用 correct_batch() 一次提交多条，保证顺序与完整性。"""
 
-    correction_ready = pyqtSignal(int, str, str)  # row, raw, corrected
-    batch_finished = pyqtSignal()  # 全部完成
-    batch_error = pyqtSignal(str)  # 错误信息
+    correction_ready = Signal(int, str, str)  # row, raw, corrected
+    batch_finished = Signal()  # 全部完成
+    batch_error = Signal(str)  # 错误信息
 
-    def __init__(self, corrector, texts: list, context_window: int = 3, max_retries: int = 3):
+    def __init__(self, corrector, texts: list, max_retries: int = 3):
         """
         Args:
             corrector: AICorrector 实例
             texts: list of (row_index, text)
-            context_window: 上下文窗口
             max_retries: 最大重试次数
         """
         super().__init__()
         self._corrector = corrector
         self._texts = list(texts)
-        self._context_window = context_window
         self._max_retries = max_retries
         self._stop_flag = threading.Event()
 
@@ -172,7 +170,6 @@ class BatchCorrectionWorker(QThread):
             # 调用批量纠错
             corrected_map = self._corrector.correct_batch(
                 self._texts,
-                context_window=self._context_window,
                 max_retries=self._max_retries,
                 stream_callback=stream_cb,
             )
@@ -203,9 +200,9 @@ class BatchCorrectionWorker(QThread):
 class BatchPolishWorker(QThread):
     """批量润色线程 —— 逐条调用 corrector.polish()。"""
 
-    polish_ready = pyqtSignal(int, str, str)  # (row, original, polished)
-    batch_finished = pyqtSignal()
-    batch_error = pyqtSignal(str)
+    polish_ready = Signal(int, str, str)  # (row, original, polished)
+    batch_finished = Signal()
+    batch_error = Signal(str)
 
     def __init__(self, corrector, items: list[tuple[int, str, str]]):
         """
@@ -249,11 +246,11 @@ class BatchPolishWorker(QThread):
 class VideoProcessWorker(QThread):
     """视频处理线程。"""
 
-    progress = pyqtSignal(int, int, int, str)
-    log = pyqtSignal(str)
-    result_item = pyqtSignal(float, str, str, str, str, float)
-    finished_all = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, int, str)
+    log = Signal(str)
+    result_item = Signal(float, str, str, str, str, float)
+    finished_all = Signal(list)
+    error = Signal(str)
 
     def __init__(
         self, frame_processor, video_path: str, engine_name: str, time_start: float = 0.0, time_end: float = 0.0
@@ -297,9 +294,9 @@ class VideoProcessWorker(QThread):
 class ImageProcessWorker(QThread):
     """单张图片 OCR 处理线程（用于图片直接 OCR 场景）。"""
 
-    result_item = pyqtSignal(float, str, str, str, str, float)
-    finished_all = pyqtSignal(list)
-    error = pyqtSignal(str)
+    result_item = Signal(float, str, str, str, str, float)
+    finished_all = Signal(list)
+    error = Signal(str)
 
     def __init__(self, engine_manager, frame: np.ndarray, regions: list, timestamp: float = 0.0):
         super().__init__()
@@ -377,12 +374,12 @@ class AudioProcessWorker(QThread):
     支持长音频分片（通过 transcribe_long），过程中通过 progress_percent 报告 0-100 进度。
     """
 
-    progress = pyqtSignal(str)  # 阶段描述
-    progress_percent = pyqtSignal(int)  # 0-100 进度（分片模式下平滑递增）
-    result_item = pyqtSignal(float, str, str, str, str, float)  # ts, t_str, rname, ename, raw, end_sec
-    log = pyqtSignal(str)
-    finished_all = pyqtSignal(list)  # 返回结果列表
-    error = pyqtSignal(str)
+    progress = Signal(str)  # 阶段描述
+    progress_percent = Signal(int)  # 0-100 进度（分片模式下平滑递增）
+    result_item = Signal(float, str, str, str, str, float)  # ts, t_str, rname, ename, raw, end_sec
+    log = Signal(str)
+    finished_all = Signal(list)  # 返回结果列表
+    error = Signal(str)
 
     def __init__(
         self,
@@ -529,13 +526,13 @@ class AudioProcessWorker(QThread):
 class BatchProcessWorker(QThread):
     """批量文件处理线程 —— 按相同区域依次处理多个文件，自动导出结果。"""
 
-    progress_file = pyqtSignal(str, int, int)  # current_file, index, total
-    progress_detail = pyqtSignal(int, int)  # cur_sec, total_sec
-    result_item = pyqtSignal(float, str, str, str, str, float)
-    log = pyqtSignal(str)
-    finished_one = pyqtSignal(str, list)  # file_path, results
-    finished_all = pyqtSignal()
-    error = pyqtSignal(str)
+    progress_file = Signal(str, int, int)  # current_file, index, total
+    progress_detail = Signal(int, int)  # cur_sec, total_sec
+    result_item = Signal(float, str, str, str, str, float)
+    log = Signal(str)
+    finished_one = Signal(str, list)  # file_path, results
+    finished_all = Signal()
+    error = Signal(str)
 
     def __init__(
         self,
@@ -544,7 +541,6 @@ class BatchProcessWorker(QThread):
         regions: list,
         mode_params: dict,
         output_dir: str,
-        corrector=None,
         hw_accel: bool = False,
     ):
         super().__init__()
@@ -553,7 +549,6 @@ class BatchProcessWorker(QThread):
         self._regions = list(regions)
         self._mode_params = dict(mode_params)
         self._output_dir = output_dir
-        self._corrector = corrector
         self._hw_accel = hw_accel
         self._stop_flag = threading.Event()
 
@@ -593,11 +588,20 @@ class BatchProcessWorker(QThread):
             fp = FrameProcessor(engine_manager=self._engine_mgr, regions=self._regions, hw_accel=self._hw_accel)
             mp = self._mode_params
             if mp:
+                # 与 ocr_flow._do_ocr_pass 同步的参数集（设置同步 R6 修复：
+                # 此前缺 _subtitle_mode/_r_* 导致批量始终走默认流式）
+                fp._subtitle_mode = mp.get("subtitle_mode", "stream")
                 fp._sentinel_enabled = mp.get("sentinel_enabled", True)
                 fp._s_drop_ratio = mp.get("s_drop_ratio", 0.5)
                 fp._s_min_text_len = mp.get("s_min_text_len", 2)
                 fp._s_buffer_size = mp.get("s_buffer_size", 8)
                 fp._s_sim_threshold = mp.get("s_sim_threshold", 0.85)
+                fp._s_ocr_version = mp.get("s_ocr_version", "")
+                fp._r_dedup = mp.get("r_dedup", True)
+                fp._r_sim_threshold = mp.get("r_sim_threshold", 0.9)
+                fp._r_buffer_size = mp.get("r_buffer_size", 5)
+                fp._r_min_text_len = mp.get("r_min_text_len", 2)
+                fp._r_interval = mp.get("r_interval", 2.0)
                 fp._frame_interval = mp.get("frame_interval", 0.1)
 
             fp._stop_flag.clear()
@@ -715,8 +719,8 @@ class BatchProcessWorker(QThread):
 class VideoLoadWorker(QThread):
     """后台加载视频：ffprobe + 首帧读取 + 音频提取并行执行。"""
 
-    loaded = pyqtSignal(object, dict)  # (frame: np.ndarray, info: dict)
-    error = pyqtSignal(str)
+    loaded = Signal(object, dict)  # (frame: np.ndarray, info: dict)
+    error = Signal(str)
 
     def __init__(self, path: str, hw_accel: bool = False):
         super().__init__()
@@ -807,8 +811,8 @@ class VideoLoadWorker(QThread):
 class HttpCheckWorker(QThread):
     """后台 HTTP 请求：引擎可用性检测 / 模型列表获取。"""
 
-    result = pyqtSignal(object)  # dict: {"type": "check"|"models", "data": ...}
-    error = pyqtSignal(str)
+    result = Signal(object)  # dict: {"type": "check"|"models", "data": ...}
+    error = Signal(str)
 
     def __init__(self, engine, action: str):
         """
@@ -835,8 +839,8 @@ class HttpCheckWorker(QThread):
 class EnvExtractWorker(QThread):
     """后台提取全文环境上下文（HTTP 调用）。"""
 
-    finished = pyqtSignal(str)  # 提取的环境文本
-    error = pyqtSignal(str)
+    finished = Signal(str)  # 提取的环境文本
+    error = Signal(str)
 
     def __init__(self, corrector, all_texts: list):
         super().__init__()

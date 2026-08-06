@@ -6,12 +6,12 @@ import re
 from core.ai_correction import _MD_FENCE, ID_PATTERN, ID_TAG, TIME_MARKER
 
 # 宽松模式回退：匹配 "数字. 文本" 或 "数字) 文本"
-_LOOSE = re.compile(r'^(\d+)\s*[.)\:：]\s*(.+)', re.MULTILINE)
+_LOOSE = re.compile(r"^(\d+)\s*[.)\:：]\s*(.+)", re.MULTILINE)
 
 
 def _parse_batch_result(text: str) -> dict:
     """从 AI 返回文本中解析 [ID:idx] 标记的内容（从 AICorrector._parse_batch_result 提取）。"""
-    cleaned = _MD_FENCE.sub('', text).strip()
+    cleaned = _MD_FENCE.sub("", text).strip()
     result = {}
     for match in ID_PATTERN.finditer(cleaned):
         try:
@@ -36,9 +36,9 @@ def _parse_batch_result(text: str) -> dict:
 
 def _clean_content(text: str) -> str:
     """去除 AI 可能附带的时间标记、[ID:n] 标记和 markdown 代码块。"""
-    text = _MD_FENCE.sub('', text)
-    text = TIME_MARKER.sub('', text)
-    text = ID_TAG.sub('', text)
+    text = _MD_FENCE.sub("", text)
+    text = TIME_MARKER.sub("", text)
+    text = ID_TAG.sub("", text)
     return text.strip()
 
 

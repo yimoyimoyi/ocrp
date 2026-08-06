@@ -60,8 +60,12 @@ if sys.platform == "win32":
         if os.path.isdir(_cudnn8):
             os.add_dll_directory(_cudnn8)
             print(f"[ASR_SERVER] add_dll_directory (legacy): {_cudnn8}", file=sys.stderr, flush=True)
-            for _name in ("cudnn_ops_infer64_8.dll", "cudnn_cnn_infer64_8.dll",
-                           "cudnn_adv_infer64_8.dll", "cudnn64_8.dll"):
+            for _name in (
+                "cudnn_ops_infer64_8.dll",
+                "cudnn_cnn_infer64_8.dll",
+                "cudnn_adv_infer64_8.dll",
+                "cudnn64_8.dll",
+            ):
                 _fp = os.path.join(_cudnn8, _name)
                 if os.path.exists(_fp):
                     try:
@@ -69,11 +73,13 @@ if sys.platform == "win32":
                     except Exception as e:
                         print(f"[ASR_SERVER] CDLL 加载失败 ({_fp}): {e}", file=sys.stderr, flush=True)
 
+
 # HuggingFace 源测速（选择最快的源）
 def _test_hf_endpoint(url: str, timeout: float = 3.0) -> float:
     """测试 HuggingFace 端点响应时间，返回秒数（失败返回 inf）。"""
     import time
     import urllib.request
+
     try:
         start = time.monotonic()
         req = urllib.request.Request(url, method="HEAD")
@@ -101,9 +107,10 @@ def _select_fastest_hf_endpoint() -> str:
     print(f"[ASR_SERVER] Selected HF endpoint: {fastest}", file=sys.stderr, flush=True)
     return fastest
 
+
 from pathlib import Path
 
-from core.config_manager import _load_json_with_comments
+from core.config_manager import load_json_with_comments
 
 _CONFIG_DIR = os.path.join(BASE_DIR, "config")
 
@@ -132,7 +139,7 @@ def _load_config(config_path: str = None) -> dict:
     """加载 ASR 配置。"""
     if config_path and os.path.exists(config_path):
         try:
-            cfg = _load_json_with_comments(Path(config_path))
+            cfg = load_json_with_comments(Path(config_path))
             for k, v in _DEFAULT_CONFIG.items():
                 cfg.setdefault(k, v)
             return cfg
@@ -228,6 +235,7 @@ def _check_cudnn8_gpu_ready() -> bool:
             if not found:
                 try:
                     import importlib.util
+
                     _spec = importlib.util.find_spec("ctranslate2")
                     if _spec and _spec.origin:
                         pkg_dir = os.path.dirname(_spec.origin)
@@ -276,6 +284,7 @@ def _check_cudnn8_gpu_ready() -> bool:
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=None, help="Path to ASR config JSON")
     parser.add_argument("--device", default=None, help="Override device (cpu/cuda)")
@@ -322,7 +331,7 @@ def main():
     # ── cuDNN 8 预检（GPU 模式）──
     # ctranslate2 < 5 的 CUDA 推理依赖 cuDNN 8 DLL。
     # 如果缺失，直接回退到 CPU 模式加载模型，避免 model.transcribe() 硬崩溃。
-    _using_gpu = (device == "cuda")
+    _using_gpu = device == "cuda"
     if _using_gpu and not _check_cudnn8_gpu_ready():
         print("[ASR_SERVER] ⚠ cuDNN 8 不可用，自动回退 CPU 模式", file=sys.stderr, flush=True)
         device = "cpu"
@@ -341,9 +350,14 @@ def main():
         else:
             model_arg = model_size
             dl_root = model_dir if model_dir and os.path.isdir(model_dir) else None
-            print(f"[ASR_SERVER] model: {model_size} (downloading from {os.environ.get('HF_ENDPOINT', 'default')})", file=sys.stderr, flush=True)
+            print(
+                f"[ASR_SERVER] model: {model_size} (downloading from {os.environ.get('HF_ENDPOINT', 'default')})",
+                file=sys.stderr,
+                flush=True,
+            )
 
         from faster_whisper import WhisperModel
+
         model = WhisperModel(
             model_arg,
             device=device,
@@ -356,6 +370,7 @@ def main():
         try:
             print("[ASR_SERVER] fallback to CPU...", file=sys.stderr, flush=True)
             from faster_whisper import WhisperModel
+
             model = WhisperModel(
                 model_arg,
                 device="cpu",
@@ -420,8 +435,11 @@ def main():
 
             def _do_transcribe(_model):
                 import time as _t
+
                 t0 = _t.time()
-                _log_stderr(f"[ASR_SERVER] >>> model.transcribe() START: audio={os.path.basename(audio_path)} lang={lang}")
+                _log_stderr(
+                    f"[ASR_SERVER] >>> model.transcribe() START: audio={os.path.basename(audio_path)} lang={lang}"
+                )
                 segs, inf = _model.transcribe(
                     audio_path,
                     language=lang,
@@ -448,20 +466,29 @@ def main():
                         }
                         res.append(seg_obj)
                         # 🔥 逐段发送，UI 实时更新
-                        _send({"status": "segment",
-                               "start": s.start,
-                               "end": s.end,
-                               "text": s.text.strip()})
+                        _send({"status": "segment", "start": s.start, "end": s.end, "text": s.text.strip()})
                 elapsed = _t.time() - t0
-                print(f"[ASR_SERVER] transcribe done ({elapsed:.1f}s): {len(res)}/{total} segments, lang={inf.language}", file=sys.stderr, flush=True)
+                print(
+                    f"[ASR_SERVER] transcribe done ({elapsed:.1f}s): {len(res)}/{total} segments, lang={inf.language}",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 if total > 0 and len(res) == 0:
-                    print(f"[ASR_SERVER] WARNING: all {total} segments had empty text! Check no_speech_threshold (current={nst})", file=sys.stderr, flush=True)
+                    print(
+                        f"[ASR_SERVER] WARNING: all {total} segments had empty text! Check no_speech_threshold (current={nst})",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                 # 最终确认帧
-                _send({"status": "done",
-                       "detected_lang": inf.language,
-                       "lang_prob": inf.language_probability,
-                       "total_segments": total,
-                       "valid_segments": len(res)})
+                _send(
+                    {
+                        "status": "done",
+                        "detected_lang": inf.language,
+                        "lang_prob": inf.language_probability,
+                        "total_segments": total,
+                        "valid_segments": len(res),
+                    }
+                )
 
             # ── 尝试 GPU / 已加载模型 ──
             try:
@@ -472,8 +499,7 @@ def main():
                 print(f"[ASR_SERVER] transcribe FAILED: {err_msg[:200]}", file=sys.stderr, flush=True)
 
                 # GPU OOM 等运行时错误 → 回退 CPU
-                is_gpu_error = any(kw in err_msg.lower() for kw in
-                    ("cuda", "cublas", "gpu", "device", "out of memory"))
+                is_gpu_error = any(kw in err_msg.lower() for kw in ("cuda", "cublas", "gpu", "device", "out of memory"))
 
                 if not is_gpu_error or not _using_gpu:
                     _send({"status": "error", "message": err_msg})
@@ -483,6 +509,7 @@ def main():
             print("[ASR_SERVER] falling back to CPU...", file=sys.stderr, flush=True)
             try:
                 from faster_whisper import WhisperModel as _WhisperModel
+
                 cpu_model = _WhisperModel(
                     model_arg,
                     device="cpu",

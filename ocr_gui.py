@@ -17,27 +17,6 @@ warnings.filterwarnings(
     category=UserWarning,
     module="requests",
 )
-# qt-material 的 QFontDatabase 警告（PyQt5 兼容性问题，无害）
-warnings.filterwarnings(
-    "ignore",
-    message=".*QFontDatabase.*",
-    category=UserWarning,
-)
-
-# qt-material 的 logging 警告（PyQt5 兼容性问题，无害）
-import logging
-
-
-class _QtMaterialFilter(logging.Filter):
-    """过滤 qt-material 的无害警告。"""
-    _SUPPRESSED = {"qt_material must be imported after", "QFontDatabase", "Could not parse"}
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        return not any(s in msg for s in self._SUPPRESSED)
-
-
-logging.getLogger().addFilter(_QtMaterialFilter())
 
 # ── Windows 控制台 UTF-8 编码 ──
 if sys.platform == "win32":
@@ -109,7 +88,7 @@ if sys.platform == "win32":
 # 屏蔽 PaddleOCR 的联网检查
 os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
 
-# ── 预加载 torch —— 必须在 PyQt5 之前，否则 Qt DLL 会破坏 torch 的 DLL 搜索环境 ──
+# ── 预加载 torch —— 必须在 Qt 绑定导入之前，否则 Qt DLL 会破坏 torch 的 DLL 搜索环境 ──
 try:
     import torch  # noqa: F401 预加载，防止 Qt DLL 干扰
     _torch_loaded = True
@@ -123,9 +102,9 @@ def _verify_startup_environment():
     """验证关键环境约束，防止 DLL/导入回归问题。"""
     issues = []
 
-    # 1) torch 必须在 PyQt5 之前预加载
+    # 1) torch 必须在 Qt 绑定之前预加载
     if not _torch_loaded:
-        issues.append("torch 预加载失败：PyQt5 导入可能导致 c10.dll 初始化失败 (WinError 1114)")
+        issues.append("torch 预加载失败：Qt 绑定导入可能导致 c10.dll 初始化失败 (WinError 1114)")
 
     # 2) 检查 torch CUDA 状态
     try:
@@ -149,7 +128,7 @@ def _verify_startup_environment():
     return len(issues) == 0
 
 
-from PyQt5.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from core.i18n import LanguageManager
 from core.logger import get_logger
@@ -199,9 +178,7 @@ def main():
     logger.info("ORCP 启动中...")
     logger.info("Python %s | 平台 %s", sys.version.split()[0], sys.platform)
 
-    # Windows 上强制 QMediaPlayer 使用 WMF 后端，避免 DirectShow 解码器缺失
-    if sys.platform == "win32":
-        os.environ["QT_MULTIMEDIA_PREFERRED_PLUGINS"] = "wmf"
+    # 注：Qt6 多媒体后端为 FFmpeg，无需 WMF/DirectShow 环境变量（已移除）
     app = QApplication(sys.argv)
     app.setApplicationName("ORCP")
     app.setOrganizationName("ORCP")
@@ -217,7 +194,7 @@ def main():
     window.setWindowOpacity(0.0)
     window.show()
 
-    from PyQt5.QtCore import QEasingCurve, QPropertyAnimation
+    from PySide6.QtCore import QEasingCurve, QPropertyAnimation
     _fade = QPropertyAnimation(window, b"windowOpacity")
     _fade.setDuration(150)
     _fade.setStartValue(0.0)
@@ -228,7 +205,7 @@ def main():
     _verify_startup_environment()
 
     logger.info("主窗口已显示，进入事件循环")
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

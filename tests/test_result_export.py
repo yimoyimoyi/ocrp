@@ -6,12 +6,30 @@ import json
 def _sample_results():
     """返回一组测试用 OCR 结果。"""
     return [
-        {"time_sec": 0.0, "time": "00:00", "region": "字幕", "engine": "paddleocr",
-         "raw": "你好世界", "corrected": "", "confidence": 0.95, "end_sec": 2.0,
-         "speaker": "NONE", "content": "你好世界"},
-        {"time_sec": 2.0, "time": "00:02", "region": "字幕", "engine": "paddleocr",
-         "raw": "第二行文本", "corrected": "", "confidence": 0.88, "end_sec": 4.0,
-         "speaker": "NONE", "content": "第二行文本"},
+        {
+            "time_sec": 0.0,
+            "time": "00:00",
+            "region": "字幕",
+            "engine": "paddleocr",
+            "raw": "你好世界",
+            "corrected": "",
+            "confidence": 0.95,
+            "end_sec": 2.0,
+            "speaker": "NONE",
+            "content": "你好世界",
+        },
+        {
+            "time_sec": 2.0,
+            "time": "00:02",
+            "region": "字幕",
+            "engine": "paddleocr",
+            "raw": "第二行文本",
+            "corrected": "",
+            "confidence": 0.88,
+            "end_sec": 4.0,
+            "speaker": "NONE",
+            "content": "第二行文本",
+        },
     ]
 
 

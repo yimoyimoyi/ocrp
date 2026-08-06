@@ -7,7 +7,6 @@ class TestFilterManager:
     """测试 FilterManager 关键词管理。"""
 
     def test_init_loads_keywords(self, tmp_path):
-
         # Write temp config
         data = {"keywords": ["test1", "test2"]}
         p = tmp_path / "filters.json"
@@ -15,6 +14,7 @@ class TestFilterManager:
 
         # Patch path and create
         import core.filter_manager as fm
+
         old_path = fm.FILTERS_PATH
         fm.FILTERS_PATH = p
         try:

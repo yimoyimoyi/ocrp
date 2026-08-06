@@ -59,7 +59,7 @@ class TestValidateConfig:
                     "type": "dict",
                     "properties": {
                         "width": {"type": "int", "min": 100},
-                    }
+                    },
                 }
             }
         }
@@ -80,7 +80,7 @@ class TestValidateConfig:
                         "properties": {
                             "type": {"type": "str", "enum": ["local", "api"]},
                         }
-                    }
+                    },
                 }
             }
         }
@@ -139,8 +139,11 @@ class TestSchemaRegistry:
         from core.config_schemas import ASR_ENGINES_SCHEMA
 
         cfg = {
-            "engine": "whisperx", "model_size": "large-v3", "device": "cpu",
-            "compute_type": "int8", "language": "zh",
+            "engine": "whisperx",
+            "model_size": "large-v3",
+            "device": "cpu",
+            "compute_type": "int8",
+            "language": "zh",
         }
         ok, _ = validate_config(cfg, ASR_ENGINES_SCHEMA)
         assert ok
@@ -158,9 +161,7 @@ class TestSchemaRegistry:
         from core.config_schemas import API_PRESETS_SCHEMA
 
         cfg = {
-            "presets": {
-                "default": {"api_key": "", "base_url": "http://localhost", "model": "", "timeout": 30}
-            },
+            "presets": {"default": {"api_key": "", "base_url": "http://localhost", "model": "", "timeout": 30}},
             "default_preset": "default",
         }
         ok, _ = validate_config(cfg, API_PRESETS_SCHEMA)

@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -28,7 +29,7 @@ DEFAULT_SETTINGS = {
 }
 
 
-def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
+def load_json_with_comments(filepath: Union[str, Path]) -> Any:
     """读取 JSON 文件，自动去除 // 行注释和 /* */ 块注释后解析。
 
     使用状态机正确处理字符串内的 // 和 /*（含转义引号）。
@@ -43,14 +44,14 @@ def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
     while i < len(text):
         ch = text[i]
         if in_block_comment:
-            if ch == '*' and i + 1 < len(text) and text[i + 1] == '/':
+            if ch == "*" and i + 1 < len(text) and text[i + 1] == "/":
                 in_block_comment = False
                 i += 2
             else:
                 i += 1
             continue
         if in_string:
-            if ch == '\\':
+            if ch == "\\":
                 out.append(ch)
                 if i + 1 < len(text):
                     out.append(text[i + 1])
@@ -69,22 +70,22 @@ def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
                 in_string = True
                 out.append(ch)
                 i += 1
-            elif ch == '/' and i + 1 < len(text) and text[i + 1] == '*':
+            elif ch == "/" and i + 1 < len(text) and text[i + 1] == "*":
                 in_block_comment = True
                 i += 2
             else:
                 out.append(ch)
                 i += 1
-    text = ''.join(out)
+    text = "".join(out)
     # 第二步：去除行注释（状态机，正确处理字符串内的 //）
     lines: list[str] = []
-    for line in text.split('\n'):
+    for line in text.split("\n"):
         in_string = False
         j = 0
         while j < len(line):
             ch = line[j]
             if in_string:
-                if ch == '\\':
+                if ch == "\\":
                     j += 2
                 elif ch == '"':
                     in_string = False
@@ -94,34 +95,13 @@ def _load_json_with_comments(filepath: Union[str, Path]) -> Any:
             elif ch == '"':
                 in_string = True
                 j += 1
-            elif ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
+            elif ch == "/" and j + 1 < len(line) and line[j + 1] == "/":
                 line = line[:j]
                 break
             else:
                 j += 1
         lines.append(line)
-    return json.loads('\n'.join(lines))
-
-
-def load_key(key: str) -> Any:
-    """支持点号分隔的多级键访问 settings.json。
-
-    示例: load_key("api.key") → settings["api"]["key"]
-          load_key("mode_params.corr_enabled") → settings["mode_params"]["corr_enabled"]
-
-    注意：该函数每次调用都会重新读取文件，适合低频调用场景
-    （UI 初始化、预设管理器、WorkflowManager 初始化）。
-    高频调用应使用 ConfigManager 实例的 get() 方法。
-    """
-    keys = key.split(".")
-    data = _load_json_with_comments(CONFIG_DIR / "settings.json")
-    value = data
-    for k in keys:
-        if isinstance(value, dict) and k in value:
-            value = value[k]
-        else:
-            raise KeyError(f"配置键 '{key}' 不存在（中断于 '{k}'）")
-    return value
+    return json.loads("\n".join(lines))
 
 
 # mode_params 默认值，新增或改名时在此维护
@@ -150,13 +130,26 @@ MODE_PARAMS_DEFAULTS = {
     "post_min_text_len": 2,
     "corr_enabled": False,
     "corr_batch_size": 5,
-    "corr_context_window": 3,
     "corr_retry": 2,
     "corr_prompt": "",
     "corr_extract_env": False,
     "corr_system_prompt": "",
     "corr_output_format": "",
     "corr_preset": "",
+    # ── 下列键由 settings_dialog._FIELDS / workflow 消费，统一在此注册默认值 ──
+    "corr_translate": False,
+    "corr_stream": False,
+    "corr_json": False,
+    "corr_concurrency": 4,
+    "corr_rpm": 30,
+    "seg_time_gap": 3.0,
+    "corr_polish": False,
+    "corr_use_template": False,
+    "corr_summary_prompt": "",  # 运行时环境提示词，保存时被 _save_mode_params 排除
+    "asr_enabled": False,  # 完整流程下由 ocr_flow 强制 True，此处仅作显式默认
+    "srt_export_mode": "仅纠正结果",
+    "post_conf_enabled": False,
+    "asr_model_dir": "models/asr",
     "asr_model_size": "large-v3",
     "asr_model_path": "",
     "asr_language": "zh",
@@ -188,43 +181,101 @@ _MODE_PARAMS_RENAME_MAP = {
 _CONFIG_TEMPLATES: dict[str, dict] = {
     "ocr_engines.json": {
         "engines": {
-            "paddleocr": {"type": "local", "enabled": True, "config": {
-                "lang": "ch", "use_angle_cls": False, "use_gpu": False,
-                "show_log": False, "fast_mode": True, "rec_batch_num": 6,
-                "api_key": "", "base_url": "", "model": "", "timeout": 30,
-                "device": "gpu", "ocr_version": "PP-OCRv4",
-            }},
-            "openai_vision": {"type": "api", "enabled": True, "config": {
-                "api_key": "sk-xxx", "base_url": "https://api.deepseek.com/v1",
-                "model": "gpt-4o", "prompt_template": "请识别图片中的文字，只返回文字内容",
-                "timeout": 30, "retry": 2, "device": "cpu", "ocr_version": None, "use_angle_cls": True,
-            }},
-            "ollama_vision": {"type": "api", "enabled": True, "config": {
-                "base_url": "http://localhost:11434", "model": "llama3.2-vision:11b",
-                "prompt_template": "请识别图片中的文字，只返回文字内容", "timeout": 60, "retry": 2,
-            }},
-            "llamacpp": {"type": "api", "enabled": True, "config": {
-                "base_url": "http://127.0.0.1:8080", "api_key": "not-needed", "model": "",
-                "prompt_template": "请识别图片中的文字，只返回文字内容", "timeout": 60, "retry": 2,
-            }},
+            "paddleocr": {
+                "type": "local",
+                "enabled": True,
+                "config": {
+                    "lang": "ch",
+                    "use_angle_cls": False,
+                    "use_gpu": False,
+                    "show_log": False,
+                    "fast_mode": True,
+                    "rec_batch_num": 6,
+                    "api_key": "",
+                    "base_url": "",
+                    "model": "",
+                    "timeout": 30,
+                    "device": "gpu",
+                    "ocr_version": "PP-OCRv4",
+                },
+            },
+            "openai_vision": {
+                "type": "api",
+                "enabled": True,
+                "config": {
+                    "api_key": "sk-xxx",
+                    "base_url": "https://api.deepseek.com/v1",
+                    "model": "gpt-4o",
+                    "prompt_template": "请识别图片中的文字，只返回文字内容",
+                    "timeout": 30,
+                    "retry": 2,
+                    "device": "cpu",
+                    "ocr_version": None,
+                    "use_angle_cls": True,
+                },
+            },
+            "ollama_vision": {
+                "type": "api",
+                "enabled": True,
+                "config": {
+                    "base_url": "http://localhost:11434",
+                    "model": "llama3.2-vision:11b",
+                    "prompt_template": "请识别图片中的文字，只返回文字内容",
+                    "timeout": 60,
+                    "retry": 2,
+                },
+            },
+            "llamacpp": {
+                "type": "api",
+                "enabled": True,
+                "config": {
+                    "base_url": "http://127.0.0.1:8080",
+                    "api_key": "not-needed",
+                    "model": "",
+                    "prompt_template": "请识别图片中的文字，只返回文字内容",
+                    "timeout": 60,
+                    "retry": 2,
+                },
+            },
         },
         "default_engine": "llamacpp",
     },
     "asr_engines.json": {
-        "engine": "whisperx", "enabled": False, "model_size": "large-v3",
-        "language": "zh", "vad_enabled": False, "vad_min_silence_ms": 500,
-        "vad_threshold": 0.5, "word_timestamps": True, "asr_region_name": "语音",
-        "model_dir": "", "beam_size": 5, "initial_prompt": "",
-        "condition_on_previous_text": True, "no_speech_threshold": 0.6,
-        "compression_ratio_threshold": 2.4, "temperature": "0.0,0.2,0.4,0.6,0.8,1.0", "hotwords": "",
+        "engine": "whisperx",
+        "enabled": False,
+        "model_size": "large-v3",
+        "language": "zh",
+        "vad_enabled": False,
+        "vad_min_silence_ms": 500,
+        "vad_threshold": 0.5,
+        "word_timestamps": True,
+        "asr_region_name": "语音",
+        "model_dir": "",
+        "beam_size": 5,
+        "initial_prompt": "",
+        "condition_on_previous_text": True,
+        "no_speech_threshold": 0.6,
+        "compression_ratio_threshold": 2.4,
+        "temperature": "0.0,0.2,0.4,0.6,0.8,1.0",
+        "hotwords": "",
     },
     "ai_correction.json": {
-        "enabled": False, "engine": "llamacpp",
+        "enabled": False,
+        "engine": "llamacpp",
         "correction_prompt": "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。",
-        "retry_on_failure": 2, "api_key": "", "base_url": "http://127.0.0.1:8080",
-        "model": "", "timeout": 30, "batch_size": 10, "context_window": 3, "retry": 2,
-        "summary_prompt": "", "correction_system_prompt": "", "output_format": "",
-        "prompts": {"default": ""}, "stream_mode": True, "json_mode": True,
+        "retry_on_failure": 2,
+        "api_key": "",
+        "base_url": "http://127.0.0.1:8080",
+        "model": "",
+        "timeout": 30,
+        "batch_size": 10,
+        "retry": 2,
+        "summary_prompt": "",
+        "correction_system_prompt": "",
+        "output_format": "",
+        "prompts": {"default": ""},
+        "stream_mode": True,
+        "json_mode": True,
         "seg_time_gap": 3.0,
         "enable_polish": False,
         "polish_prompt": "你是一个专业的字幕润色专家。请对翻译/纠错后的字幕进行润色...",
@@ -242,6 +293,28 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
 }
 
 
+def atomic_write_json(path: Union[str, Path], data: Any) -> None:
+    """原子写 JSON（P0-T5 修复）：临时文件 + fsync + os.replace。
+
+    崩溃/断电时目标文件要么是旧完整内容，要么是新完整内容，绝不半写。
+    临时文件与目标同目录（同卷），保证 os.replace 原子；Linux 下保留
+    原文件权限（API key 配置文件常为 0600）。
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        if path.exists():
+            shutil.copymode(path, tmp)  # 保留原文件权限
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)  # replace 失败时清理，原文件完好
+
+
 def ensure_config_files() -> None:
     """检查并自动生成缺失的配置文件（从默认模板）。"""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -249,8 +322,7 @@ def ensure_config_files() -> None:
         path = CONFIG_DIR / filename
         if not path.exists():
             try:
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(template, f, ensure_ascii=False, indent=2)
+                atomic_write_json(path, template)
                 print(f"[config] 已创建默认配置: {filename}", file=sys.stderr)
             except OSError as e:
                 print(f"[config] 创建配置失败 {filename}: {e}", file=sys.stderr)
@@ -266,7 +338,7 @@ class ConfigManager:
     def _load_settings(self) -> dict:
         if self.settings_path.exists():
             try:
-                cfg = _load_json_with_comments(self.settings_path)
+                cfg = load_json_with_comments(self.settings_path)
                 if not isinstance(cfg, dict):
                     raise ValueError("settings.json 不是有效的对象")
                 self._migrate_mode_params(cfg)
@@ -284,10 +356,16 @@ class ConfigManager:
             return dict(DEFAULT_SETTINGS)
 
     def _migrate_mode_params(self, cfg: dict):
-        """迁移 mode_params 中的旧键名 → 新键名，补充缺失默认值。"""
-        mp = cfg.get("mode_params", {})
-        if not mp:
-            return
+        """迁移 mode_params 中的旧键名 → 新键名，补充缺失默认值。
+
+        注意：首启（mode_params 为空 dict）也必须补键，确保
+        UI 显示与 workflow 读取使用同一份默认值（统一事实源）。
+        """
+        mp = cfg.get("mode_params")
+        if not isinstance(mp, dict):
+            # 键缺失（get 返回 None）或非 dict 损坏值：重置为空 dict 并写回 cfg，
+            # 保证下方补键结果真正进入配置（此前缺键时补键丢失）
+            cfg["mode_params"] = mp = {}
         # 重命名旧键
         for old_key, new_key in _MODE_PARAMS_RENAME_MAP.items():
             if old_key in mp and new_key not in mp:
@@ -300,8 +378,8 @@ class ConfigManager:
                 mp[key] = default
 
     def _save_settings(self, cfg: dict):
-        with _config_lock, open(self.settings_path, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        with _config_lock:
+            atomic_write_json(self.settings_path, cfg)
 
     def save_settings(self):
         self._save_settings(self.settings)

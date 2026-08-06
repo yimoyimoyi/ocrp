@@ -43,16 +43,22 @@ def except_handler(
                 except Exception as e:
                     last_exception = e
                     if attempt < retry:
-                        wait = delay * (2 ** attempt)
+                        wait = delay * (2**attempt)
                         logger.warning(
                             "%s (attempt %d/%d) — retrying in %.1fs: %s",
-                            error_msg, attempt + 1, retry + 1, wait, e,
+                            error_msg,
+                            attempt + 1,
+                            retry + 1,
+                            wait,
+                            e,
                         )
                         time.sleep(wait)
                     else:
                         logger.error(
                             "%s — all %d attempts exhausted: %s",
-                            error_msg, retry + 1, e,
+                            error_msg,
+                            retry + 1,
+                            e,
                         )
             if default_return is not _SENTINEL:
                 return default_return

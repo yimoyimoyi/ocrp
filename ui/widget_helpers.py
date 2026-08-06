@@ -1,6 +1,6 @@
 """UI 控件工具函数 —— 安全读写各类 Qt 控件的值。"""
 
-from PyQt5.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QLineEdit, QSpinBox, QTextEdit
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QLineEdit, QSpinBox, QTextEdit
 
 
 def safe_read_widget(widget, default=None):

@@ -1,7 +1,7 @@
 """显示设置对话框 —— 主题（qt-material）/ 字体大小 / 密度缩放"""
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -22,10 +22,9 @@ from ui.style_loader import THEME_COLORS, THEME_DISPLAY_NAMES
 class _ThemeCard(QFrame):
     """单个主题卡片：显示主题名 + 3 个色块预览。"""
 
-    clicked = pyqtSignal(str)  # theme_key
+    clicked = Signal(str)  # theme_key
 
-    def __init__(self, theme_key: str, display_name: str, colors: list[str],
-                 selected: bool = False, parent=None):
+    def __init__(self, theme_key: str, display_name: str, colors: list[str], selected: bool = False, parent=None):
         super().__init__(parent)
         self._key = theme_key
         self._selected = selected
@@ -80,7 +79,7 @@ class _ThemeCard(QFrame):
 class DisplayDialog(QDialog):
     """显示设置对话框。"""
 
-    theme_applied = pyqtSignal(str, int, float)  # (theme_name, font_size, scale)
+    theme_applied = Signal(str, int, float)  # (theme_name, font_size, scale)
 
     def __init__(self, theme: str, font_size: int, ui_scale: float, parent=None):
         super().__init__(parent)
@@ -105,8 +104,7 @@ class DisplayDialog(QDialog):
         default_row.setSpacing(6)
         for key in ("default", "default_dark"):
             colors = THEME_COLORS.get(key, ["#808080", "#606060", "#1e1e1e"])
-            card = _ThemeCard(key, THEME_DISPLAY_NAMES.get(key, key),
-                              colors, selected=(theme == key))
+            card = _ThemeCard(key, _(THEME_DISPLAY_NAMES.get(key, key)), colors, selected=(theme == key))
             card.clicked.connect(self._on_card_clicked)
             self._cards[key] = card
             default_row.addWidget(card)
@@ -114,7 +112,7 @@ class DisplayDialog(QDialog):
         layout.addLayout(default_row)
 
         # 深色/浅色分组
-        for section_name, prefix in [("深色", "dark_"), ("浅色", "light_")]:
+        for section_name, prefix in [(_("深色"), "dark_"), (_("浅色"), "light_")]:
             section_label = QLabel(section_name)
             section_label.setStyleSheet("color: #808080; font-size: 11px; margin-top: 4px;")
             layout.addWidget(section_label)
@@ -130,7 +128,7 @@ class DisplayDialog(QDialog):
                 if not key.startswith(prefix):
                     continue
                 colors = THEME_COLORS.get(key, ["#808080", "#606060", "#1e1e1e"])
-                card = _ThemeCard(key, display, colors, selected=(key == theme))
+                card = _ThemeCard(key, _(display), colors, selected=(key == theme))
                 card.clicked.connect(self._on_card_clicked)
                 self._cards[key] = card
                 grid.addWidget(card, row, col)
@@ -182,11 +180,7 @@ class DisplayDialog(QDialog):
 
     def _on_apply(self):
         """立即应用但不关闭。"""
-        self.theme_applied.emit(
-            self._theme,
-            self._font_spin.value(),
-            self._scale_spin.value()
-        )
+        self.theme_applied.emit(self._theme, self._font_spin.value(), self._scale_spin.value())
 
     def _on_accept(self):
         self._on_apply()

@@ -2,6 +2,7 @@
 import json
 import re
 import sys
+
 import requests
 
 # ── 修复 Windows GBK 编码问题 ──
@@ -87,7 +88,7 @@ def call_llm(prompt: str, system: str, temperature: float = 0.1) -> str:
     data = resp.json()
     if "choices" not in data:
         print(f"  API ERROR: {json.dumps(data, ensure_ascii=False)[:300]}")
-        raise RuntimeError(f"API error")
+        raise RuntimeError("API error")
     choice = data["choices"][0]
     msg = choice.get("message", {})
     content = msg.get("content", "") or msg.get("reasoning_content", "")
@@ -176,7 +177,7 @@ def main():
                 if missing:
                     print(f"  ⚠ 遗漏行: {missing}")
             except json.JSONDecodeError:
-                print(f"  ❌ JSON解析失败")
+                print("  ❌ JSON解析失败")
         except Exception as e:
             print(f"  ❌ 请求失败: {e}")
 

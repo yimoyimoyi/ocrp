@@ -9,8 +9,8 @@
     group.set_collapsed(True)
 """
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -29,7 +29,7 @@ class CollapsibleGroup(QWidget):
         toggled(bool): 展开/折叠状态变化
     """
 
-    toggled = pyqtSignal(bool)
+    toggled = Signal(bool)
 
     def __init__(self, title: str = "", parent=None, collapsed: bool = False):
         super().__init__(parent)
@@ -117,22 +117,14 @@ class CollapsibleGroup(QWidget):
         header = self.findChild(QWidget, "collapsibleHeader")
         if collapsed:
             # 折叠：整体四角全圆
-            self.setStyleSheet(
-                "#collapsibleGroup { border-radius: 10px; }"
-            )
+            self.setStyleSheet("#collapsibleGroup { border-radius: 10px; }")
             if header:
-                header.setStyleSheet(
-                    "#collapsibleHeader { border-radius: 10px; }"
-                )
+                header.setStyleSheet("#collapsibleHeader { border-radius: 10px; }")
         else:
             # 展开：整体圆角，标题栏仅顶部圆角
-            self.setStyleSheet(
-                "#collapsibleGroup { border-radius: 10px; }"
-            )
+            self.setStyleSheet("#collapsibleGroup { border-radius: 10px; }")
             if header:
-                header.setStyleSheet(
-                    "#collapsibleHeader { border-radius: 10px 10px 0 0; }"
-                )
+                header.setStyleSheet("#collapsibleHeader { border-radius: 10px 10px 0 0; }")
 
     def _collapse(self, coll: bool):
         if self._collapsed == coll:
@@ -150,7 +142,7 @@ class CollapsibleGroup(QWidget):
         self.updateGeometry()
         p: QWidget | None = self.parentWidget()
         while p:
-            if isinstance(p, (QSplitter, QMainWindow)):
+            if isinstance(p, QSplitter | QMainWindow):
                 break
             lay = p.layout()
             if lay:

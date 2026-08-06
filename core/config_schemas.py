@@ -12,10 +12,10 @@ OCR_ENGINES_SCHEMA = {
                     "enabled": {"type": "bool"},
                     "config": {"type": "dict"},
                 }
-            }
+            },
         },
         "default_engine": {"type": "str"},
-    }
+    },
 }
 
 # ── asr_engines.json ──
@@ -42,7 +42,7 @@ ASR_ENGINES_SCHEMA = {
         "hotwords": {"type": "str"},
         "initial_prompt": {"type": "str"},
         "asr_region_name": {"type": "str"},
-    }
+    },
 }
 
 # ── ai_correction.json ──
@@ -58,7 +58,6 @@ AI_CORRECTION_SCHEMA = {
         "model": {"type": "str"},
         "timeout": {"type": "int", "min": 1, "max": 300},
         "batch_size": {"type": "int", "min": 1, "max": 50},
-        "context_window": {"type": "int", "min": 0, "max": 10},
         "retry": {"type": "int", "min": 0, "max": 10},
         "summary_prompt": {"type": "str"},
         "correction_system_prompt": {"type": "str"},
@@ -68,7 +67,7 @@ AI_CORRECTION_SCHEMA = {
         "seg_time_gap": {"type": "float", "min": 0.0, "max": 60.0},
         "enable_polish": {"type": "bool"},
         "polish_prompt": {"type": "str"},
-    }
+    },
 }
 
 # ── api_presets.json ──
@@ -84,10 +83,10 @@ API_PRESETS_SCHEMA = {
                     "model": {"type": "str"},
                     "timeout": {"type": "int", "min": 1, "max": 300},
                 }
-            }
+            },
         },
         "default_preset": {"type": "str"},
-    }
+    },
 }
 
 # ── prompt_templates.json ──
@@ -104,10 +103,10 @@ PROMPT_TEMPLATES_SCHEMA = {
                     "description": {"type": "str"},
                     "prompt": {"type": "str"},
                     "applicable_regions": {"type": "list"},
-                }
-            }
+                },
+            },
         }
-    }
+    },
 }
 
 # ── filters.json ──
@@ -127,13 +126,13 @@ UI_CONFIG_SCHEMA = {
                 "default_height": {"type": "int", "min": 600},
                 "min_width": {"type": "int", "min": 400},
                 "min_height": {"type": "int", "min": 300},
-            }
+            },
         },
         "theme": {
             "type": "dict",
             "properties": {
                 "default": {"type": "str", "enum": ["dark", "light"]},
-            }
+            },
         },
     }
 }

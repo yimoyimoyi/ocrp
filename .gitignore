@@ -102,3 +102,7 @@ config/api_presets.json
 config/prompt_templates.json
 config/filters.json
 I Fixed Every Bug in Minecraft.mp4
+
+# Windows 设备名垃圾文件
+nul
+temp_diff*.txt

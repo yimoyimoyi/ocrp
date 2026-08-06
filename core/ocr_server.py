@@ -113,9 +113,9 @@ def _load_config():
         print(f"[OCR_SERVER] config file not found: {cfg_path}", file=sys.stderr, flush=True)
         return {}
 
-    from core.config_manager import _load_json_with_comments
+    from core.config_manager import load_json_with_comments
 
-    config = _load_json_with_comments(cfg_path)
+    config = load_json_with_comments(cfg_path)
     engines = config.get("engines", {})
     return engines.get("paddleocr", {}).get("config", {})
 

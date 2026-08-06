@@ -5,7 +5,7 @@ import json
 import re
 from typing import Any
 
-from core.utils import get_similarity
+from core.utils import DEFAULT_SRT_DURATION, get_similarity
 
 
 def polish_results(
@@ -62,14 +62,22 @@ def polish_results(
             region_groups[rname] = [longest]
 
     if post_sim_dedup:
+        # P2-2 性能：enumerate 下标替代 merged.index（O(n) 查找消除）；
+        # 长度预筛 f = t/(2-t) —— ratio(a,b)=2M/(La+Lb) ≤ 2·min/max，阈值 t 下
+        # 长度比超出 f 的文本对 ratio 必 ≤ t，可安全跳过（严格不改变阈值结果）
+        f = post_sim_threshold / (2.0 - post_sim_threshold)
         for rname in list(region_groups.keys()):
             merged = []
             for cur in region_groups[rname]:
                 is_dup = False
-                for exist in merged:
+                cur_len = len(cur["content"])
+                for j, exist in enumerate(merged):
+                    exist_len = len(exist["content"])
+                    if exist_len < cur_len * f or exist_len > cur_len / f:
+                        continue  # 长度差超限，相似度必不达标
                     if get_similarity(exist["content"], cur["content"]) > post_sim_threshold:
-                        if len(cur["content"]) > len(exist["content"]):
-                            merged[merged.index(exist)] = cur
+                        if cur_len > exist_len:
+                            merged[j] = cur
                         is_dup = True
                         break
                 if not is_dup:
@@ -132,7 +140,9 @@ def sort_results_by_order(results: list, order_text: str) -> list:
                 sorted_results.append(
                     {
                         "time_sec": ts,
-                        "end_sec": first_item.get("end_sec", ts + 3.0) if first_item else ts + 3.0,
+                        "end_sec": first_item.get("end_sec", ts + DEFAULT_SRT_DURATION)
+                        if first_item
+                        else ts + DEFAULT_SRT_DURATION,
                         "time": first_item.get("time", "--:--") if first_item else "--:--",
                         "region": output_line,
                         "engine": first_item.get("engine", "") if first_item else "",
@@ -154,6 +164,18 @@ def _fmt_srt_time(total_seconds: float) -> str:
     seconds = int(total_seconds % 60)
     millis = int((total_seconds - int(total_seconds)) * 1000)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+# P2-1：end 缺失/非法时钳制的最小时长（避免 end < start 的非法时间轴）
+_MIN_SRT_DURATION = 1.0
+
+
+def _normalize_srt_text(text: str) -> str:
+    """规范化字幕文本（P2-1 修复）：统一换行符、压缩连续空行。
+
+    SRT 中空行是块分隔符，连续空行会提前截断字幕块；块内单个 \n 是合法多行。
+    """
+    return re.sub(r"\n{2,}", "\n", text.replace("\r\n", "\n").replace("\r", "\n")).strip()
 
 
 def parse_srt_time(time_str: str) -> float:
@@ -193,14 +215,17 @@ def _export_srt(
     with open(output_path, "w", encoding="utf-8") as f:
         idx = 1
         for i, item in enumerate(results):
-            raw = item.get("raw", "").strip()
+            raw = _normalize_srt_text(item.get("raw", ""))
             if not raw:
                 continue
             start = item.get("time_sec", 0.0) or 0.0
             end = item.get("end_sec", 0.0) or 0.0
+            # P2-1：end 缺失/非法时钳制，杜绝 end < start 的非法时间轴
+            if end <= start:
+                end = start + _MIN_SRT_DURATION
 
             if include_corrected and i in corrected_map:
-                corrected = _clean_id_markers(corrected_map[i])
+                corrected = _normalize_srt_text(_clean_id_markers(corrected_map[i]))
                 has_correction = bool(corrected and corrected != raw)
             else:
                 corrected = ""

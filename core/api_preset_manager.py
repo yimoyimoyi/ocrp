@@ -4,11 +4,11 @@
 AI 纠错器共用同一套预设，存储在 config/api_presets.json。
 """
 
-import json
 import os
 from pathlib import Path
 from typing import Optional
 
+from core.config_manager import atomic_write_json, load_json_with_comments
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,10 +20,11 @@ PRESETS_PATH = BASE_DIR / "config" / "api_presets.json"
 def _load_presets() -> dict:
     if PRESETS_PATH.exists():
         try:
-            with open(PRESETS_PATH, encoding="utf-8") as f:
-                cfg = json.load(f)
+            # P2-6：统一注释支持解析器（裸 json.load 遇用户手写注释配置会失败）
+            cfg = load_json_with_comments(PRESETS_PATH)
             from core.config_schema import validate_config
             from core.config_schemas import API_PRESETS_SCHEMA
+
             ok, errors = validate_config(cfg, API_PRESETS_SCHEMA, "api_presets.json")
             if not ok:
                 logger.warning("API 预设配置校验失败: %s", "; ".join(errors[:3]))
@@ -42,9 +43,7 @@ def _get_file_mtime() -> float:
 
 
 def _save_presets(data: dict):
-    PRESETS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(PRESETS_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    atomic_write_json(PRESETS_PATH, data)
 
 
 class APIPresetManager:
@@ -126,12 +125,14 @@ class APIPresetManager:
     def update_preset(self, name: str, config: dict) -> bool:
         if name not in self._data.get("presets", {}):
             return False
-        self._data["presets"][name].update({
-            "api_key": config.get("api_key", ""),
-            "base_url": config.get("base_url", "http://127.0.0.1:8080"),
-            "model": config.get("model", ""),
-            "timeout": config.get("timeout", 30),
-        })
+        self._data["presets"][name].update(
+            {
+                "api_key": config.get("api_key", ""),
+                "base_url": config.get("base_url", "http://127.0.0.1:8080"),
+                "model": config.get("model", ""),
+                "timeout": config.get("timeout", 30),
+            }
+        )
         self.save()
         return True
 
@@ -144,5 +145,3 @@ class APIPresetManager:
             self._data["default_preset"] = names[0] if names else ""
         self.save()
         return True
-
-

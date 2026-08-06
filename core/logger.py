@@ -55,9 +55,13 @@ class _ColoredFormatter(logging.Formatter):
         color = _LEVEL_COLORS.get(record.levelno, _ANSI["reset"])
         reset = _ANSI["reset"]
         levelname = record.levelname
-        # 级别名着色
+        # 级别名着色（就地改写必须 finally 还原——所有 handler 共享同一 record，
+        # 文件 handler 后执行会读到带 ANSI 码的 levelname，污染 orcp.log）
         record.levelname = f"{color}{levelname}{reset}"
-        msg = super().format(record)
+        try:
+            msg = super().format(record)
+        finally:
+            record.levelname = levelname
         # 根据级别给整行加色
         if record.levelno >= logging.ERROR:
             return f"{_ANSI['red']}{msg}{reset}"
@@ -93,7 +97,9 @@ def _setup_root_logger() -> None:
         try:
             _LOG_DIR.mkdir(parents=True, exist_ok=True)
             file_handler = logging.handlers.RotatingFileHandler(
-                _LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5,
+                _LOG_FILE,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=5,
                 encoding="utf-8",
             )
             file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATE_FORMAT))

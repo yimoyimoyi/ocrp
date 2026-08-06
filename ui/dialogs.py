@@ -1,8 +1,7 @@
 """对话框组件 —— 引擎配置、API 预设管理等。"""
 
-
-from PyQt5.QtCore import QObject, Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
@@ -32,8 +31,7 @@ class EngineConfigDialog(QDialog):
     内置可用性检测、模型列表获取、保存预设。
     """
 
-    def __init__(self, engine_name: str, config: dict, is_local: bool = False,
-                 engine_manager=None, parent=None):
+    def __init__(self, engine_name: str, config: dict, is_local: bool = False, engine_manager=None, parent=None):
         super().__init__(parent)
         self._engine_name = engine_name
         self._engine_mgr = engine_manager
@@ -78,7 +76,9 @@ class EngineConfigDialog(QDialog):
 
         # PaddleOCR 模型版本选择（仅本地引擎显示）
         self._paddle_version_combo = QComboBox()
-        self._paddle_version_combo.addItems([_("PP-OCRv5_server (高精度/慢)"), _("PP-OCRv5_mobile (平衡)"), _("PP-OCRv4 (快速)")])
+        self._paddle_version_combo.addItems(
+            [_("PP-OCRv5_server (高精度/慢)"), _("PP-OCRv5_mobile (平衡)"), _("PP-OCRv4 (快速)")]
+        )
         self._paddle_version_combo.setVisible(is_local and engine_name == "paddleocr")
         ver = config.get("ocr_version") or ""
         if "v4" in ver:
@@ -129,6 +129,7 @@ class EngineConfigDialog(QDialog):
     def _on_save_preset(self):
         """将当前配置保存为 API 预设（基于引擎名称或自定义名称）。"""
         from core.api_preset_manager import APIPresetManager
+
         mgr = APIPresetManager()
         cfg = {
             "api_key": self._api_key_edit.text(),
@@ -160,7 +161,8 @@ class EngineConfigDialog(QDialog):
             self._status_label.setText(_("⚠ 引擎未初始化"))
             return
 
-        from ui.workers import HttpCheckWorker
+        from core.workers import HttpCheckWorker
+
         self._http_worker = HttpCheckWorker(eng, action)
         self._http_worker.result.connect(lambda r: self._on_http_result(r))
         self._http_worker.error.connect(lambda e: self._status_label.setText(f"❌ {e[:30]}"))
@@ -205,6 +207,7 @@ class PresetManageDialog(QDialog):
         self.setWindowTitle(_("API 预设管理"))
         self.setMinimumWidth(500)
         from core.api_preset_manager import APIPresetManager
+
         self._mgr = APIPresetManager()
         self._mgr.reload()
 
@@ -286,12 +289,12 @@ class PresetManageDialog(QDialog):
             return
         self._model_status.setText(_("⏳ 获取中..."))
         QApplication.processEvents()
-        # 后台线程执行 HTTP 请求，pyqtSignal 跨线程投递结果到主线程
+        # 后台线程执行 HTTP 请求，Signal 跨线程投递结果到主线程
         import threading
 
         class _FetchBridge(QObject):
-            done = pyqtSignal(object)
-            err = pyqtSignal(str)
+            done = Signal(object)
+            err = Signal(str)
 
         bridge = _FetchBridge()
         bridge.done.connect(self._on_fetch_done)
@@ -342,8 +345,9 @@ class PresetManageDialog(QDialog):
         name = self._list.currentItem().text() if self._list.currentItem() else ""
         if not name:
             return
-        reply = QMessageBox.question(self, _("确认删除"), f"确定要删除预设「{name}」吗？",
-                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        reply = QMessageBox.question(
+            self, _("确认删除"), _(f"确定要删除预设「{name}」吗？"), QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
         if reply == QMessageBox.Yes:
             self._mgr.delete_preset(name)
             self._refresh_list()

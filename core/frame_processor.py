@@ -88,7 +88,7 @@ class FrameProcessor:
         self._stop_flag = threading.Event()
         self._pause_flag = threading.Event()  # set 表示暂停
         self._frame_interval: float = 0.1
-        self._subtitle_mode: str = "流式字幕（去重）"
+        self._subtitle_mode: str = "stream"
         # ── 流式参数 ──
         self._sentinel_enabled: bool = True
         self._s_drop_ratio: float = 0.5
@@ -184,6 +184,10 @@ class FrameProcessor:
                 futures[future] = (region.get("name", "unknown"), re_name)
 
             for future in as_completed(futures):
+                # 停止响应：stop_flag 设置后立即放弃剩余 region（已提交任务由
+                # shutdown(wait=False) 后台回收，不再阻塞主循环）
+                if self._stop_flag.is_set():
+                    break
                 rname, re_name = futures[future]
                 try:
                     text, conf = future.result()
@@ -238,7 +242,7 @@ class FrameProcessor:
         all_results = []
         frame_idx = 0
 
-        is_regular = "常规" in self._subtitle_mode
+        is_regular = "regular" in self._subtitle_mode or "常规" in self._subtitle_mode
         last_regular_sec = -999.0
 
         self._log(f"🎬 开始: {os.path.basename(video_path)} FPS={fps:.1f} 字幕模式={self._subtitle_mode}")

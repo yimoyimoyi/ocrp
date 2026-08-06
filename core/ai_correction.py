@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from core.config_manager import _load_json_with_comments
+from core.config_manager import load_json_with_comments
 from core.llm_utils import ask_llm
 from core.logger import get_logger
 
@@ -38,35 +38,53 @@ def _alog(msg: str):
         _ALOG.parent.mkdir(parents=True, exist_ok=True)
         if _ALOG.exists() and _ALOG.stat().st_size > 5 * 1024 * 1024:
             data = _ALOG.read_bytes()
-            _ALOG.write_bytes(data[len(data) // 2:])
+            _ALOG.write_bytes(data[len(data) // 2 :])
     except OSError:
         pass
     with open(_ALOG, "a", encoding="utf-8") as f:
         f.write(f"{_adt.datetime.now().strftime('%H:%M:%S.%f')[:-3]} [AI] {msg}\n")
 
+
 # ── 批量纠错 ID 前缀常量 ──
 ID_PREFIX = "[ID:"
 # 兼容 AI 输出变体：[ID:0]、[ID：0]、[ID 0]、ID:0、[id:0]
 ID_PATTERN = re.compile(
-    r'\[\s*ID\s*[:：]\s*(\d+)\s*\](.*?)(?=\n\[\s*ID\s*[:：]\s*\d+\s*\]|\Z)',
+    r"\[\s*ID\s*[:：]\s*(\d+)\s*\](.*?)(?=\n\[\s*ID\s*[:：]\s*\d+\s*\]|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
 # 匹配时间标记 [hh:mm:ss.ms -> hh:mm:ss.ms] 或 [hh:mm:ss] 或 (hh:mm:ss)
 TIME_MARKER = re.compile(
-    r'\s*[(\[]\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*(?:->|→|-{1,2}>|,)\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*[)\]]\s*'
-    r'|\s*\[\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*\]\s*',
+    r"\s*[(\[]\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*(?:->|→|-{1,2}>|,)\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*[)\]]\s*"
+    r"|\s*\[\s*\d{1,2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?\s*\]\s*",
 )
-ID_TAG = re.compile(r'\[\s*ID\s*[:：]?\s*\d+\s*\]\s*', re.IGNORECASE)
+ID_TAG = re.compile(r"\[\s*ID\s*[:：]?\s*\d+\s*\]\s*", re.IGNORECASE)
 # AI 可能输出的 markdown 代码块包裹
-_MD_FENCE = re.compile(r'^```(?:json|text)?\s*\n?|\n?```\s*$', re.MULTILINE)
+_MD_FENCE = re.compile(r"^```(?:json|text)?\s*\n?|\n?```\s*$", re.MULTILINE)
 
 
 def _clean_content(text: str) -> str:
     """去除 AI 可能附带的时间标记、[ID:n] 标记和 markdown 代码块。"""
-    text = _MD_FENCE.sub('', text)
-    text = TIME_MARKER.sub('', text)
-    text = ID_TAG.sub('', text)
+    text = _MD_FENCE.sub("", text)
+    text = TIME_MARKER.sub("", text)
+    text = ID_TAG.sub("", text)
     return text.strip()
+
+
+_DEFAULT_SUMMARY_PROMPT = (
+    "请根据以下OCR识别文本，总结出这段内容的：\n"
+    "1. 领域/类型（如：小说、新闻、游戏对话、学术论文等）\n"
+    "2. 整体氛围/语气（如：严肃、欢快、悲伤、紧张等）\n"
+    "3. 主要内容/主题（一句话概括）\n\n"
+    "请用简洁的中文回答，格式：\n"
+    "领域：xxx\n氛围：xxx\n内容：xxx"
+)
+
+
+def _clean_summary_prompt(value) -> str:
+    """清洗 summary_prompt：历史版本可能写入字面量 "None"（旧 P2 bug 污染）。"""
+    if not value or str(value).strip().lower() in ("none", "null"):
+        return _DEFAULT_SUMMARY_PROMPT
+    return str(value)
 
 
 def load_correction_config() -> dict:
@@ -74,9 +92,10 @@ def load_correction_config() -> dict:
     path = CONFIG_DIR / "ai_correction.json"
     if path.exists():
         try:
-            cfg = _load_json_with_comments(path)
+            cfg = load_json_with_comments(path)
             from core.config_schema import validate_config
             from core.config_schemas import AI_CORRECTION_SCHEMA
+
             ok, errors = validate_config(cfg, AI_CORRECTION_SCHEMA, "ai_correction.json")
             if not ok:
                 logger.warning("纠错配置校验失败: %s", "; ".join(errors[:3]))
@@ -90,6 +109,7 @@ def _resolve_api_config(config: dict, preset_name: str = "") -> dict:
     """解析 API 连接配置：优先使用预设，回退到 config 中的直接配置。"""
     if preset_name:
         from core.api_preset_manager import APIPresetManager
+
         preset = APIPresetManager().get_preset(preset_name)
         if preset:
             return dict(preset)
@@ -109,13 +129,13 @@ class AICorrector:
     使用独立的 API Key / Base URL / Model 进行文本纠错。
     """
 
-    def __init__(self, config: dict | None = None,
-                 engine_manager=None, preset_name: str = ""):
+    def __init__(self, config: dict | None = None, engine_manager=None, preset_name: str = ""):
         self._config = config or load_correction_config()
         self._enabled = self._config.get("enabled", False)
         self._retry = self._config.get("retry_on_failure", 2)
-        self._prompt_template = self._config.get("correction_prompt",
-            "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。")
+        self._prompt_template = self._config.get(
+            "correction_prompt", "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。"
+        )
         self._engine_name = self._config.get("engine", "llamacpp")
         self._preset_name = preset_name
         api_cfg = _resolve_api_config(self._config, preset_name)
@@ -127,33 +147,32 @@ class AICorrector:
         self._env_context: str = ""
         self._extract_env: bool = self._config.get("extract_environment", False)
         self._translate_mode: bool = False  # 翻译模式，由外部 setter 设置
-        self._stream_mode: bool = False     # 流式输出模式
-        self._json_mode: bool = False       # JSON 输出模式
+        # 从配置读取流式/JSON 模式（设置同步 P9 修复：重建实例后保持 UI 勾选状态）
+        self._stream_mode: bool = bool(self._config.get("stream_mode", False))  # 流式输出模式
+        self._json_mode: bool = bool(self._config.get("json_mode", False))  # JSON 输出模式
         # ── 自定义提示词字段 ──
-        self._summary_prompt = self._config.get("summary_prompt",
-            "请根据以下OCR识别文本，总结出这段内容的：\n"
-            "1. 领域/类型（如：小说、新闻、游戏对话、学术论文等）\n"
-            "2. 整体氛围/语气（如：严肃、欢快、悲伤、紧张等）\n"
-            "3. 主要内容/主题（一句话概括）\n\n"
-            "请用简洁的中文回答，格式：\n"
-            "领域：xxx\n氛围：xxx\n内容：xxx")
-        self._correction_system_prompt = self._config.get("correction_system_prompt",
+        self._summary_prompt = _clean_summary_prompt(self._config.get("summary_prompt", _DEFAULT_SUMMARY_PROMPT))
+        self._correction_system_prompt = self._config.get(
+            "correction_system_prompt",
             "你是一个专业的字幕校对助手。你接收带有时间轴的OCR识别文本列表，"
             "逐行校对，保持行数不变，只修正明显错误，不要合并或拆分条目。"
-            "用户自定义提示词作为额外参考。只返回修正后的结果。")
+            "用户自定义提示词作为额外参考。只返回修正后的结果。",
+        )
         self._output_format = self._config.get("output_format", "[纠正后文本]")
         self._seg_time_gap: float = self._config.get("seg_time_gap", 3.0)
         # ── 润色模式字段 ──
         self._use_template: bool = self._config.get("use_template", False)
         self._template_content: str = ""  # 由 ConfigPanel 或 main_window 设置
         self._polish_enabled: bool = self._config.get("enable_polish", False)
-        self._polish_prompt = self._config.get("polish_prompt",
+        self._polish_prompt = self._config.get(
+            "polish_prompt",
             "你是一个专业的字幕润色专家。请对以下已翻译/纠错后的字幕文本进行润色：\n"
             "1. 调整语序使表达更自然流畅\n2. 统一术语和风格\n3. 精简冗余表达\n"
             "4. 确保符合中文字幕习惯\n\n"
             "原始文本：{原始结果}\n"
             "待润色文本：{待校对文本}\n\n"
-            "请直接输出润色后的文本，不要附加说明。")
+            "请直接输出润色后的文本，不要附加说明。",
+        )
 
     @property
     def enabled(self) -> bool:
@@ -178,35 +197,34 @@ class AICorrector:
         self._config = load_correction_config()
         self._enabled = self._config.get("enabled", False)
         self._retry = self._config.get("retry_on_failure", 2)
-        self._prompt_template = self._config.get("correction_prompt",
-            "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。")
+        self._prompt_template = self._config.get(
+            "correction_prompt", "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。"
+        )
         self._engine_name = self._config.get("engine", "llamacpp")
         api_cfg = _resolve_api_config(self._config, self._preset_name)
         self._api_key = api_cfg.get("api_key", "").strip()
         self._base_url = api_cfg.get("base_url", "http://127.0.0.1:8080")
         self._model = api_cfg.get("model", "")
         self._timeout = api_cfg.get("timeout", 30)
-        self._summary_prompt = self._config.get("summary_prompt",
-            "请根据以下OCR识别文本，总结出这段内容的：\n"
-            "1. 领域/类型（如：小说、新闻、游戏对话、学术论文等）\n"
-            "2. 整体氛围/语气（如：严肃、欢快、悲伤、紧张等）\n"
-            "3. 主要内容/主题（一句话概括）\n\n"
-            "请用简洁的中文回答，格式：\n"
-            "领域：xxx\n氛围：xxx\n内容：xxx")
-        self._correction_system_prompt = self._config.get("correction_system_prompt",
+        self._summary_prompt = _clean_summary_prompt(self._config.get("summary_prompt", _DEFAULT_SUMMARY_PROMPT))
+        self._correction_system_prompt = self._config.get(
+            "correction_system_prompt",
             "你是一个专业的字幕校对助手。你接收带有时间轴的OCR识别文本列表，"
             "逐行校对，保持行数不变，只修正明显错误，不要合并或拆分条目。"
-            "用户自定义提示词作为额外参考。只返回修正后的结果。")
+            "用户自定义提示词作为额外参考。只返回修正后的结果。",
+        )
         self._output_format = self._config.get("output_format", "[纠正后文本]")
         self._seg_time_gap = self._config.get("seg_time_gap", 3.0)
         self._polish_enabled = self._config.get("enable_polish", False)
-        self._polish_prompt = self._config.get("polish_prompt",
+        self._polish_prompt = self._config.get(
+            "polish_prompt",
             "你是一个专业的字幕润色专家。请对以下已翻译/纠错后的字幕文本进行润色：\n"
             "1. 调整语序使表达更自然流畅\n2. 统一术语和风格\n3. 精简冗余表达\n"
             "4. 确保符合中文字幕习惯\n\n"
             "原始文本：{原始结果}\n"
             "待润色文本：{待校对文本}\n\n"
-            "请直接输出润色后的文本，不要附加说明。")
+            "请直接输出润色后的文本，不要附加说明。",
+        )
 
         # 恢复运行时状态
         self._translate_mode = _translate
@@ -278,7 +296,7 @@ class AICorrector:
         self._base_url = api_cfg.get("base_url", "http://127.0.0.1:8080")
         self._model = api_cfg.get("model", "")
         self._timeout = api_cfg.get("timeout", 30)
-        logger.info("已切换 API 预设: %s", preset_name or '默认')
+        logger.info("已切换 API 预设: %s", preset_name or "默认")
 
     @property
     def extract_env(self) -> bool:
@@ -299,17 +317,17 @@ class AICorrector:
         跳过条件（满足任一）：
         1. extract_env 开关已打开（用户手动管理环境上下文）
         2. _env_context 已存在（已提取过）
-        3. 纠错/翻译 prompt 中已包含环境相关占位符或关键词
+        3. 纠错/翻译 prompt 中已包含环境**占位符**（明确指示环境信息将由用户/其他来源提供）
+
+        注意：默认 summary_prompt 的格式描述含"领域/氛围"等词，不能作为
+        "已手动提供环境"的判据——否则自动提取永远被跳过（实测修复）。
         """
         if self._extract_env:
             return True
         if self._env_context:
             return True
-        env_keywords = ("{环境信息}", "环境上下文", "领域", "氛围", "环境描述")
-        combined_prompt = (
-            self._prompt_template + self._template_content +
-            self._summary_prompt + self._polish_prompt
-        )
+        env_keywords = ("{环境信息}", "{环境上下文}", "{环境描述}")
+        combined_prompt = self._prompt_template + self._template_content + self._summary_prompt + self._polish_prompt
         return any(kw in combined_prompt for kw in env_keywords)
 
     # ── API 调用辅助方法 ───────────────────────────────────────────
@@ -324,10 +342,16 @@ class AICorrector:
         }
 
     @staticmethod
-    def _resolve_placeholders(template: str, raw_text: str = "", context: str = "",
-                               env_context: str = "", timestamp: str = "",
-                               region: str = "", engine: str = "",
-                               language: str = "") -> str:
+    def _resolve_placeholders(
+        template: str,
+        raw_text: str = "",
+        context: str = "",
+        env_context: str = "",
+        timestamp: str = "",
+        region: str = "",
+        engine: str = "",
+        language: str = "",
+    ) -> str:
         """替换提示词模板中的占位符。
 
         支持的占位符:
@@ -376,12 +400,16 @@ class AICorrector:
 
         return system_msg
 
-    def _call_llm(self, prompt: str, system_prompt: str = "",
-                  stream_callback: Callable[[str], None] | None = None,
-                  resp_type: str | None = None,
-                  log_title: str = "default",
-                  _tag: str = "",
-                  no_cache: bool = False) -> str | dict | None:
+    def _call_llm(
+        self,
+        prompt: str,
+        system_prompt: str = "",
+        stream_callback: Callable[[str], None] | None = None,
+        resp_type: str | None = None,
+        log_title: str = "default",
+        _tag: str = "",
+        no_cache: bool = False,
+    ) -> str | dict | None:
         """调用统一 LLM 网关（封装 _get_engine_config → ask_llm）。
 
         这是 _call_api() 的替代方法，所有 LLM 调用统一走此入口。
@@ -397,8 +425,13 @@ class AICorrector:
         _alog(f"=== API REQUEST [{_tag}] prompt_len={len(prompt)} ===")
         _alog(f"  PROMPT: {prompt}")
 
-        logger.info("AI 纠错 API 请求 | model=%s | stream=%s | json=%s | translate=%s",
-                     model, use_stream, self._json_mode, self._translate_mode)
+        logger.info(
+            "AI 纠错 API 请求 | model=%s | stream=%s | json=%s | translate=%s",
+            model,
+            use_stream,
+            self._json_mode,
+            self._translate_mode,
+        )
         logger.debug("Prompt(%d chars): %s", len(prompt), prompt[:200])
 
         result = ask_llm(
@@ -461,10 +494,14 @@ class AICorrector:
 
     # ── 单条纠错 ───────────────────────────────────────────────
 
-    def correct(self, raw_text: str, context_texts: list | None = None,
-                image: np.ndarray | None = None,
-                stream_callback: Callable[[str], None] | None = None,
-                prompt_override: str = "") -> str | None:
+    def correct(
+        self,
+        raw_text: str,
+        context_texts: list | None = None,
+        image: np.ndarray | None = None,
+        stream_callback: Callable[[str], None] | None = None,
+        prompt_override: str = "",
+    ) -> str | None:
         """对一段原始 OCR 文本进行纠错（或重新识别）。
 
         Args:
@@ -489,9 +526,7 @@ class AICorrector:
         # ── API 引擎模式 ──
         context_str = ""
         if context_texts:
-            context_str = "\n".join(
-                f"[{i+1}] {t}" for i, t in enumerate(context_texts[-5:])
-            )
+            context_str = "\n".join(f"[{i + 1}] {t}" for i, t in enumerate(context_texts[-5:]))
 
         # ── 模板模式 vs 自定义模式 ──
         if prompt_override:
@@ -550,29 +585,39 @@ class AICorrector:
         if self._json_mode and isinstance(result, dict):
             data = result
             # 支持更多可能的 key 名称（AI 可能使用不同的字段名）
-            items = (data.get("results") or data.get("items") or data.get("data")
-                     or data.get("corrections") or data.get("output") or [])
+            items = (
+                data.get("results")
+                or data.get("items")
+                or data.get("data")
+                or data.get("corrections")
+                or data.get("output")
+                or []
+            )
             if isinstance(items, list) and items:
                 first = items[0]
                 if isinstance(first, dict):
-                    content = (first.get("text") or first.get("content")
-                               or first.get("corrected") or content)
+                    content = first.get("text") or first.get("content") or first.get("corrected") or content
             elif isinstance(items, dict):
                 # 单个结果 dict（非 list）
-                content = (items.get("text") or items.get("content")
-                           or items.get("corrected") or content)
+                content = items.get("text") or items.get("content") or items.get("corrected") or content
             elif isinstance(data, dict):
-                content = (data.get("text") or data.get("content")
-                           or data.get("corrected") or data.get("answer")
-                           or data.get("output") or content)
+                content = (
+                    data.get("text")
+                    or data.get("content")
+                    or data.get("corrected")
+                    or data.get("answer")
+                    or data.get("output")
+                    or content
+                )
 
         # 用正则剔除输出格式标记外壳（仅从头尾移除，避免误伤内容中的字符）
         fmt = self._output_format.strip()
         if fmt:
             import re
+
             escaped = re.escape(fmt)
-            content = re.sub(f'^{escaped}[\\s\\n]*', '', str(content))
-            content = re.sub(f'[\\s\\n]*{escaped}$', '', content)
+            content = re.sub(f"^{escaped}[\\s\\n]*", "", str(content))
+            content = re.sub(f"[\\s\\n]*{escaped}$", "", content)
             content = content.strip()
         if content and content != raw_text:
             return str(content)
@@ -580,21 +625,12 @@ class AICorrector:
 
     # ── 批量纠错 ───────────────────────────────────────────────
 
-    def _fmt_time(self, sec: float) -> str:
-        """格式化秒数为 SRT 时间串 H:MM:SS.mmm。"""
-        if sec is None:
-            return ""
-        sec = sec or 0.0
-        h = int(sec // 3600)
-        m = int((sec % 3600) // 60)
-        s = int(sec % 60)
-        ms = int((sec - int(sec)) * 1000)
-        return f"{h}:{m:02d}:{s:02d}.{ms:03d}"
-
-    def correct_batch(self, texts: list[tuple[int, str]],
-                      context_window: int = 3,
-                      max_retries: int | None = None,
-                      stream_callback: Callable[[str], None] | None = None) -> dict[int, str]:
+    def correct_batch(
+        self,
+        texts: list[tuple[int, str]],
+        max_retries: int | None = None,
+        stream_callback: Callable[[str], None] | None = None,
+    ) -> dict[int, str]:
         """批量对多条文本进行 AI 纠错/翻译。
 
         Args:
@@ -605,8 +641,7 @@ class AICorrector:
 
         id_map, batch_text, original_map = self._prepare_batch_input(texts)
 
-        context_block = self._build_context_block(texts, context_window)
-        prompt = self._build_correction_prompt(batch_text, context_block)
+        prompt = self._build_correction_prompt(batch_text)
         system_prompt = self._build_system_prompt(env_context=self._env_context)
         resp_type = "json" if self._json_mode else None
 
@@ -683,16 +718,7 @@ class AICorrector:
             original_map[row_idx] = item[1]
         return id_map, "\n".join(lines), original_map
 
-    def _build_context_block(self, texts, context_window):
-        """为批次构建简洁的上下文（前后各 context_window 条）。"""
-        if len(texts) <= 1:
-            return ""
-        # 取批次自身的前后文（批次内部的条目已经在 batch_text 中）
-        # 这里只提供批次外的上下文，由调用方传入 full_texts 时才有意义
-        # 简化：不构建冗余上下文，批次内条目本身已足够
-        return ""
-
-    def _build_correction_prompt(self, batch_text, context_block, is_1based: bool = False):
+    def _build_correction_prompt(self, batch_text, is_1based: bool = False):
         """构建纠错/翻译 prompt。"""
         user_hint = self._prompt_template.strip()
         custom_hint = ""
@@ -721,14 +747,14 @@ class AICorrector:
             )
         if self._json_mode:
             prompt = (
-                f"{context_block}以下是需要处理的内容：\n{batch_text}\n\n"
+                f"以下是需要处理的内容：\n{batch_text}\n\n"
                 f"{custom_hint}{task}\n\n"
-                f'输出格式（严格遵守 JSON）：\n'
+                f"输出格式（严格遵守 JSON）：\n"
                 f'{{"results": [{{"id": 0, "text": "处理后的第一行"}}, {{"id": 1, "text": "处理后的第二行"}}, ...]}}'
             )
         else:
             prompt = (
-                f"{context_block}以下是需要处理的内容：\n{batch_text}\n\n"
+                f"以下是需要处理的内容：\n{batch_text}\n\n"
                 f"{custom_hint}{task}\n\n"
                 f"输出格式（严格遵守，每行一个 [ID:行号]）：\n"
                 f"[ID:0] 处理后的第一行\n[ID:1] 处理后的第二行\n..."
@@ -803,7 +829,7 @@ class AICorrector:
         Returns:
             {idx: content} 字典
         """
-        cleaned = _MD_FENCE.sub('', text).strip()
+        cleaned = _MD_FENCE.sub("", text).strip()
 
         result = {}
         for match in ID_PATTERN.finditer(cleaned):
@@ -817,7 +843,7 @@ class AICorrector:
 
         # 回退1：[0] text 格式（LLM 经常省略 ID:）
         if not result:
-            _BRACKET = re.compile(r'^\[(\d+)\]\s*(.+)', re.MULTILINE)
+            _BRACKET = re.compile(r"^\[(\d+)\]\s*(.+)", re.MULTILINE)
             for match in _BRACKET.finditer(cleaned):
                 try:
                     idx = int(match.group(1))
@@ -831,6 +857,7 @@ class AICorrector:
         if not result:
             try:
                 import json as _json
+
                 _data = _json.loads(cleaned)
                 _items = _data.get("results") or _data.get("items") or _data.get("data") or []
                 for _entry in _items:
@@ -844,7 +871,7 @@ class AICorrector:
 
         # 回退3：宽松模式匹配 "数字. 文本" 或 "数字) 文本" 格式
         if not result:
-            _LOOSE = re.compile(r'^(\d+)\s*[.)\:：]\s*(.+)', re.MULTILINE)
+            _LOOSE = re.compile(r"^(\d+)\s*[.)\:：]\s*(.+)", re.MULTILINE)
             for match in _LOOSE.finditer(cleaned):
                 try:
                     idx = int(match.group(1))

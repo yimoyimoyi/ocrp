@@ -49,56 +49,58 @@ def _setup_dll_search_paths():
                     pass
 
 
-class TestTorchBeforePyQt:
-    """验证 ocr_gui.py 中 import torch 在 PyQt5 之前。"""
+class TestTorchBeforeQt:
+    """验证 ocr_gui.py 中 import torch 在 Qt 绑定（PyQt5/PySide6）之前。"""
 
-    def test_torch_import_before_pyqt(self):
+    def test_torch_import_before_qt(self):
         content = (BASE_DIR / "ocr_gui.py").read_text(encoding="utf-8")
         tree = ast.parse(content)
 
-        torch_line = pyqt_line = None
+        torch_line = qt_line = None
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.name == "torch":
                         torch_line = node.lineno
             elif isinstance(node, ast.ImportFrom):
-                if node.module and node.module.startswith("PyQt5"):
-                    if pyqt_line is None:
-                        pyqt_line = node.lineno
+                if node.module and node.module.startswith(("PyQt5", "PySide6")):
+                    if qt_line is None:
+                        qt_line = node.lineno
 
         assert torch_line is not None, (
-            "ocr_gui.py 缺少 'import torch' 预加载 —— "
-            "PyQt5 导入前必须预加载 torch 防止 DLL 冲突"
+            "ocr_gui.py 缺少 'import torch' 预加载 —— Qt 绑定导入前必须预加载 torch 防止 DLL 冲突"
         )
-        assert pyqt_line is not None, "ocr_gui.py 缺少 PyQt5 import"
-        assert torch_line < pyqt_line, (
-            f"import torch (L{torch_line}) 必须在 PyQt5 import (L{pyqt_line}) 之前，"
+        assert qt_line is not None, "ocr_gui.py 缺少 Qt 绑定 import"
+        assert torch_line < qt_line, (
+            f"import torch (L{torch_line}) 必须在 Qt 绑定 import (L{qt_line}) 之前，"
             f"否则 Qt DLL 会破坏 torch DLL 搜索环境 → c10.dll 初始化失败"
         )
 
 
 class TestTorchImport:
-    """验证 torch 导入链（子进程隔离，避免 PyQt5 DLL 干扰）。
+    """验证 torch 导入链（子进程隔离，避免 Qt 绑定 DLL 干扰）。
 
-    注意: 不能直接 import torch —— pytest 已加载 PyQt5.QtCore，
-          torch 必须在 PyQt5 之前导入，否则 c10.dll 失败 (WinError 1114)。
+    注意: 不能直接 import torch —— pytest 已加载 PySide6.QtCore，
+          torch 必须在 Qt 绑定之前导入，否则 c10.dll 失败 (WinError 1114)。
           因此所有 torch 导入测试必须在独立子进程中运行。
     """
 
     @staticmethod
     def _run_subprocess(script: str) -> tuple[int, str, str]:
         import subprocess
+
         r = subprocess.run(
             [sys.executable, "-c", script],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
             cwd=str(BASE_DIR),
         )
         return r.returncode, r.stdout, r.stderr
 
     @pytest.mark.skipif(sys.platform != "win32", reason="torch DLL 隔离仅 Windows 需要")
     def test_torch_can_import_in_isolation(self):
-        """torch 应能在独立进程中正常导入（无 PyQt5 干扰）。"""
+        """torch 应能在独立进程中正常导入（无 Qt 绑定干扰）。"""
         code = f"""
 import os, sys
 sys.path.insert(0, r'{BASE_DIR!s}')
@@ -149,21 +151,14 @@ class TestOcrGuiStartupCheck:
         content = (BASE_DIR / "ocr_gui.py").read_text(encoding="utf-8")
         tree = ast.parse(content)
 
-        func_names = {
-            node.name for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef)
-        }
-        assert "_verify_startup_environment" in func_names, (
-            "ocr_gui.py 缺少 _verify_startup_environment 启动自检函数"
-        )
+        func_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+        assert "_verify_startup_environment" in func_names, "ocr_gui.py 缺少 _verify_startup_environment 启动自检函数"
 
 
 class TestNoQTimerInThread:
     """验证 ui/*.py 中没有在 threading.Thread target 内使用 QTimer.singleShot。"""
 
-    @pytest.mark.parametrize("pyfile", sorted(
-        (BASE_DIR / "ui").glob("*.py")
-    ))
+    @pytest.mark.parametrize("pyfile", sorted((BASE_DIR / "ui").glob("*.py")))
     def test_no_qtimer_in_thread(self, pyfile):
         content = pyfile.read_text(encoding="utf-8")
         tree = ast.parse(content)
@@ -173,8 +168,12 @@ class TestNoQTimerInThread:
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 func = node.func
-                if (isinstance(func, ast.Attribute) and func.attr == "Thread" and
-                        isinstance(func.value, ast.Name) and func.value.id == "threading"):
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "Thread"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id == "threading"
+                ):
                     for kw in node.keywords:
                         if kw.arg == "target" and isinstance(kw.value, ast.Name):
                             thread_targets.add(kw.value.id)
@@ -186,15 +185,16 @@ class TestNoQTimerInThread:
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Call):
                         f = sub.func
-                        if (isinstance(f, ast.Attribute) and f.attr == "singleShot" and
-                                isinstance(f.value, ast.Name) and f.value.id == "QTimer"):
-                            violations.append(
-                                f"  {pyfile.name}:{sub.lineno} '{node.name}()'"
-                            )
+                        if (
+                            isinstance(f, ast.Attribute)
+                            and f.attr == "singleShot"
+                            and isinstance(f.value, ast.Name)
+                            and f.value.id == "QTimer"
+                        ):
+                            violations.append(f"  {pyfile.name}:{sub.lineno} '{node.name}()'")
 
         assert not violations, (
-            "以下函数在 threading.Thread 中使用 QTimer.singleShot，"
-            "应改用 pyqtSignal 跨线程桥:\n" + "\n".join(violations)
+            "以下函数在 threading.Thread 中使用 QTimer.singleShot，应改用 Signal 跨线程桥:\n" + "\n".join(violations)
         )
 
 
@@ -207,10 +207,7 @@ class TestBatchFilesAscii:
         for i, byte in enumerate(data):
             if byte > 127 and byte not in (0x0D, 0x0A):
                 line = data[:i].count(b"\n") + 1
-                pytest.fail(
-                    f"{batfile.name}:L{line} 包含非 ASCII 字节 0x{byte:02X} "
-                    f"—— .bat 文件必须为纯 ASCII"
-                )
+                pytest.fail(f"{batfile.name}:L{line} 包含非 ASCII 字节 0x{byte:02X} —— .bat 文件必须为纯 ASCII")
 
 
 class TestImportChain:
@@ -223,6 +220,7 @@ class TestImportChain:
     def test_core_imports_work(self):
         """所有 core 模块应能正常导入。"""
         from core.utils import MODE_OCR_ONLY, find_ffmpeg
+
         assert find_ffmpeg and MODE_OCR_ONLY
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows DLL 检查")
@@ -230,6 +228,7 @@ class TestImportChain:
         """PaddleOCR 引擎模块应能导入（DLL 搜索路径已设置）。"""
         from core.config_manager import ensure_config_files
         from core.ocr_engine import OCREngineManager
+
         ensure_config_files()
         mgr = OCREngineManager()
         assert "paddleocr" in mgr.get_engine_names()

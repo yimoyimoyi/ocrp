@@ -7,7 +7,7 @@ from pathlib import Path
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
 
-from core.config_manager import _load_json_with_comments
+from core.config_manager import atomic_write_json, load_json_with_comments
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,9 +51,10 @@ class PromptTemplateManager:
         path = CONFIG_DIR / "prompt_templates.json"
         if path.exists():
             try:
-                data = _load_json_with_comments(path)
+                data = load_json_with_comments(path)
                 from core.config_schema import validate_config
                 from core.config_schemas import PROMPT_TEMPLATES_SCHEMA
+
                 ok, errors = validate_config(data, PROMPT_TEMPLATES_SCHEMA, "prompt_templates.json")
                 if not ok:
                     logger.warning("提示词模板配置校验失败: %s", "; ".join(errors[:3]))
@@ -157,8 +158,7 @@ class PromptTemplateManager:
         """导出全部模板到 JSON 文件。"""
         try:
             data = {"templates": self._templates}
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(filepath, data)
             logger.info("已导出 %d 个模板到 %s", len(self._templates), filepath)
             return True
         except Exception as e:

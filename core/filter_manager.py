@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 
+from core.config_manager import atomic_write_json
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,6 +29,7 @@ class FilterManager:
                     data = json.load(f)
                 from core.config_schema import validate_config
                 from core.config_schemas import FILTERS_SCHEMA
+
                 ok, errors = validate_config(data, FILTERS_SCHEMA, "filters.json")
                 if not ok:
                     logger.warning("过滤配置校验失败: %s", "; ".join(errors[:3]))
@@ -74,8 +76,7 @@ class FilterManager:
         """保存关键词到配置文件。返回是否成功。"""
         try:
             FILTERS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(FILTERS_PATH, "w", encoding="utf-8") as f:
-                json.dump({"keywords": self._keywords}, f, ensure_ascii=False, indent=2)
+            atomic_write_json(FILTERS_PATH, {"keywords": self._keywords})
             return True
         except Exception as e:
             logger.warning("保存过滤配置失败: %s", e)

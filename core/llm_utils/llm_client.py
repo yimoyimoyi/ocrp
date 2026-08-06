@@ -31,6 +31,20 @@ BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 LLM_LOG_DIR = BASE_DIR / "output" / "llm_log"
 CACHE_LOCK = threading.Lock()
 
+# 本地无鉴权端点（llama.cpp / Ollama 等，空 key 可放行）
+# 注意：主机名一律不含 URL 括号（"[::1]" 在 URL 中写作 http://[::1]:port）
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+
+
+def _is_local_url(base_url: str) -> bool:
+    """判断 base_url 是否指向本地服务（无需 API key 鉴权）。"""
+    netloc = base_url.split("://", 1)[-1].split("/", 1)[0]
+    if netloc.startswith("["):
+        host = netloc.split("]", 1)[0][1:]  # 括号 IPv6：http://[::1]:8080 → ::1
+    else:
+        host = netloc.split(":", 1)[0]
+    return host.lower() in _LOCAL_HOSTS
+
 
 # ── 缓存读写 ──────────────────────────────────────────────────────
 
@@ -81,8 +95,15 @@ def _load_cache_from_file(cache_key: str, log_title: str):
             try:
                 with open(cache_file, encoding="utf-8") as f:
                     entries = json.load(f)
+                # P0-T7 修复：损坏缓存顶层非 list 时直接忽略，
+                # 否则 entry.get 抛 AttributeError 被 except_handler 误当 API 失败重试 7 秒
+                if not isinstance(entries, list):
+                    logger.warning("缓存文件顶层非列表，忽略 [%s]: %s", log_title, type(entries).__name__)
+                    return None
                 now = time.time()
                 for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue  # 防御混合损坏条目
                     if entry.get("cache_key") == cache_key:
                         resp = entry.get("response")
                         if isinstance(resp, str) and not resp.strip():
@@ -140,6 +161,9 @@ def _save_cache(cache_key: str, response, log_title: str):
                 with open(cache_file, encoding="utf-8") as f:
                     entries = json.load(f)
             except (json.JSONDecodeError, OSError):
+                entries = []
+            # P0-T7 修复：写入前同样校验顶层结构，损坏文件重置为空列表
+            if not isinstance(entries, list):
                 entries = []
         entries.append(
             {
@@ -310,12 +334,20 @@ def ask_llm(
         流式：str（拼接后的完整内容）
         API 失败且所有重试耗尽：None
     """
+    # 空 key 处理（P0-T7 修复）：本地服务（llama.cpp/Ollama）无鉴权，放行；
+    # 云端服务空 key 保持明确报错（与 vision 引擎 _check_v1_availability 先例一致）
     if not api_key:
-        logger.error("API key 未设置")
-        return None
+        if _is_local_url(base_url):
+            api_key = "not-needed"
+        else:
+            logger.error("API key 未设置")
+            return None
     if not model:
-        logger.error("模型名称未设置")
-        return None
+        if _is_local_url(base_url):
+            model = "default"  # llama.cpp server 忽略 model 字段
+        else:
+            logger.error("模型名称未设置")
+            return None
 
     # ── 缓存检查（流式模式、vision 模式、no_cache 不缓存） ──
     if not stream and image is None and not no_cache:
@@ -405,11 +437,9 @@ def _call_stream(client, params, stream_callback, log_title, log):
                 if stream_callback:
                     stream_callback(content)
     except Exception as e:
-        log.warning("流式传输中断 [%s]: %s，返回已接收部分 (%d chars)",
-                     log_title, e, len(full_content))
+        log.warning("流式传输中断 [%s]: %s，返回已接收部分 (%d chars)", log_title, e, len(full_content))
     else:
-        log.info("流式接收完成 [%s]: %d chunks, %d chars",
-                 log_title, chunk_count, len(full_content))
+        log.info("流式接收完成 [%s]: %d chunks, %d chars", log_title, chunk_count, len(full_content))
     return full_content.strip()
 
 

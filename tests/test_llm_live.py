@@ -13,7 +13,7 @@ import time
 import pytest
 
 from core.ai_correction import AICorrector
-from core.config_manager import _load_json_with_comments
+from core.config_manager import load_json_with_comments
 from core.llm_utils import ask_llm
 
 # CI 环境跳过（设置 CI=true 环境变量），本地手动运行: uv run pytest tests/test_llm_live.py -v -s
@@ -24,10 +24,11 @@ if os.environ.get("CI"):
 def _load_api_config() -> dict:
     """从 ai_correction.json 加载 API 配置。"""
     from pathlib import Path
+
     cfg_path = Path(__file__).parent.parent / "config" / "ai_correction.json"
     if not cfg_path.exists():
         return {}
-    cfg = _load_json_with_comments(cfg_path)
+    cfg = load_json_with_comments(cfg_path)
     return {
         "api_key": cfg.get("api_key", ""),
         "base_url": cfg.get("base_url", ""),
@@ -39,10 +40,11 @@ def _load_api_config() -> dict:
 def _load_preset_config(preset_name: str = "") -> dict:
     """从 api_presets.json 加载预设配置。"""
     from pathlib import Path
+
     presets_path = Path(__file__).parent.parent / "config" / "api_presets.json"
     if not presets_path.exists():
         return {}
-    data = _load_json_with_comments(presets_path)
+    data = load_json_with_comments(presets_path)
     preset = data.get("presets", {}).get(preset_name, {})
     return {
         "api_key": preset.get("api_key", ""),
@@ -53,6 +55,7 @@ def _load_preset_config(preset_name: str = "") -> dict:
 
 
 # ── ask_llm 直接调用 ──
+
 
 class TestAskLLMLive:
     """测试 ask_llm() 实际 API 调用。"""
@@ -134,6 +137,7 @@ class TestAskLLMLive:
 
 # ── AICorrector 实际调用 ──
 
+
 class TestAICorrectorLive:
     """测试 AICorrector 实际纠错/翻译/润色流程。"""
 
@@ -183,7 +187,7 @@ class TestAICorrectorLive:
         c._translate_mode = True
         result = c.correct("Hello, how are you today?")
         assert result is not None, "翻译返回了 None"
-        assert any('一' <= ch <= '鿿' for ch in result), "翻译结果不含中文"
+        assert any("一" <= ch <= "鿿" for ch in result), "翻译结果不含中文"
         print("\n[翻译] 原文: Hello, how are you today?")
         print(f"  翻译: {result}")
 
@@ -213,10 +217,7 @@ class TestAICorrectorLive:
             pytest.skip("API key 未配置")
 
         c = self._make_corrector(enable_polish=True)
-        result = c.polish(
-            "今天天气很好，我们去公园玩吧",
-            "今天天气很好，我们去公园玩耍"
-        )
+        result = c.polish("今天天气很好，我们去公园玩吧", "今天天气很好，我们去公园玩耍")
         assert result is not None, "润色返回了 None"
         print("\n[润色] 原文: 今天天气很好，我们去公园玩吧")
         print("  纠错: 今天天气很好，我们去公园玩耍")
@@ -231,17 +232,20 @@ class TestAICorrectorLive:
         c = self._make_corrector()
         c._extract_env = False
         c._env_context = ""
-        result = c.extract_environment([
-            "勇者啊，你终于来了！",
-            "魔王已经占领了城堡。",
-            "王国的命运掌握在你手中。",
-        ])
+        result = c.extract_environment(
+            [
+                "勇者啊，你终于来了！",
+                "魔王已经占领了城堡。",
+                "王国的命运掌握在你手中。",
+            ]
+        )
         assert result is not None, "环境提取返回了 None"
         assert len(result.strip()) > 0, "环境提取返回空"
         print(f"\n[环境提取] 结果: {result}")
 
 
 # ── 缓存验证 ──
+
 
 class TestCacheLive:
     """验证缓存机制：相同请求应命中缓存。"""
