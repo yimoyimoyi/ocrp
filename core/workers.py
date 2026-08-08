@@ -808,34 +808,6 @@ class VideoLoadWorker(QThread):
             self.error.emit(f"加载视频失败: {e}")
 
 
-class HttpCheckWorker(QThread):
-    """后台 HTTP 请求：引擎可用性检测 / 模型列表获取。"""
-
-    result = Signal(object)  # dict: {"type": "check"|"models", "data": ...}
-    error = Signal(str)
-
-    def __init__(self, engine, action: str):
-        """
-        Args:
-            engine: OCR 引擎实例
-            action: "check" | "models"
-        """
-        super().__init__()
-        self._engine = engine
-        self._action = action
-
-    def run(self):
-        try:
-            if self._action == "check":
-                avail = self._engine.check_availability()
-                self.result.emit({"type": "check", "data": avail})
-            elif self._action == "models":
-                models = self._engine.get_model_list()
-                self.result.emit({"type": "models", "data": models})
-        except Exception as e:
-            self.error.emit(str(e))
-
-
 class EnvExtractWorker(QThread):
     """后台提取全文环境上下文（HTTP 调用）。"""
 

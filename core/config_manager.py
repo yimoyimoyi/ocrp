@@ -13,7 +13,11 @@ _config_lock = threading.Lock()
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent
 CONFIG_DIR = BASE_DIR / "config"
 
+# 配置版本号（R12 迁移机制：加载时逐级执行 _MIGRATIONS 到当前版本）
+CONFIG_VERSION = 1
+
 DEFAULT_SETTINGS = {
+    "config_version": CONFIG_VERSION,
     "theme": "dark",
     "ui_scale": 1.0,
     "font_size": 12,
@@ -22,7 +26,6 @@ DEFAULT_SETTINGS = {
     "window_geometry": {"x": 100, "y": 100, "width": 1280, "height": 800},
     "splitter_sizes": [400, 500],
     "recent_videos": [],
-    "ai_correction_enabled": False,
     "hw_accel": False,
     "mode_params": {},
     "language": "",
@@ -114,13 +117,13 @@ MODE_PARAMS_DEFAULTS = {
     "s_buffer_size": 8,
     "s_sim_threshold": 0.85,
     "s_min_text_len": 2,
-    "s_filter_keywords": "",
-    "s_ocr_version": "PP-OCRv4 (最快)",
+    # R12：s_filter_keywords 孤儿键（无消费方）已删除
+    "s_ocr_version": "跟随全局",  # R12：默认跟随引擎配置版本（此前默认强制 PP-OCRv4）
     "r_dedup": True,
     "r_sim_threshold": 0.9,
     "r_buffer_size": 5,
     "r_min_text_len": 2,
-    "r_filter_keywords": "",
+    # R12：r_filter_keywords 孤儿键（无消费方）已删除
     "r_interval": 2.0,
     "subtitle_duration": 3.0,
     "region_order": "",
@@ -144,9 +147,8 @@ MODE_PARAMS_DEFAULTS = {
     "corr_rpm": 30,
     "seg_time_gap": 3.0,
     "corr_polish": False,
-    "corr_use_template": False,
+    # R12：corr_use_template / asr_enabled 孤儿键已删除（无 UI 设置源 / 值不产生分支差异）
     "corr_summary_prompt": "",  # 运行时环境提示词，保存时被 _save_mode_params 排除
-    "asr_enabled": False,  # 完整流程下由 ocr_flow 强制 True，此处仅作显式默认
     "srt_export_mode": "仅纠正结果",
     "post_conf_enabled": False,
     "asr_model_dir": "models/asr",
@@ -173,8 +175,8 @@ _MODE_PARAMS_RENAME_MAP = {
     "buffer_max_size": "s_buffer_size",
     "min_text_length": "s_min_text_len",
     "similarity_threshold": "s_sim_threshold",
-    "sentinel_filter_keywords": "s_filter_keywords",
     "regular_interval": "r_interval",
+    # R12：sentinel_filter_keywords → s_filter_keywords 条目随孤儿键一并移除
 }
 
 # ── 各配置文件的默认模板（首次运行时自动生成）──
@@ -195,7 +197,7 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
                     "base_url": "",
                     "model": "",
                     "timeout": 30,
-                    "device": "gpu",
+                    "device": "cpu",  # 与 use_gpu: False 保持一致（此前 gpu/false 矛盾导致 UI 误显 GPU 勾选）
                     "ocr_version": "PP-OCRv4",
                 },
             },
@@ -242,9 +244,11 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
     },
     "asr_engines.json": {
         "engine": "whisperx",
-        "enabled": False,
         "model_size": "large-v3",
         "language": "zh",
+        "device": "cuda",
+        "compute_type": "float16",
+        "batch_size": 16,
         "vad_enabled": False,
         "vad_min_silence_ms": 500,
         "vad_threshold": 0.5,
@@ -258,6 +262,7 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
         "compression_ratio_threshold": 2.4,
         "temperature": "0.0,0.2,0.4,0.6,0.8,1.0",
         "hotwords": "",
+        "hf_endpoint": "",
     },
     "ai_correction.json": {
         "enabled": False,
@@ -268,14 +273,21 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
         "base_url": "http://127.0.0.1:8080",
         "model": "",
         "timeout": 30,
-        "batch_size": 10,
-        "retry": 2,
+        "batch_size": 5,
+        "context_window": 4,
         "summary_prompt": "",
         "correction_system_prompt": "",
         "output_format": "",
         "prompts": {"default": ""},
         "stream_mode": True,
         "json_mode": True,
+        "enable_sentence_segmentation": False,
+        "segmentation_mode": "2lines",
+        "sentence_segmentation_prompt": "",
+        "sentence_segmentation_system_prompt": "",
+        "segmentation_prompts": {"2lines": {"prompt": "", "system": ""}},
+        "enable_proofread": False,
+        "use_template": False,
         "seg_time_gap": 3.0,
         "enable_polish": False,
         "polish_prompt": "你是一个专业的字幕润色专家。请对翻译/纠错后的字幕进行润色...",
@@ -341,7 +353,7 @@ class ConfigManager:
                 cfg = load_json_with_comments(self.settings_path)
                 if not isinstance(cfg, dict):
                     raise ValueError("settings.json 不是有效的对象")
-                self._migrate_mode_params(cfg)
+                self._migrate_settings(cfg)
                 merged = self._merge_defaults(cfg)
                 # 如果加载的配置与默认值有差异（缺键或多余键），重写文件
                 if set(cfg.keys()) != set(merged.keys()):
@@ -354,6 +366,22 @@ class ConfigManager:
         else:
             self._save_settings(DEFAULT_SETTINGS)
             return dict(DEFAULT_SETTINGS)
+
+    def _migrate_settings(self, cfg: dict):
+        """按 config_version 逐级执行迁移链到当前版本（R12）。
+
+        替代此前隐式的"diff 重写"迁移：版本号可表达删除键、
+        值语义变化等不可幂等迁移；执行后写回当前版本号。
+        """
+        version = int(cfg.get("config_version", 0) or 0)
+        if version >= CONFIG_VERSION:
+            return
+        # v0 → v1：mode_params 旧键重命名 + 补默认 + 死键清理
+        if version < 1:
+            self._migrate_mode_params(cfg)
+            cfg.pop("ai_correction_enabled", None)  # 死键清理
+            cfg["config_version"] = 1
+        # 未来版本在此追加：if version < 2: ...
 
     def _migrate_mode_params(self, cfg: dict):
         """迁移 mode_params 中的旧键名 → 新键名，补充缺失默认值。
@@ -376,6 +404,9 @@ class ConfigManager:
         for key, default in MODE_PARAMS_DEFAULTS.items():
             if key not in mp:
                 mp[key] = default
+        # R12 死键清理（迁移期执行，不再等待用户保存时过滤）
+        for k in ("corr_context_window", "corr_proofread", "corr_segmentation"):
+            mp.pop(k, None)
 
     def _save_settings(self, cfg: dict):
         with _config_lock:

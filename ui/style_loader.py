@@ -544,6 +544,12 @@ QListWidget::item {
 QListWidget::item:hover {
     background-color: rgba(0, 0, 0, 0.04);
 }
+/* R13：选中态背景指定为淡青。选中文字颜色由 RegionManagerWidget 的
+   自定义 delegate 控制（该区域颜色的深色版，保持区域色彩一致）；
+   此处不设 color——否则固定色会覆盖 delegate 的设置 */
+QListWidget::item:selected {
+    background-color: rgba(13, 148, 136, 0.15);
+}
 
 QScrollBar:vertical {
     background: transparent;
@@ -831,6 +837,12 @@ QListWidget::item {
 }
 QListWidget::item:hover {
     background-color: rgba(0, 0, 0, 0.04);
+}
+/* R13：选中态背景指定为淡青。选中文字颜色由 RegionManagerWidget 的
+   自定义 delegate 控制（该区域颜色的深色版，保持区域色彩一致）；
+   此处不设 color——否则固定色会覆盖 delegate 的设置 */
+QListWidget::item:selected {
+    background-color: rgba(13, 148, 136, 0.15);
 }
 
 QScrollBar:vertical {

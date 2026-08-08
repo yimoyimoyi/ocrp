@@ -1,7 +1,7 @@
 """区域管理面板 —— 区域列表 + 滑动属性编辑器。"""
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QColor
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -14,12 +14,40 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from core.i18n import _
+
+
+class _RegionItemDelegate(QStyledItemDelegate):
+    """区域列表项 delegate（R13）：选中文字 = 该区域颜色的深色版。
+
+    Qt 选中态文字默认使用 palette.HighlightedText（浅色主题为白色），
+    item.setForeground 与 QSS 固定色都无法按项变化——delegate 在绘制
+    选中态时把 HighlightedText 覆盖为该区域色的加深/加亮版，
+    保持"选中 = 未选中同色系深色版"的视觉一致。
+    """
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        if opt.state & QStyle.State_Selected:
+            # ForegroundRole 存的是 QBrush（item.setForeground）
+            fg = index.data(Qt.ForegroundRole)
+            color = fg.color() if isinstance(fg, QBrush) else (QColor(fg) if fg else QColor("#0d9488"))
+            bg = opt.palette.color(QPalette.Base).lightness()
+            if bg > 128:  # 浅色主题 → 深色版
+                color = color.darker(150)
+            else:  # 暗色主题 → 加亮版
+                color = color.lighter(150)
+            opt.palette.setColor(QPalette.HighlightedText, color)
+        super().paint(painter, opt, index)
 
 
 class RegionManagerWidget(QWidget):
@@ -93,6 +121,9 @@ class RegionManagerWidget(QWidget):
         # ── 区域列表 ──
         self._list_widget = QListWidget()
         self._list_widget.currentRowChanged.connect(self._on_selection_changed)
+        # R13：选中文字用该区域颜色的深色版（Qt 默认选中态用
+        # palette.HighlightedText 白色，覆盖 item foreground）
+        self._list_widget.setItemDelegate(_RegionItemDelegate(self._list_widget))
         layout.addWidget(self._list_widget)
 
         # ── 属性编辑 ──
@@ -268,6 +299,37 @@ class RegionManagerWidget(QWidget):
         # 底部弹性空间
         vl.addStretch()
 
+    def _region_text_color(self, region_color: QColor) -> QColor:
+        """非选中项文字色：区域色与主题背景对比度自适应（R13）。
+
+        此前直接使用区域色——白色区域色在亮色主题下白底白字不可见
+        （与背景一致），深色区域色在暗色主题下同样不可见。
+        按背景亮度对区域色做加亮/加深调整，保证文字始终可读。
+        """
+        from PySide6.QtGui import QPalette
+        from PySide6.QtWidgets import QApplication
+
+        bg = QApplication.palette().color(QPalette.Window).lightness()
+        c = QColor(region_color)
+        if bg <= 128:  # 暗背景 → 文字需足够亮
+            if c.lightness() < 150:
+                c = c.lighter(100 + (150 - c.lightness()) * 2)
+        else:  # 亮背景 → 文字需足够暗
+            if c.lightness() > 130:
+                c = c.darker(100 + (c.lightness() - 130) * 2)
+        return c
+
+    def _refresh_item_colors(self):
+        """刷新列表项前景色（R13）。
+
+        foreground 恒为区域色对比度自适应版；选中态的"深色版"由
+        _RegionItemDelegate 在绘制时处理（Qt 选中文字不走 item foreground）。
+        """
+        for i in range(self._list_widget.count()):
+            item = self._list_widget.item(i)
+            if i < len(self._regions):
+                item.setForeground(self._region_text_color(self._regions[i].get("color", QColor(0, 200, 100))))
+
     def _refresh_list(self):
         prev_row = self._list_widget.currentRow()
         self._list_widget.blockSignals(True)
@@ -276,13 +338,16 @@ class RegionManagerWidget(QWidget):
             color = r.get("color", QColor(0, 200, 100))
             text = f"{'✅ ' if r.get('enabled', True) else '⏸ '}{r['name']}"
             item = QListWidgetItem(text)
-            item.setForeground(color)
+            # 初始色用对比度自适应（R13：白色区域色在亮色主题下白底白字不可见）
+            item.setForeground(self._region_text_color(color))
             self._list_widget.addItem(item)
         if 0 <= prev_row < self._list_widget.count():
             self._list_widget.setCurrentRow(prev_row)
         elif self._list_widget.count() > 0:
             self._list_widget.setCurrentRow(0)
         self._list_widget.blockSignals(False)
+        # R13：选中态颜色（item foreground 优先于 QSS，需代码覆盖）
+        self._refresh_item_colors()
         # 手动触发选中事件（blockSignals 期间丢失的信号不会重放）
         current = self._list_widget.currentRow()
         if current >= 0:
@@ -290,6 +355,8 @@ class RegionManagerWidget(QWidget):
 
     def _on_selection_changed(self, row: int):
         self._current_index = row
+        # R13：点击切换选中时同步刷新文字颜色
+        self._refresh_item_colors()
         if 0 <= row < len(self._regions):
             self._set_editor_enabled(True)
             self._populate_editor(self._regions[row])

@@ -32,6 +32,39 @@ _FFMPEG = find_ffmpeg("ffmpeg")
 _FFPROBE = find_ffmpeg("ffprobe")
 _DEFAULT_MODEL_DIR = DEFAULT_ASR_MODEL_DIR
 
+# ── 标准模型大小列表（O12 共享：settings_dialog 与 right_panel 双份逻辑去重）──
+STANDARD_ASR_MODELS: list[str] = [
+    "tiny",
+    "tiny.en",
+    "base",
+    "base.en",
+    "small",
+    "small.en",
+    "medium",
+    "medium.en",
+    "large-v1",
+    "large-v2",
+    "large-v3",
+    "distil-small.en",
+    "distil-medium.en",
+    "distil-large-v2",
+]
+
+
+def build_asr_model_items(local_models: list[str]) -> list[tuple[str, str]]:
+    """构建 ASR 模型下拉条目 [(display, data), ...]：本地已下载 + 标准模型。
+
+    display 为界面显示文本，data 为实际值（本地路径或标准模型名）。
+    """
+    items = [(f"📁 {os.path.basename(p)}", p) for p in local_models]
+    for size in STANDARD_ASR_MODELS:
+        # 已作为本地模型添加的跳过（避免重复项）
+        if any(os.path.basename(p) == size for p in local_models):
+            continue
+        items.append((f"⬇ {size}（在线下载）", size))
+    return items
+
+
 # ── 音频分片默认参数 ──
 _ASR_CHUNK_DURATION = 300  # 每片长度（秒），默认 5 分钟
 _ASR_CHUNK_OVERLAP = 2.0  # 片间重叠（秒），避免切断单词
@@ -50,12 +83,9 @@ def scan_local_asr_models(model_dir: str = "") -> list[str]:
         for entry in os.scandir(target):
             if entry.is_dir():
                 sub_path = os.path.join(target, entry.name)
-                has_bin = False
-                for _root, _dirs, files in os.walk(sub_path):
-                    if "model.bin" in files:
-                        has_bin = True
-                        break
-                if has_bin:
+                # faster-whisper 模型的 model.bin 位于子目录根部，单层检查即可
+                # （启动性能修复：os.walk 全递归在机械硬盘上可达 0.5-2s）
+                if os.path.isfile(os.path.join(sub_path, "model.bin")):
                     models.append(sub_path)
         # 也检查顶层目录本身
         if os.path.isfile(os.path.join(target, "model.bin")):

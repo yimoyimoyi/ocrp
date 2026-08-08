@@ -1,10 +1,9 @@
 """关键词过滤器管理器 —— 包含指定关键词的结果将被自动过滤。"""
 
-import json
 import os
 from pathlib import Path
 
-from core.config_manager import atomic_write_json
+from core.config_manager import atomic_write_json, load_json_with_comments
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,8 +24,8 @@ class FilterManager:
         """重新加载过滤器配置。"""
         if FILTERS_PATH.exists():
             try:
-                with open(FILTERS_PATH, encoding="utf-8") as f:
-                    data = json.load(f)
+                # R12：统一走注释解析器（此前裸 json.load 不支持 // 注释，P2-6 收口遗漏）
+                data = load_json_with_comments(FILTERS_PATH)
                 from core.config_schema import validate_config
                 from core.config_schemas import FILTERS_SCHEMA
 

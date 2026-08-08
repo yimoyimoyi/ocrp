@@ -66,12 +66,10 @@ class OCRFlow(_FlowBase):
 
         mp = self._get_mode_params()
         mode = mp.get("process_mode", "OCR + ASR（完整流程）")
-        asr_enabled = mp.get("asr_enabled", False)
+        # R12：asr_enabled 孤儿键已删除——完整流程模式下 ASR 恒启用，
+        # 其余模式由下方分支按 mode 判定
+        asr_enabled = mode == "OCR + ASR（完整流程）"
         asr_region_name = mp.get("asr_region_name", "语音")
-
-        # 完整流程模式 → ASR 默认启用（UI 复选框仅对"仅OCR"/"仅ASR"分组生效）
-        if mode == "OCR + ASR（完整流程）":
-            asr_enabled = True
 
         # 判断是否有 OCR 区域（排除纯 ASR 区域）
         has_ocr_regions = any(r.get("name", "") != asr_region_name for r in regions)

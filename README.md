@@ -16,7 +16,7 @@ PaddleOCR · OpenAI Vision · Ollama · LlamaCpp · WhisperX · LLM 纠错 · �
 
 🌐 [English](docs/README_EN.md) | [日本語](docs/README_JA.md)
 
-ORCP 是一款功能完整的桌面端字幕提取工具，支持从视频、音频、图片中提取文字内容。集成多引擎 OCR、离线语音识别、LLM 纠错与分句，提供直观的 PyQt5 图形界面。
+ORCP 是一款功能完整的桌面端字幕提取工具，支持从视频、音频、图片中提取文字内容。集成多引擎 OCR、离线语音识别、LLM 纠错与分句，提供直观的 PySide6 图形界面。
 
 ## 功能特性
 
@@ -153,7 +153,7 @@ orcp/
 │   ├── ffmpeg_reader.py        #   FFmpeg 视频解码
 │   └── ...
 │
-├── ui/                         # PyQt5 用户界面
+├── ui/                         # PySide6 用户界面
 │   ├── main_window.py          #   主窗口
 │   ├── config_panel.py         #   参数配置面板
 │   ├── settings_dialog.py      #   内部设置对话框

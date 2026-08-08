@@ -298,6 +298,10 @@ class FrameProcessor:
                         for rname, re_name, text, conf in frame_results:
                             if self._filter_mgr and self._filter_mgr.matches(text):
                                 continue
+                            # R12（P1-④）：接入最小文字长度过滤——此前 r_min_text_len
+                            # 只被赋值从未消费，常规模式下"改了没反应"
+                            if len(text.strip()) < self._r_min_text_len:
+                                continue
                             if text.strip():
                                 if self._r_dedup:
                                     last_sent = region_last_sent.get(rname, "")

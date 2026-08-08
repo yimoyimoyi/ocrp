@@ -146,7 +146,9 @@ class AICorrector:
         self._engine_manager = engine_manager
         self._env_context: str = ""
         self._extract_env: bool = self._config.get("extract_environment", False)
-        self._translate_mode: bool = False  # 翻译模式，由外部 setter 设置
+        # 翻译模式（设置同步 R11：由配置读取，_open_settings 重建实例后保持 UI 勾选，
+        # 此前 __init__ 硬编码 False 导致对话框 accept 后 translate 永久失效）
+        self._translate_mode: bool = bool(self._config.get("translate_mode", False))
         # 从配置读取流式/JSON 模式（设置同步 P9 修复：重建实例后保持 UI 勾选状态）
         self._stream_mode: bool = bool(self._config.get("stream_mode", False))  # 流式输出模式
         self._json_mode: bool = bool(self._config.get("json_mode", False))  # JSON 输出模式

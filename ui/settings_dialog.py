@@ -95,6 +95,7 @@ _FIELDS: list[dict] = [
         default="OCR + ASR（完整流程）",
         tooltip="选择开始处理时运行的流程模式",
         tr_tooltip=True,
+        quick=True,
     ),
     dict(
         key="frame_interval",
@@ -113,6 +114,7 @@ _FIELDS: list[dict] = [
         tr_suffix=True,
         tooltip="每隔多少秒处理一帧",
         tr_tooltip=True,
+        quick=True,
     ),
     dict(
         key="subtitle_duration",
@@ -138,7 +140,8 @@ _FIELDS: list[dict] = [
         widget="combo",
         label="SRT 导出:",
         tr_label=True,
-        options=("仅纠正结果", "仅原文", "双语对照（原文+纠正）", "原文 换行 纠正"),
+        # R12：删除第 4 个冗余选项（与"双语对照"映射相同，dual 只有一种输出）
+        options=("仅纠正结果", "仅原文", "双语对照（原文+纠正）"),
         tr_options=True,
         default="仅纠正结果",
         tooltip="SRT 导出时的字幕内容模式",
@@ -161,6 +164,7 @@ _FIELDS: list[dict] = [
         load_map=_map_subtitle_mode,
         on_load="_on_subtitle_mode_changed",
         on_change="_on_subtitle_mode_changed",
+        quick=True,
     ),
     dict(
         key="sentinel_enabled",
@@ -172,6 +176,23 @@ _FIELDS: list[dict] = [
         tr_text=True,
         label="",
         default=True,
+        quick=True,
+    ),
+    dict(
+        # R12（P2-8）：s_ocr_version 此前无任何 UI（只能手改 settings.json），
+        # 补充哨兵 OCR 版本选择；"跟随全局"为默认，与引擎配置版本解耦
+        key="s_ocr_version",
+        tab="asr",
+        group="流式参数（哨兵去重）",
+        attr="_s_ocr_version",
+        widget="combo",
+        label="哨兵 OCR 版本:",
+        tr_label=True,
+        options=("跟随全局", "PP-OCRv4 (最快)", "PP-OCRv5_mobile (平衡)", "PP-OCRv5_server (高精度)"),
+        tr_options=True,
+        default="跟随全局",
+        tooltip="哨兵模式使用的 OCR 模型版本（仅本地 PaddleOCR 生效）",
+        tr_tooltip=True,
     ),
     dict(
         key="s_drop_ratio",
@@ -319,6 +340,7 @@ _FIELDS: list[dict] = [
         tr_label=True,
         default="",
         on_load="_load_asr_model_value",
+        quick=True,
     ),
     dict(
         tab="asr",
@@ -338,6 +360,7 @@ _FIELDS: list[dict] = [
         options=("auto", "zh", "en", "ja", "ko"),
         default="zh",
         init_text="zh",
+        quick=True,
     ),
     dict(
         key="asr_region_name",
@@ -350,6 +373,7 @@ _FIELDS: list[dict] = [
         default="语音",
         tooltip="ASR 结果在表格中显示的区域名称",
         tr_tooltip=True,
+        quick=True,
     ),
     dict(
         key="asr_beam_size",
@@ -506,6 +530,7 @@ _FIELDS: list[dict] = [
         tr_text=True,
         label="",
         default=True,
+        quick=True,
     ),
     dict(
         key="post_conf_enabled",
@@ -517,6 +542,7 @@ _FIELDS: list[dict] = [
         tr_text=True,
         label="",
         default=False,
+        quick=True,
     ),
     dict(
         key="post_conf_threshold",
@@ -531,6 +557,7 @@ _FIELDS: list[dict] = [
         step=0.05,
         decimals=2,
         default=0.6,
+        quick=True,
     ),
     dict(
         key="post_sim_threshold",
@@ -545,6 +572,7 @@ _FIELDS: list[dict] = [
         step=0.05,
         decimals=2,
         default=0.9,
+        quick=True,
     ),
     dict(
         key="post_min_text_len",
@@ -557,6 +585,7 @@ _FIELDS: list[dict] = [
         min=1,
         max=100,
         default=2,
+        quick=True,
     ),
     # ── Tab 4: AI 纠错 ──
     dict(
@@ -570,6 +599,7 @@ _FIELDS: list[dict] = [
         default=False,
         tooltip="总开关：开启后将使用 LLM 对 OCR 结果进行纠错",
         tr_tooltip=True,
+        quick=True,
     ),
     dict(
         key="corr_translate",
@@ -582,6 +612,7 @@ _FIELDS: list[dict] = [
         default=False,
         tooltip="开启后 LLM 将把 OCR 结果翻译为中文，纠错提示词仅作参考",
         tr_tooltip=True,
+        quick=True,
     ),
     dict(
         key="corr_stream",
@@ -636,7 +667,7 @@ _FIELDS: list[dict] = [
         on_click="_on_extract_env_clicked",
     ),
     dict(
-        key="corr_summary_prompt",
+        key="summary_prompt",
         tab="correction",
         group="纠错模式",
         attr="_corr_summary_prompt",
@@ -644,7 +675,9 @@ _FIELDS: list[dict] = [
         min_height=50,
         max_height=80,
         # source="corr"：与 ai_correction.json 的 summary_prompt 同源读写，
-        # 避免从未持久化的 mode_params 读到 "None"（设置同步 P2/P3 修复）
+        # 避免从未持久化的 mode_params 读到 "None"（设置同步 P2/P3 修复；
+        # R11：key 由 corr_summary_prompt 修正为文件真实键 summary_prompt，
+        # 此前键名不符导致加载恒空、保存时清空已存环境提示词）
         source="corr",
         default="",
         load_map=_clean_summary_load,  # 清洗历史脏值 "None"
@@ -691,14 +724,24 @@ _FIELDS: list[dict] = [
         tr_placeholder=True,
     ),
     dict(
+        # R12（P1-4）：模板编辑器入口并入设置页（模板仍按区域独立选择）
+        tab="correction",
+        group="提示词配置",
+        attr="_btn_open_templates",
+        widget="button",
+        text="📝 打开模板编辑器…",
+        on_click="_on_open_template_editor",
+        label="",  # form 布局需要 label 键
+    ),
+    dict(
         key="corr_preset",
         tab="correction",
-        group="批量参数",
+        group="API 连接",
         attr="_corr_preset",
         widget="preset_combo",
         label="API 预设:",
         tr_label=True,
-        tooltip="选择纠错使用的 API 连接预设",
+        tooltip="选择纠错使用的 API 连接预设，切换时自动回填下方连接字段",
         tr_tooltip=True,
     ),
     dict(
@@ -788,6 +831,7 @@ _FIELDS: list[dict] = [
         echo="password",
         source="corr",
         sync=False,
+        default="",  # 缺省空串，避免 str(None)="None" 字面量污染（R11）
     ),
     dict(
         key="base_url",
@@ -813,6 +857,7 @@ _FIELDS: list[dict] = [
         tr_label=True,
         source="corr",
         sync=False,
+        default="",  # 缺省空串（R11）
     ),
     dict(
         key="timeout",
@@ -830,27 +875,28 @@ _FIELDS: list[dict] = [
         source="corr",
         sync=False,
     ),
+    # R12（P1-⑥）：retry_on_failure 字段删除——与"批量参数"组的 corr_retry
+    # 是同一概念两套键名，重试统一走 corr_retry（写入文件 retry_on_failure）
     dict(
-        key="retry_on_failure",
+        # R12（P0-②）：测试连接按钮——llm_client.test_connection 此前已实现
+        # 但从未被 UI 调用，API 配置错误只能等处理开始后才暴露
         tab="correction",
         group="API 连接",
-        attr="_corr_api_retry",
-        widget="spin",
-        label="重试次数:",
-        tr_label=True,
-        min=0,
-        max=10,
-        default=2,
-        source="corr",
-        sync=False,
+        attr="_btn_test_conn",
+        widget="button",
+        text="🔌 测试连接",
+        on_click="_on_test_connection",
+        label="",  # form 布局需要 label 键
     ),
 ]
+
+# ── 引擎字段：可见性矩阵 + 值填充/收集声明（_on_engine_changed / get_engine_config）──
 
 # ── 引擎字段：可见性矩阵 + 值填充/收集声明（_on_engine_changed / get_engine_config）──
 #   visible_when(is_local, is_paddle) -> bool  字段可见性
 #   engine_get(widget, eng_cfg)                引擎切换时回填
 #   engine_out=(cfg_key, getter(widget))       收集到 get_engine_config()
-_VER_MAP = {0: None, 1: "PP-OCRv5_mobile", 2: "PP-OCRv4"}
+_VER_MAP = {0: "PP-OCRv5_server", 1: "PP-OCRv5_mobile", 2: "PP-OCRv4"}
 
 
 def _fill_paddle_version(widget, cfg: dict):
@@ -980,8 +1026,9 @@ _TAB_GROUPS: dict[str, list[dict]] = {
     ],
     "asr": [
         dict(kind="group", title="字幕模式", tr=True),
-        dict(kind="group", title="流式参数（哨兵去重）", bind="_s_group"),
-        dict(kind="group", title="常规参数（固定间隔）", bind="_r_group"),
+        # R12：流式/常规参数为低频调优项，默认折叠（与解码参数/VAD 组一致）
+        dict(kind="group", title="流式参数（哨兵去重）", bind="_s_group", collapsed=True),
+        dict(kind="group", title="常规参数（固定间隔）", bind="_r_group", collapsed=True),
         dict(kind="group", title="ASR 语音识别引擎", tr=True),
         dict(kind="group", title="解码参数", collapsed=True, spacing=6),
         dict(kind="group", title="VAD (语音活动检测)", collapsed=True, spacing=6),
@@ -993,8 +1040,10 @@ _TAB_GROUPS: dict[str, list[dict]] = {
     "correction": [
         dict(kind="vbox", title="纠错模式", tr=True, spacing=6),
         dict(kind="group", title="提示词配置", collapsed=True),
-        dict(kind="group", title="批量参数", tr=True),
-        dict(kind="group", title="API 连接", tr=True, collapsed=True, spacing=6),
+        # R11 UX：批量参数为低频调优项默认折叠；API 连接默认展开（预设切换
+        # 回填的字段可见，此前默认折叠导致回填与「获取模型」不可见）
+        dict(kind="group", title="批量参数", tr=True, collapsed=True),
+        dict(kind="group", title="API 连接", tr=True, spacing=6),
     ],
     "sort": [
         dict(kind="panel", name="sort"),
@@ -1042,8 +1091,11 @@ class SettingsDialog(QDialog):
         self._tabs.setTabPosition(QTabWidget.North)
         layout.addWidget(self._tabs, 1)
 
+        self._dirty: bool = False  # 未保存更改标记（R11 UX：Cancel/关闭时提示）
         self._build_tabs()
         self._load_initial_values()
+        # 加载完成后统一接线 dirty 信号，避免初始回填误报
+        self._wire_dirty_tracking()
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self._on_accept)
@@ -1057,6 +1109,42 @@ class SettingsDialog(QDialog):
         """按 tr_<key> 标志返回构建期翻译后的显示文本。"""
         text = spec[key]
         return _(text) if spec.get("tr_" + key) else text
+
+    # ── 未保存更改追踪（R11 UX）──
+
+    def _mark_dirty(self, *_):
+        self._dirty = True
+
+    def _wire_dirty_tracking(self):
+        """为声明式表单控件统一接线变更信号（初始值加载完成后调用）。"""
+        for spec in _FIELDS:
+            attr = spec.get("attr")
+            if not attr or not hasattr(self, attr):
+                continue
+            w = getattr(self, attr)
+            wtype = spec.get("widget")
+            if wtype in ("combo", "preset_combo", "combo_edit", "combo_data"):
+                w.currentTextChanged.connect(self._mark_dirty)
+            elif wtype in ("spin", "double_spin"):
+                w.valueChanged.connect(self._mark_dirty)
+            elif wtype == "check":
+                w.toggled.connect(self._mark_dirty)
+            elif wtype in ("line", "text"):
+                w.textChanged.connect(self._mark_dirty)
+
+    def reject(self):
+        """取消/关闭时若有未保存更改，先确认再放弃。"""
+        if self._dirty:
+            ret = QMessageBox.question(
+                self,
+                _("未保存的更改"),
+                _("有参数尚未保存，确定放弃更改吗？"),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                return
+        super().reject()
 
     def _set_field_value(self, spec: dict, widget, value):
         """按控件类型设置值（等价 safe_set_widget 行为）。"""
@@ -1078,7 +1166,12 @@ class SettingsDialog(QDialog):
                 widget.setText(str(value))
             elif wtype == "text":
                 widget.setPlainText(str(value))
-        except RuntimeError:
+            elif wtype == "corr_model_row":
+                # 可编辑下拉：配置中的模型名回填（R11 修复：此前无此分支，
+                # 模型值永不回显，重新打开对话框总是为空）
+                widget.setEditText(str(value) if value else "")
+        except (RuntimeError, TypeError):
+            # TypeError：int(None)/float(None) 等防御（R11）
             pass
 
     def _field_value(self, spec: dict, widget):
@@ -1131,6 +1224,18 @@ class SettingsDialog(QDialog):
         for prefix, name, suffix in self._cp.get_sort_rules():
             self._sort_items.append((prefix, name, suffix))
             self._add_sort_row(name, prefix, suffix)
+
+        # ── API 预设回填（P4 修复）──
+        # preset_combo 构建期默认选中 get_default_name() 但信号不触发，
+        # 若此处不主动回填，UI 显示预设名而 API 连接字段全空（误导态）。
+        # 仅当连接字段全部为空时才回填——避免覆盖配置文件中的自定义值。
+        if (
+            hasattr(self, "_corr_preset")
+            and self._corr_preset.currentText()
+            and not self._corr_api_key.text()
+            and not self._corr_api_model.currentText().strip()
+        ):
+            self._on_preset_changed(self._corr_preset.currentText())
 
     @staticmethod
     def _rev_map(translated: str, *orig_values: str) -> str:
@@ -1208,6 +1313,9 @@ class SettingsDialog(QDialog):
 
     def _build_group(self, item: dict, title: str, fields: list) -> CollapsibleGroup:
         """构建一个 CollapsibleGroup：form 布局（带标签行）或 vbox 布局。"""
+        # R12（P1-3）：折叠组标题标注「·高级」，帮助普通用户识别低频调优项
+        if item.get("collapsed"):
+            title = f"{title} ·高级"
         group = CollapsibleGroup(title, collapsed=bool(item.get("collapsed")))
         spacing = item.get("spacing", 8)
         if item["kind"] == "vbox":
@@ -1301,8 +1409,13 @@ class SettingsDialog(QDialog):
             w = self._build_corr_model_row(spec)
         else:
             raise ValueError(f"未知字段类型: {wtype}")
-        if spec.get("tooltip") and wtype not in ("button", "corr_model_row"):
-            w.setToolTip(self._t(spec, "tooltip"))
+        # tooltip：显式提示 + quick 标记字段追加"主窗口可快捷调整"引导（R11 UX）
+        if wtype not in ("button", "corr_model_row"):
+            tip = self._t(spec, "tooltip") if spec.get("tooltip") else ""
+            if spec.get("quick"):
+                tip = (tip + "；" if tip else "") + _("提示：主窗口工具栏/右侧面板可快捷调整")
+            if tip:
+                w.setToolTip(tip)
         if spec.get("attr") and not hasattr(self, spec["attr"]):
             setattr(self, spec["attr"], w)
         return w
@@ -1351,6 +1464,18 @@ class SettingsDialog(QDialog):
         ef.addRow(_("引擎:"), self._engine_combo)
         for spec in _ENGINE_FIELDS:
             ef.addRow(self._t(spec, "label"), self._build_engine_field(spec))
+        # R12（P1-1）：预设 → 引擎回填（消解 API 连接三处重复填 Key）
+        preset_row = QHBoxLayout()
+        preset_row.setContentsMargins(0, 0, 0, 0)
+        self._eng_preset_combo = QComboBox()
+        from core.api_preset_manager import APIPresetManager
+
+        self._eng_preset_combo.addItems(APIPresetManager().get_names())
+        self._eng_preset_combo.setCurrentIndex(-1)
+        self._eng_preset_combo.setPlaceholderText(_("从预设导入..."))
+        self._eng_preset_combo.currentTextChanged.connect(self._on_eng_preset_import)
+        preset_row.addWidget(self._eng_preset_combo, 1)
+        ef.addRow(_("预设导入:"), preset_row)
         group.addLayout(ef)
         layout.addWidget(group)
         # 初始化引擎字段可见性
@@ -1460,12 +1585,37 @@ class SettingsDialog(QDialog):
         else:
             self._eng_model_status.setText(_("⚠ 未获取到"))
 
+    def _on_eng_preset_import(self, name: str):
+        """R12（P1-1）：选中预设 → 回填引擎 API 字段（与「保存为预设」双向打通）。"""
+        if not name:
+            return
+        from core.api_preset_manager import APIPresetManager
+
+        preset = APIPresetManager().get_preset(name)
+        if not preset:
+            return
+        self._eng_api_key.setText(preset.get("api_key", ""))
+        self._eng_base_url.setText(preset.get("base_url", ""))
+        self._eng_model.setEditText(preset.get("model", ""))
+        self._eng_timeout.setValue(preset.get("timeout", 30))
+        self._eng_preset_combo.setCurrentIndex(-1)  # 复位占位
+
     def _on_save_eng_preset(self):
-        """将当前引擎 API 配置保存为预设。"""
+        """将当前引擎 API 配置保存为预设（同名已存在时确认覆盖，R11）。"""
         from core.api_preset_manager import APIPresetManager
 
         mgr = APIPresetManager()
         name = f"{self._engine_combo.currentText()} 预设"
+        if name in mgr.get_names():
+            ret = QMessageBox.question(
+                self,
+                _("覆盖预设"),
+                _("预设「%s」已存在，确定用当前配置覆盖吗？") % name,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                return
         mgr.add_preset(
             name,
             {
@@ -1493,26 +1643,10 @@ class SettingsDialog(QDialog):
         self._s_group.setVisible(is_streaming)
         self._r_group.setVisible(not is_streaming)
 
-    # faster-whisper 标准模型大小（可自动下载）
-    _STANDARD_ASR_MODELS = [
-        "tiny",
-        "tiny.en",
-        "base",
-        "base.en",
-        "small",
-        "small.en",
-        "medium",
-        "medium.en",
-        "large-v1",
-        "large-v2",
-        "large-v3",
-        "distil-small.en",
-        "distil-medium.en",
-        "distil-large-v2",
-    ]
+    # R11（O12）：标准模型列表已提取至 core/asr_engine.STANDARD_ASR_MODELS 共享
 
     def _refresh_asr_models(self):
-        from core.asr_engine import scan_local_asr_models
+        from core.asr_engine import build_asr_model_items, scan_local_asr_models
 
         model_dir = self._asr_model_dir.text().strip() or "models/asr"
         base = BASE_DIR
@@ -1520,16 +1654,9 @@ class SettingsDialog(QDialog):
         local_models = scan_local_asr_models(full_dir)
         self._asr_model.blockSignals(True)
         self._asr_model.clear()
-        # 添加本地已下载的模型（显示完整路径，data 为完整路径）
-        for path in local_models:
-            display = os.path.basename(path) if os.path.isdir(path) else path
-            self._asr_model.addItem(f"📁 {display}", path)
-        # 添加标准模型大小（data 为模型名称，首次使用时自动下载）
-        for size in self._STANDARD_ASR_MODELS:
-            # 跳过已作为本地模型添加的
-            if any(os.path.basename(p) == size for p in local_models):
-                continue
-            self._asr_model.addItem(f"⬇ {size}（在线下载）", size)
+        # R11（O12）：本地 + 标准模型条目统一由共享函数构建
+        for display, data in build_asr_model_items(local_models):
+            self._asr_model.addItem(display, data)
         if self._asr_model.count() > 0:
             self._asr_model.setCurrentIndex(0)
         self._asr_model.blockSignals(False)
@@ -1712,27 +1839,11 @@ class SettingsDialog(QDialog):
         self._corr_api_model.setEditText(preset.get("model", ""))
         self._corr_api_timeout.setValue(preset.get("timeout", 30))
 
-    def _sync_preset(self):
-        """将当前 API 连接字段回写到选中预设。"""
-        from core.api_preset_manager import APIPresetManager
-
-        preset_name = self._corr_preset.currentText()
-        if preset_name:
-            APIPresetManager().update_preset(
-                preset_name,
-                {
-                    "api_key": self._corr_api_key.text(),
-                    "base_url": self._corr_api_url.text(),
-                    "model": self._corr_api_model.currentText(),
-                    "timeout": self._corr_api_timeout.value(),
-                },
-            )
-
     def get_corr_api_config(self) -> dict:
         """获取 API 连接配置（纯读取）。
 
-        stream_mode/json_mode 一并返回：重建 AICorrector 时保持
-        与 UI 勾选一致（设置同步 P9 修复，配合 AICorrector.__init__ 读配置）。
+        stream_mode/json_mode/translate_mode 一并返回：重建 AICorrector 时
+        保持与 UI 勾选一致（设置同步 P9/R11 修复，配合 AICorrector.__init__ 读配置）。
         """
         return {
             "enabled": self._corr_enabled.isChecked(),
@@ -1740,13 +1851,56 @@ class SettingsDialog(QDialog):
             "base_url": self._corr_api_url.text(),
             "model": self._corr_api_model.currentText(),
             "timeout": self._corr_api_timeout.value(),
-            "retry_on_failure": self._corr_api_retry.value(),
+            # R12（P1-⑥）：重试统一走 corr_retry（批量参数组），
+            # 由 _sync_correction_config 写入文件 retry_on_failure
             "summary_prompt": self._corr_summary_prompt.toPlainText(),
             "correction_system_prompt": self._corr_system_prompt.toPlainText(),
             "output_format": self._corr_output_format.text(),
             "stream_mode": self._corr_stream.isChecked(),
             "json_mode": self._corr_json.isChecked(),
+            "translate_mode": self._corr_translate.isChecked(),
         }
+
+    def _on_test_connection(self):
+        """测试纠错 API 连接（R12 P0-②：后台线程，完成后弹结果）。
+
+        此前 llm_client.test_connection 已实现但从未被 UI 调用，
+        API 配置错误只能等处理开始后才暴露。
+        """
+        from core.llm_utils.llm_client import test_connection
+
+        base_url = self._corr_api_url.text().strip()
+        if not base_url:
+            QMessageBox.warning(self, _("测试连接"), _("请先填写 Base URL"))
+            return
+        api_key = self._corr_api_key.text()
+        model = self._corr_api_model.currentText().strip()
+
+        import threading
+
+        class _TestBridge(QObject):
+            done = Signal(bool, str)
+
+        bridge = _TestBridge()
+        bridge.done.connect(self._on_test_conn_result)
+
+        def _run():
+            ok, msg = test_connection(api_key, base_url, model)
+            bridge.done.emit(ok, msg)
+
+        threading.Thread(target=_run, daemon=True).start()
+        self._corr_model_status.setText("⏳ 测试连接中...")
+
+    def _on_test_conn_result(self, ok: bool, msg: str):
+        self._corr_model_status.setText(f"{'✅' if ok else '❌'} {msg}")
+        if ok:
+            QMessageBox.information(self, _("测试连接"), f"✅ {msg}")
+        else:
+            QMessageBox.warning(self, _("测试连接失败"), f"❌ {msg}")
+
+    def _on_open_template_editor(self):
+        """打开模板编辑器（R12 P1-4：入口并入设置页提示词配置组）。"""
+        self._cp._open_template_editor()
 
     def _on_fetch_corr_models(self):
         """从纠错 API 连接的 Base URL 获取可用模型列表。"""
@@ -1794,8 +1948,9 @@ class SettingsDialog(QDialog):
         _sync_values_to_cp 之前调用——后者 emit mode_changed 时携带的
         是全量 _params 快照，先写入 corr_polish 才能进入保存链路。
         """
-        # 模型非空校验：空模型会导致所有纠错/润色调用失败（llm_client 模型名称未设置）
-        if not self._corr_api_model.currentText().strip():
+        # 模型非空校验（R11 条件化）：仅当启用 AI 纠错/润色时才强制——
+        # 纯 OCR 用户此前也被拦在"模型名称未设置"弹窗后无法保存任何设置。
+        if self._corr_enabled.isChecked() and not self._corr_api_model.currentText().strip():
             QMessageBox.warning(
                 self,
                 _("模型名称未设置"),
@@ -1805,5 +1960,6 @@ class SettingsDialog(QDialog):
             return
         self._cp.set_polish_enabled(self._corr_polish.isChecked())
         self._sync_values_to_cp()
-        self._sync_preset()
+        # R11：移除 _sync_preset 自动回写——预设组合框仅作连接填充用，
+        # 修改由「💾 保存为 API 预设」按钮显式完成，避免浏览预设静默覆盖 api_presets.json
         self.accept()

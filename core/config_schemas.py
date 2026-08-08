@@ -116,28 +116,9 @@ FILTERS_SCHEMA = {
     }
 }
 
-# ── ui_config.json ──
-UI_CONFIG_SCHEMA = {
-    "properties": {
-        "window": {
-            "type": "dict",
-            "properties": {
-                "default_width": {"type": "int", "min": 800},
-                "default_height": {"type": "int", "min": 600},
-                "min_width": {"type": "int", "min": 400},
-                "min_height": {"type": "int", "min": 300},
-            },
-        },
-        "theme": {
-            "type": "dict",
-            "properties": {
-                "default": {"type": "str", "enum": ["dark", "light"]},
-            },
-        },
-    }
-}
-
 # ── 注册表：文件名 → schema ──
+# R12：ui_config.json 已删除（无加载器，内容被 i18n .po + styles/ 取代），
+# UI_CONFIG_SCHEMA 一并移除
 SCHEMA_REGISTRY = {
     "ocr_engines.json": OCR_ENGINES_SCHEMA,
     "asr_engines.json": ASR_ENGINES_SCHEMA,
@@ -145,5 +126,4 @@ SCHEMA_REGISTRY = {
     "api_presets.json": API_PRESETS_SCHEMA,
     "prompt_templates.json": PROMPT_TEMPLATES_SCHEMA,
     "filters.json": FILTERS_SCHEMA,
-    "ui_config.json": UI_CONFIG_SCHEMA,
 }

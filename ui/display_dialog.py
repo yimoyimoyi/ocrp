@@ -160,7 +160,7 @@ class DisplayDialog(QDialog):
 
         layout.addLayout(form)
 
-        hint = QLabel(_("点击主题卡片即时预览，关闭窗口自动保存。"))
+        hint = QLabel(_("点击主题卡片即时预览，点击确定后保存。"))
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
         layout.addWidget(hint)

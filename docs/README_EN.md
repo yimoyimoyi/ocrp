@@ -16,7 +16,7 @@ PaddleOCR · OpenAI Vision · Ollama · LlamaCpp · WhisperX · LLM Correction �
 
 🌐 [中文](../README.md) | [日本語](README_JA.md)
 
-ORCP is a full-featured desktop subtitle extraction tool supporting text extraction from video, audio, and images. It integrates multi-engine OCR, offline speech recognition, LLM correction and sentence segmentation, all within an intuitive PyQt5 GUI.
+ORCP is a full-featured desktop subtitle extraction tool supporting text extraction from video, audio, and images. It integrates multi-engine OCR, offline speech recognition, LLM correction and sentence segmentation, all within an intuitive PySide6 GUI.
 
 ## Features
 
@@ -148,7 +148,7 @@ orcp/
 │   ├── result_processor.py     #   Dedup, filter, export
 │   └── ...
 │
-├── ui/                         # PyQt5 user interface
+├── ui/                         # PySide6 user interface
 │   ├── main_window.py          #   Main window
 │   ├── config_panel.py         #   Settings panel
 │   ├── settings_dialog.py      #   Advanced settings dialog

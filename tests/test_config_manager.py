@@ -63,12 +63,19 @@ _NEW_DEFAULT_KEYS = [
     "corr_rpm",
     "seg_time_gap",
     "corr_polish",
-    "corr_use_template",
     "corr_summary_prompt",
-    "asr_enabled",
     "srt_export_mode",
     "post_conf_enabled",
     "asr_model_dir",
+    # R12：corr_use_template / asr_enabled 孤儿键已删除
+]
+
+# R12：已删除的孤儿键（防止未来误加回 defaults）
+_REMOVED_KEYS = [
+    "s_filter_keywords",
+    "r_filter_keywords",
+    "corr_use_template",
+    "asr_enabled",
 ]
 
 
@@ -89,6 +96,9 @@ class TestModeParamsMigration:
 
         for key in _NEW_DEFAULT_KEYS:
             assert key in MODE_PARAMS_DEFAULTS, f"缺少默认键: {key}"
+        # R12：孤儿键必须已删除
+        for key in _REMOVED_KEYS:
+            assert key not in MODE_PARAMS_DEFAULTS, f"孤儿键未删除: {key}"
         # 抽查典型默认值
         assert MODE_PARAMS_DEFAULTS["corr_retry"] == 2
         assert MODE_PARAMS_DEFAULTS["corr_concurrency"] == 4

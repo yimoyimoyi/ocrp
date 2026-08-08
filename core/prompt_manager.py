@@ -59,13 +59,36 @@ class PromptTemplateManager:
                 if not ok:
                     logger.warning("提示词模板配置校验失败: %s", "; ".join(errors[:3]))
                 self._templates = data.get("templates", [])
+                # R12（P0-1）：文件为空时 seed 内置模板——此前空文件与代码中
+                # 硬编码的"通用OCR"默认名矛盾，导致新用户模板下拉全空、
+                # 区域默认模板指向不存在的模板（悬空）
+                if not self._templates:
+                    self._seed_default_templates()
                 logger.info("已加载 %d 个提示词模板", len(self._templates))
             except Exception as e:
                 logger.error("加载提示词模板失败: %s", e)
                 self._templates = []
+                self._seed_default_templates()
         else:
             logger.warning("提示词模板文件不存在: %s", path)
             self._templates = []
+            self._seed_default_templates()
+
+    def _seed_default_templates(self):
+        """内置默认模板：文件缺失/为空时补齐（R12 P0-1）。"""
+        from core.utils import DEFAULT_OCR_TEMPLATE
+
+        self._templates = [
+            {
+                "name": DEFAULT_OCR_TEMPLATE,
+                "description": "通用 OCR 识别提示词（内置默认）",
+                "prompt": "请识别图片中的文字，只返回识别到的文字内容",
+                "applicable_regions": ["any"],
+                "category": self.CATEGORY_OCR,
+            }
+        ]
+        self._save()
+        logger.info("已补齐内置默认模板: %s", DEFAULT_OCR_TEMPLATE)
 
     def get_all_templates(self) -> list[dict]:
         """获取全部模板。"""

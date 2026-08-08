@@ -39,6 +39,17 @@ from core.logger import get_logger
 logger = get_logger(__name__)
 
 
+def label_text_color(bg_color: QColor) -> QColor:
+    """区域名标签文字颜色：按标签背景亮度自适应（R13 修复）。
+
+    此前恒为白色——区域颜色为白色时白底白字完全不可见；
+    浅色图片/亮色区域同理。亮度 > 140 判为亮底用深字，否则用白字。
+    """
+    if bg_color.lightness() > 140:
+        return QColor(20, 20, 20)
+    return QColor(255, 255, 255)
+
+
 class ImageLoadWorker(QThread):
     """后台加载图片（文件读取 + 解码）。"""
 
@@ -212,14 +223,14 @@ class _PreviewLabel(QLabel):
                 th = fm.height() + 4
                 lx = rx + 1
                 ly = ry - th - 1 if ry > th + 2 else ry + rh + 1
-                # 标签背景
+                # 标签背景：选中区域加深（与边框虚线 + 填充加深共同标记选中态）
                 lbl_bg = QColor(color)
-                lbl_bg.setAlpha(180)
+                lbl_bg.setAlpha(225 if i == selected else 180)
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(lbl_bg)
                 painter.drawRoundedRect(lx, ly, tw, th, 3, 3)
-                # 标签文字
-                painter.setPen(QColor(255, 255, 255))
+                # 标签文字：按背景亮度自适应（R13：白色区域此前白底白字不可见）
+                painter.setPen(label_text_color(lbl_bg))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawText(lx + 5, ly + fm.ascent() + 2, name)
 

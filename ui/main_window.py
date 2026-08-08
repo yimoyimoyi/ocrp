@@ -32,7 +32,7 @@ if str(BASE_DIR) not in sys.path:
 
 from core.ai_correction import AICorrector, load_correction_config
 from core.asr_engine import ASREngineManager
-from core.config_manager import ConfigManager, atomic_write_json, load_json_with_comments
+from core.config_manager import MODE_PARAMS_DEFAULTS, ConfigManager, atomic_write_json, load_json_with_comments
 from core.filter_manager import FilterManager
 from core.i18n import LANGUAGE_DISPLAY_NAMES, SUPPORTED_LANGUAGES, LanguageManager, _
 from core.ocr_engine import OCREngineManager
@@ -79,7 +79,6 @@ class MainWindow(QMainWindow):
         self._correction_results: dict[int, str] = {}
         self._correction_pending: set = set()
         self._custom_prompt: str = ""
-        self._mode_params: dict = {}
         self._current_engine: str = "paddleocr"
         self._current_template: str = ""
         self._batch_files: list[str] = []
@@ -294,7 +293,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_settings_menu"):
             self._settings_menu.setTitle(_("参数设置(&P)"))
             menu_labels = [
-                _("⚙ 全部参数..."),
+                # R11：与 menu_bar.py 的 5 个直达 tab 入口保持同步
+                # （「⚙ 全部参数...」已移除，此前 zip 截断导致语言切换后标签错位）
                 _("基础设置..."),
                 _("语音识别..."),
                 _("OCR 字幕处理..."),
@@ -343,8 +343,7 @@ class MainWindow(QMainWindow):
             self._subtitle_group._title_label.setText(_("📝 字幕设置"))
         if hasattr(self, "_asr_group"):
             self._asr_group._title_label.setText(_("🎤 ASR 选项"))
-        if hasattr(self, "_post_group"):
-            self._post_group._title_label.setText(_("🔧 后处理"))
+        # R12（P1-2）：后处理组已删除
 
         # ── 右侧面板行标签（直接引用）──
         _label_updates = [
@@ -352,17 +351,12 @@ class MainWindow(QMainWindow):
             ("_lbl_asr_model", _("模型:")),
             ("_lbl_asr_lang", _("语言:")),
             ("_lbl_asr_region", _("区域名:")),
-            ("_lbl_post_sim_threshold", _("相似度阈值:")),
-            ("_lbl_post_min_text_len", _("最小文字长度:")),
-            ("_lbl_post_conf_threshold", _("置信度阈值:")),
         ]
         for attr, text in _label_updates:
             lbl = getattr(self, attr, None)
             if lbl:
                 lbl.setText(text)
         # checkbox / tooltip
-        if hasattr(self, "_post_conf_check_r"):
-            self._post_conf_check_r.setText(_("置信度过滤"))
         if hasattr(self, "_frame_interval_r"):
             self._frame_interval_r.setToolTip(_("每隔多少秒处理一帧"))
         if hasattr(self, "_asr_model_combo_r"):
@@ -371,12 +365,6 @@ class MainWindow(QMainWindow):
             self._asr_lang_combo_r.setToolTip(_("识别语言"))
         if hasattr(self, "_asr_region_edit_r"):
             self._asr_region_edit_r.setToolTip(_("ASR 结果在表格中的区域名"))
-        if hasattr(self, "_post_sim_threshold_r"):
-            self._post_sim_threshold_r.setToolTip(_("相似度高于此阈值的结果将被去重合并"))
-        if hasattr(self, "_post_min_text_len_r"):
-            self._post_min_text_len_r.setToolTip(_("小于此长度的结果将被过滤"))
-        if hasattr(self, "_post_conf_threshold_r"):
-            self._post_conf_threshold_r.setToolTip(_("仅 PaddleOCR：置信度低于此阈值的结果将被过滤"))
 
         # ── 区域管理器 ──
         if hasattr(self, "_region_manager"):
@@ -595,11 +583,17 @@ class MainWindow(QMainWindow):
         self._restore_dialog_geometry(dlg, "display_dialog_geometry")
         if dlg.exec() == QDialog.Accepted:
             self._save_dialog_geometry(dlg, "display_dialog_geometry")
-            dlg.get_config()  # 触发配置收集
+            cfg = dlg.get_config()
+            self._save_theme_from_dialog(cfg["theme"], cfg["font_size"], cfg["ui_scale"])
             self._status_label.setText(_("✅ 显示设置已更新"))
 
     def _apply_theme_from_dialog(self, theme: str, font_size: int, scale: float):
-        """从显示设置对话框应用主题/字体/缩放。"""
+        """预览主题（R11 取消语义修复：不写盘，取消时无持久化副作用）。"""
+        self._theme = theme
+        self._apply_theme(theme)
+
+    def _save_theme_from_dialog(self, theme: str, font_size: int, scale: float):
+        """显示设置对话框确定时持久化主题/字体/缩放。"""
         self._theme = theme
         self._config_mgr.set("theme", theme)
         self._config_mgr.set("font_size", font_size)
@@ -715,28 +709,101 @@ class MainWindow(QMainWindow):
         self._config_mgr.save_settings()
 
     def _restore_mode_params(self):
-        """从 settings.json 恢复 UI 配置参数。"""
+        """从 settings.json + 业务配置文件恢复参数（R12 方向 A）。
+
+        asr_*/corr_* 业务参数以 asr_engines.json / ai_correction.json 为
+        事实源（settings.json 不再持久化，消除双写）；corr_preset 等 UI
+        状态键仍从 settings.json 恢复。
+        """
         saved = self._config_mgr.get("mode_params", {})
-        if saved:
-            self._mode_params.update(saved)
-            # 恢复自定义提示词
-            self._custom_prompt = saved.get("corr_prompt", "")
-            # 以 saved 为比较基准，避免 apply_mode_params 触发 mode_changed 后
-            # _on_mode_changed 误判 ASR 参数变更 → 启动即重建 ASR 引擎/加载模型
-            self._last_mode_params = dict(saved)
+        business = self._restore_business_params(saved)
+        # saved 中业务参数以文件为准（过滤存量 asr_*/corr_* 键，仅保留 UI 状态键）
+        ui_saved = {
+            k: v
+            for k, v in saved.items()
+            if k == "corr_preset" or not (k.startswith("asr_") or k.startswith("corr_"))
+        }
+        base = dict(MODE_PARAMS_DEFAULTS)
+        base.update(business)
+        base.update(ui_saved)
+        # 比较基准 = 最终全量（含文件反同步值），apply 时 diff 为零，
+        # 不会误触发 ASR 引擎重建
+        self._last_mode_params = dict(base)
+        if saved or business:
+            # 恢复自定义提示词（文件值优先，回退 saved）
+            self._custom_prompt = business.get("corr_prompt") or saved.get("corr_prompt", "")
             # 回填所有 UI 控件
-            self._config_panel.apply_mode_params(saved)
+            self._config_panel.apply_mode_params(base)
             # 显式应用 API 预设（幂等，apply_preset 可安全重复调用）
             saved_preset = saved.get("corr_preset", "")
             if saved_preset and self._corrector:
                 self._corrector.apply_preset(saved_preset)
             # 恢复润色开关
-            if "corr_polish" in saved and self._corrector:
-                self._corrector.polish_enabled = saved["corr_polish"]
+            if "corr_polish" in base and self._corrector:
+                self._corrector.polish_enabled = base["corr_polish"]
             # 恢复右侧面板控件
             self._restore_right_panel_params(saved)
         # 同步区域默认值（引擎/模板/提示词），确保新创建的区域使用当前提示词
         self._sync_region_defaults()
+
+    def _restore_business_params(self, saved: dict) -> dict:
+        """R12 方向 A：从 asr_engines.json / ai_correction.json 反同步业务参数。
+
+        返回文件值映射到 mode_params 键的字典（缺键时回退默认值）。
+        """
+        params: dict = {}
+        try:
+            from core.asr_engine import load_asr_config
+
+            acfg = load_asr_config()
+            ms = acfg.get("model_size", "")
+            md = acfg.get("model_dir", "")
+            # asr_model_path 是 UI 选择状态：saved 有值优先（上次选择），
+            # 否则从 model_dir/model_size 派生（本地模型目录存在时拼绝对路径）
+            saved_path = saved.get("asr_model_path")
+            if saved_path:
+                params["asr_model_path"] = saved_path
+            elif ms:
+                md_abs = md if os.path.isabs(md) else os.path.join(str(BASE_DIR), md)
+                local_dir = os.path.join(md_abs, ms) if md_abs else ""
+                params["asr_model_path"] = local_dir if os.path.isdir(local_dir) else ms
+            params["asr_model_size"] = ms or ""
+            params["asr_model_dir"] = md or "models/asr"
+            params["asr_language"] = acfg.get("language", "zh")
+            params["asr_vad"] = bool(acfg.get("vad_enabled", False))
+            params["asr_vad_min_silence"] = acfg.get("vad_min_silence_ms", 500)
+            params["asr_vad_threshold"] = acfg.get("vad_threshold", 0.5)
+            params["asr_word_ts"] = bool(acfg.get("word_timestamps", True))
+            params["asr_region_name"] = acfg.get("asr_region_name", "语音")
+            params["asr_beam_size"] = acfg.get("beam_size", 5)
+            params["asr_initial_prompt"] = acfg.get("initial_prompt", "")
+            params["asr_condition_prev"] = bool(acfg.get("condition_on_previous_text", True))
+            params["asr_no_speech_thresh"] = acfg.get("no_speech_threshold", 0.6)
+            params["asr_comp_ratio_thresh"] = acfg.get("compression_ratio_threshold", 2.4)
+            params["asr_temperature"] = acfg.get("temperature", "0.0,0.2,0.4,0.6,0.8,1.0")
+            params["asr_hotwords"] = acfg.get("hotwords", "")
+        except Exception as e:
+            logger.warning("ASR 配置反同步失败: %s", e)
+        try:
+            from core.ai_correction import load_correction_config
+
+            ccfg = load_correction_config()
+            params["corr_enabled"] = bool(ccfg.get("enabled", False))
+            params["corr_batch_size"] = ccfg.get("batch_size", 5)
+            params["corr_retry"] = ccfg.get("retry_on_failure", 2)
+            params["corr_prompt"] = ccfg.get("correction_prompt", "")
+            params["corr_summary_prompt"] = ccfg.get("summary_prompt", "")
+            params["corr_system_prompt"] = ccfg.get("correction_system_prompt", "")
+            params["corr_output_format"] = ccfg.get("output_format", "")
+            params["corr_stream"] = bool(ccfg.get("stream_mode", False))
+            params["corr_json"] = bool(ccfg.get("json_mode", False))
+            params["corr_polish"] = bool(ccfg.get("enable_polish", False))
+            params["corr_translate"] = bool(ccfg.get("translate_mode", False))
+            params["seg_time_gap"] = ccfg.get("seg_time_gap", 3.0)
+            params["corr_extract_env"] = bool(ccfg.get("extract_environment", False))
+        except Exception as e:
+            logger.warning("纠错配置反同步失败: %s", e)
+        return params
 
     def _schedule_mode_save(self):
         """延迟合并保存，避免频繁切换预设时连续写盘卡 UI。"""
@@ -751,17 +818,39 @@ class MainWindow(QMainWindow):
             self._mode_save_timer.start(300)
 
     def _save_mode_params(self):
-        """保存当前 UI 配置参数到 settings.json。"""
-        params = {k: v for k, v in self._mode_params.items() if k != "corr_summary_prompt"}  # 环境提示词不持久化
-        self._config_mgr.set("mode_params", params)
-        # 仅当 ASR 参数实际变更时才同步（避免每次保存都阻塞 UI）
-        if getattr(self, "_asr_params_changed", False):
-            self._sync_asr_config(params)
-            self._asr_params_changed = False
-        # 同步纠错配置
-        if any(k.startswith("corr_") for k in params):
-            self._sync_correction_config(params)
-        self._config_mgr.save_settings()
+        """保存当前 UI 配置参数。
+
+        R12 方向 A：settings.json 只持久化 UI 状态键（非 asr_*/corr_*，
+        除 corr_preset）；业务参数（asr_*/corr_*）由专用文件承载——
+        同步函数使用全量参数，写盘使用过滤后子集，消除双写。
+        """
+        try:
+            full = self._config_panel.get_mode_params()
+            # 业务参数同步（差异触发，使用全量）
+            if getattr(self, "_asr_params_changed", False):
+                self._sync_asr_config(full)
+                self._asr_params_changed = False
+            if getattr(self, "_corr_params_changed", False):
+                self._sync_correction_config(full)
+                self._corr_params_changed = False
+            # settings.json 仅保存 UI 状态键：
+            #   - defaults 之外的垃圾键（历史残留）不写
+            #   - corr_summary_prompt 运行时通道不持久化
+            #   - asr_*/corr_* 业务键不写（文件为事实源），corr_preset 是 UI 状态例外
+            params = {
+                k: v
+                for k, v in full.items()
+                if k in MODE_PARAMS_DEFAULTS
+                and k != "corr_summary_prompt"
+                and (k == "corr_preset" or not (k.startswith("asr_") or k.startswith("corr_")))
+            }
+            self._config_mgr.set("mode_params", params)
+        except Exception as e:
+            logger.error("保存配置失败: %s", e)
+        try:
+            self._config_mgr.save_settings()
+        except Exception as e:
+            logger.error("写盘 settings.json 失败: %s", e)
 
     def closeEvent(self, ev):
         """关闭窗口 —— 先保存状态，再隐藏 UI，后台静默清理。"""
@@ -824,6 +913,8 @@ class MainWindow(QMainWindow):
     def _refresh_engine_list(self):
         names = self._engine_mgr.get_engine_names()
         self._region_manager.set_engine_names(names)
+        # R12（P0-③）：同步右侧面板引擎切换下拉
+        self._sync_engine_combo_r()
 
         last = self._config_mgr.get_last_engine()
         if last in names:
@@ -907,8 +998,8 @@ class MainWindow(QMainWindow):
         self._restore_dialog_geometry(dlg, "preset_dialog_geometry")
         if dlg.exec() == QDialog.Accepted:
             self._save_dialog_geometry(dlg, "preset_dialog_geometry")
-        # 无论是否确认都刷新预设状态
-        self._status_label.setText(_("✅ API 预设已更新"))
+        # R11：预设保存动作在对话框内完成且有自身反馈，此处不再无条件提示
+        # "已更新"（此前未做任何修改也显示 ✅，误导用户）
 
     # ── 菜单事件：模板 ──
     def _on_menu_template_selected(self, name: str):
@@ -1116,16 +1207,15 @@ class MainWindow(QMainWindow):
         self._sync_region_defaults()
 
     def _on_mode_changed(self, p):
+        # R11 单源化：ConfigPanel._params 是唯一事实来源，此处仅做差异计算与副作用，
+        # 不再维护 MainWindow._mode_params 镜像（此前双源导致模板选择等路径保存旧值）
         old_params = getattr(self, "_last_mode_params", {})
-        self._mode_params = p
         # 仅当预设名确实变化时才切换
         if "corr_preset" in p and p["corr_preset"] != old_params.get("corr_preset", ""):
             self._corrector.apply_preset(p["corr_preset"])
-        # 润色开关 + 模板模式
+        # 润色开关（R12：corr_use_template 孤儿键已删除）
         if "corr_polish" in p:
             self._corrector.polish_enabled = p["corr_polish"]
-        if "corr_use_template" in p:
-            self._corrector.use_template = p["corr_use_template"]
         # 设置同步 R10 修复：translate/stream/json 立即同步到 corrector 实例
         # （此前仅工具栏路径更新 _mode_params，corrector 不感知）
         # 注意：corr_extract_env 不得同步到 corrector._extract_env —— 前者是
@@ -1137,10 +1227,23 @@ class MainWindow(QMainWindow):
             self._corrector.stream_mode = p["corr_stream"]
         if "corr_json" in p:
             self._corrector.json_mode = p["corr_json"]
-        # 标记是否有 ASR 参数实际变更
-        asr_keys = {k: p.get(k) for k in p if k.startswith("asr_")}
-        old_asr_keys = {k: old_params.get(k) for k in old_params if k.startswith("asr_")}
-        self._asr_params_changed = asr_keys != old_asr_keys
+        # R11 修复：ASR 参数变更判定改为键集合归一化——
+        # 此前两字典直接比较，键集合不同即恒不相等（saved 缺新增 asr 键、
+        # 部分字典调用等场景）→ 启动即重建 ASR 引擎（加载模型/启动子进程）。
+        # 两侧都用默认值补全：p 缺键按默认值比较（幂等），多余键不影响。
+        old_full = dict(MODE_PARAMS_DEFAULTS)
+        old_full.update(old_params)
+        p_full = dict(MODE_PARAMS_DEFAULTS)
+        p_full.update(p)
+        asr_keys = {k for k in p_full if k.startswith("asr_")} | {
+            k for k in old_full if k.startswith("asr_")
+        }
+        self._asr_params_changed = any(p_full.get(k) != old_full.get(k) for k in asr_keys)
+        # R11：corr_* 差异标记（_save_mode_params 据此决定是否重写 ai_correction.json；
+        # 同样按默认值归一化，垃圾 corr 键不影响判定）
+        self._corr_params_changed = any(
+            p_full.get(k) != old_full.get(k) for k in p_full if k.startswith("corr_")
+        )
         # OCR 版本变更 → 重建 OCR 引擎
         if p.get("s_ocr_version") != old_params.get("s_ocr_version"):
             self._restart_ocr_engine()
@@ -1222,9 +1325,12 @@ class MainWindow(QMainWindow):
             cfg["enabled"] = params["corr_enabled"]
         if "corr_batch_size" in params:
             cfg["batch_size"] = params["corr_batch_size"]
+        # R12（P1-⑥）：重试键名统一——AICorrector 读 retry_on_failure，
+        # 文件里的 retry 是死键；corr_retry 是唯一 UI 入口
         if "corr_retry" in params:
-            cfg["retry"] = params["corr_retry"]
-        if "corr_prompt" in params:
+            cfg["retry_on_failure"] = params["corr_retry"]
+        # R12：corr_prompt 空值不覆盖文件默认提示词（truthy 判断）
+        if params.get("corr_prompt"):
             cfg["correction_prompt"] = params["corr_prompt"]
         if params.get("corr_summary_prompt"):
             cfg["summary_prompt"] = params["corr_summary_prompt"]
@@ -1238,8 +1344,17 @@ class MainWindow(QMainWindow):
             cfg["json_mode"] = params["corr_json"]
         if "corr_polish" in params:
             cfg["enable_polish"] = params["corr_polish"]
-        if "corr_use_template" in params:
-            cfg["use_template"] = params["corr_use_template"]
+        # R12（P1-⑦）：corr_extract_env 同步到文件键 extract_environment——
+        # 此前文件键无任何写入口，AICorrector._extract_env 恒 False
+        if "corr_extract_env" in params:
+            cfg["extract_environment"] = params["corr_extract_env"]
+        # R12（P1-⑤）：seg_time_gap 写入链路补齐——此前只写 mode_params
+        # 不写文件，AICorrector 读文件导致"上下文时间间隔"改设置无效
+        if "seg_time_gap" in params:
+            cfg["seg_time_gap"] = params["seg_time_gap"]
+        # R11：翻译模式持久化——此前无此分支，AICorrector 重建后 translate 恒 False
+        if "corr_translate" in params:
+            cfg["translate_mode"] = params["corr_translate"]
         try:
             atomic_write_json(config_path, cfg)
         except Exception as e:
@@ -1400,12 +1515,13 @@ class MainWindow(QMainWindow):
         wf._get_current_template = lambda: self._current_template
         wf._get_custom_prompt = lambda: self._custom_prompt
         wf._get_config_prompt = lambda: self._config_panel.prompt_text
-        wf._get_mode_params = lambda: self._mode_params
+        # R11 单源化：从 ConfigPanel 读取实时参数（替代 _mode_params 镜像）
+        wf._get_mode_params = lambda: self._config_panel.get_mode_params()
         wf._get_is_audio_file = lambda: self._is_audio_file()
         wf._get_results = lambda: self._result_table.get_results()
         wf._clear_results_table = lambda: self._result_table.clear_results()
         wf._clear_results_by_type = lambda rgn, eng: self._result_table.clear_by_type(rgn, eng)
-        wf._asr_region_name = lambda: self._mode_params.get("asr_region_name", "语音")
+        wf._asr_region_name = lambda: self._config_panel.get_mode_params().get("asr_region_name", "语音")
         wf._sort_results_table = lambda order: self._result_table.sort_by_order(order)
         wf._sort_by_time = lambda: self._result_table.sort_by_time()
         wf._get_polished_results = lambda sim, ml, dedup=True: self._result_table.get_polished_results(
@@ -1511,8 +1627,8 @@ class MainWindow(QMainWindow):
     def _recalculate_end_seconds(self):
         """填充 OCR 结果的 end_sec（通过 process_finished DirectConnection 同步调用，在纠错之前执行）。"""
         # ── 置信度阈值过滤（P0-T6 修复：统一走 model reset，removeRow 为空操作）──
-        if self._mode_params.get("post_conf_enabled", False):
-            threshold = self._mode_params.get("post_conf_threshold", 0.6)
+        if self._config_panel.get_mode_params().get("post_conf_enabled", False):
+            threshold = self._config_panel.get_mode_params().get("post_conf_threshold", 0.6)
             self._result_table.remove_rows_by_predicate(
                 lambda r: r.get("engine", "") == "paddleocr" and (r.get("confidence", 1.0) or 0.0) < threshold
             )
@@ -1523,7 +1639,7 @@ class MainWindow(QMainWindow):
             return
         from collections import defaultdict
 
-        sub_dur = self._mode_params.get("subtitle_duration", 3.0)
+        sub_dur = self._config_panel.get_mode_params().get("subtitle_duration", 3.0)
         groups: dict = defaultdict(list)
         for i, r in enumerate(results):
             groups[r.get("region", "")].append(i)
@@ -1555,14 +1671,14 @@ class MainWindow(QMainWindow):
     # ── 导出 ──
     def _on_export(self, fmt, path):
         polished = self._result_table.get_polished_results(
-            post_sim_threshold=self._mode_params.get("post_sim_threshold", 0.9),
-            post_min_text_len=self._mode_params.get("post_min_text_len", 2),
+            post_sim_threshold=self._config_panel.get_mode_params().get("post_sim_threshold", 0.9),
+            post_min_text_len=self._config_panel.get_mode_params().get("post_min_text_len", 2),
         )
         if not polished:
             return self._message_service.info("提示", "过滤后无有效结果可导出。")
 
         # 统一补充 end_sec（OCR 结果可能缺少该字段）
-        sub_dur = self._mode_params.get("subtitle_duration", 3.0)
+        sub_dur = self._config_panel.get_mode_params().get("subtitle_duration", 3.0)
         for p in polished:
             ts = p.get("time_sec", 0.0) or 0.0
             end = p.get("end_sec", 0.0) or 0.0
@@ -1586,14 +1702,14 @@ class MainWindow(QMainWindow):
                 "双语对照（原文+纠正）": "dual",
                 "原文 换行 纠正": "dual",
             }
-            srt_mode = srt_mode_map.get(self._mode_params.get("srt_export_mode", "仅纠正结果"), "corrected")
+            srt_mode = srt_mode_map.get(self._config_panel.get_mode_params().get("srt_export_mode", "仅纠正结果"), "corrected")
             export_results(
                 polished,
                 path,
                 fmt,
                 bool(cmap),
                 cmap,
-                keep_original=self._mode_params.get("export_keep_original", False),
+                # R12：export_keep_original 无 UI 无默认值（恒 False），死读清理
                 srt_mode=srt_mode,
             )
             self._status_label.setText(f"✅ 已导出: {Path(path).name}")

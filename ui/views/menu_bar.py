@@ -17,10 +17,11 @@ class MenuBarView(_ViewBase):
         mb = self.menuBar()
 
         # ── 参数设置菜单 ──
+        # R11 UX：移除「⚙ 全部参数...」——它与「基础设置...」行为完全相同
+        # （tab_index -1 与 0 都落到 tab 0），保留 5 个直达 tab 入口
         self._settings_menu = mb.addMenu(_("参数设置(&P)"))
         self._settings_menu_actions = []
         for label, tab_idx in [
-            (_("⚙ 全部参数..."), -1),
             (_("基础设置..."), 0),
             (_("语音识别..."), 1),
             (_("OCR 字幕处理..."), 2),
@@ -31,8 +32,6 @@ class MenuBarView(_ViewBase):
             action.triggered.connect(lambda checked, idx=tab_idx: self._open_settings(idx))
             self._settings_menu.addAction(action)
             self._settings_menu_actions.append(action)
-            if label == _("⚙ 全部参数..."):
-                self._settings_menu.addSeparator()
 
         # ── 显示菜单 ──
         self._display_menu = mb.addMenu(_("显示(&V)"))

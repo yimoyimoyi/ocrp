@@ -99,32 +99,45 @@ except Exception as _e:
 
 # ── 启动时环境自检 ──
 def _verify_startup_environment():
-    """验证关键环境约束，防止 DLL/导入回归问题。"""
+    """验证关键环境约束，防止 DLL/导入回归问题。
+
+    R11 启动优化：torch 预加载标志为 O(1) 静态检查，保留回归检测价值（与
+    scripts/check_dll_regressions.py 配套）；CUDA 探测首次调用可能初始化
+    CUDA 运行时 1-10s，移至后台线程执行——此前同步调用发生在 show() 之后、
+    app.exec() 之前，事件循环未启动，窗口保持透明造成启动白屏假死。
+    """
     issues = []
 
-    # 1) torch 必须在 Qt 绑定之前预加载
+    # 1) torch 必须在 Qt 绑定之前预加载（O(1)）
     if not _torch_loaded:
         issues.append("torch 预加载失败：Qt 绑定导入可能导致 c10.dll 初始化失败 (WinError 1114)")
 
-    # 2) 检查 torch CUDA 状态
-    try:
-        import torch as _tc
-        _cuda_ok = _tc.cuda.is_available()
-        if _cuda_ok:
-            _gpu_name = _tc.cuda.get_device_name(0)
-            print(f"[ORCP] GPU 可用: {_gpu_name} (CUDA {_tc.version.cuda})")
-        else:
-            print("[ORCP] 主进程 torch 为 CPU 版本（OCR/ASR 子进程独立，仍可 GPU）")
-    except Exception as _e:
-        issues.append(f"CUDA 状态检查失败: {_e}")
+    # 2) CUDA 状态探测 → 后台线程（torch 内部 _lazy_init 有锁保护，线程安全；
+    #    CUDA DLL 初始化期间释放 GIL，不阻塞 UI 事件循环）
+    def _probe_cuda():
+        try:
+            import torch as _tc
 
-    # 3) 输出汇总
+            _cuda_ok = _tc.cuda.is_available()
+            if _cuda_ok:
+                _gpu_name = _tc.cuda.get_device_name(0)
+                print(f"[ORCP] GPU 可用: {_gpu_name} (CUDA {_tc.version.cuda})")
+            else:
+                print("[ORCP] 主进程 torch 为 CPU 版本（OCR/ASR 子进程独立，仍可 GPU）")
+        except Exception as _e:
+            print(f"[ORCP] ⚠ CUDA 状态检查失败: {_e}")
+
+    import threading
+
+    threading.Thread(target=_probe_cuda, daemon=True).start()
+
+    # 3) 输出汇总（仅静态检查结果）
     if issues:
         print("[ORCP] ⚠ 环境自检发现问题:")
         for _i in issues:
             print(f"  - {_i}")
     else:
-        print("[ORCP] 环境自检通过")
+        print("[ORCP] 环境自检通过（CUDA 探测在后台线程进行）")
     return len(issues) == 0
 
 

@@ -16,7 +16,7 @@ PaddleOCR · OpenAI Vision · Ollama · LlamaCpp · WhisperX · LLM補正 · 文
 
 🌐 [中文](../README.md) | [English](README_EN.md)
 
-ORCP は、動画・音声・画像からテキストを抽出するフル機能のデスクトップ字幕抽出ツールです。マルチエンジン OCR、オフライン音声認識、LLM 補正と文分割を統合し、直感的な PyQt5 GUI を提供します。
+ORCP は、動画・音声・画像からテキストを抽出するフル機能のデスクトップ字幕抽出ツールです。マルチエンジン OCR、オフライン音声認識、LLM 補正と文分割を統合し、直感的な PySide6 GUI を提供します。
 
 ## 機能
 
@@ -148,7 +148,7 @@ orcp/
 │   ├── result_processor.py     #   重複排除、フィルタ、エクスポート
 │   └── ...
 │
-├── ui/                         # PyQt5 ユーザーインターフェース
+├── ui/                         # PySide6 ユーザーインターフェース
 │   ├── main_window.py          #   メインウィンドウ
 │   ├── config_panel.py         #   設定パネル
 │   ├── settings_dialog.py      #   詳細設定ダイアログ

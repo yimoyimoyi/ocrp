@@ -4,12 +4,10 @@
 通过 _ViewBase 与 MainWindow 双向委托共享状态。
 """
 
-import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -19,7 +17,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -46,23 +43,7 @@ class RightPanelView(_ViewBase):
         self._frame_interval_r.setValue(mp.get("frame_interval", 0.1))
         self._frame_interval_r.blockSignals(False)
 
-        # 后处理选项
-        self._post_sim_threshold_r.blockSignals(True)
-        self._post_sim_threshold_r.setValue(mp.get("post_sim_threshold", 0.9))
-        self._post_sim_threshold_r.blockSignals(False)
-
-        self._post_min_text_len_r.blockSignals(True)
-        self._post_min_text_len_r.setValue(mp.get("post_min_text_len", 2))
-        self._post_min_text_len_r.blockSignals(False)
-
-        self._post_conf_check_r.blockSignals(True)
-        self._post_conf_check_r.setChecked(mp.get("post_conf_enabled", False))
-        self._post_conf_check_r.blockSignals(False)
-
-        self._post_conf_threshold_r.blockSignals(True)
-        self._post_conf_threshold_r.setValue(mp.get("post_conf_threshold", 0.6))
-        self._post_conf_threshold_r.blockSignals(False)
-
+        # R12（P1-2）：后处理组已删除（与设置页 tab3 完全重复，主开关在快速工具栏）
         # ASR 组可见性：仅 OCR 模式时隐藏
         self._asr_group.setVisible(MODE_OCR_ONLY not in mp.get("process_mode", ""))
 
@@ -74,23 +55,7 @@ class RightPanelView(_ViewBase):
         self._frame_interval_r.setValue(frame_interval)
         self._frame_interval_r.blockSignals(False)
 
-        # 后处理选项
-        self._post_sim_threshold_r.blockSignals(True)
-        self._post_sim_threshold_r.setValue(saved.get("post_sim_threshold", 0.9))
-        self._post_sim_threshold_r.blockSignals(False)
-
-        self._post_min_text_len_r.blockSignals(True)
-        self._post_min_text_len_r.setValue(saved.get("post_min_text_len", 2))
-        self._post_min_text_len_r.blockSignals(False)
-
-        self._post_conf_check_r.blockSignals(True)
-        self._post_conf_check_r.setChecked(saved.get("post_conf_enabled", False))
-        self._post_conf_check_r.blockSignals(False)
-
-        self._post_conf_threshold_r.blockSignals(True)
-        self._post_conf_threshold_r.setValue(saved.get("post_conf_threshold", 0.6))
-        self._post_conf_threshold_r.blockSignals(False)
-
+        # R12（P1-2）：后处理组已删除
         # ASR 组可见性：仅 OCR 模式时隐藏
         self._asr_group.setVisible(MODE_OCR_ONLY not in saved.get("process_mode", ""))
 
@@ -103,51 +68,27 @@ class RightPanelView(_ViewBase):
             self._region_group.hide()
             self._subtitle_group.show()
             self._asr_group.show()
-            self._post_group.show()
             self._sync_asr_from_config()
         elif is_image:
             self._region_group.show()
             self._subtitle_group.hide()
             self._asr_group.hide()
-            self._post_group.show()
         else:
             self._region_group.show()
             self._subtitle_group.show()
             self._asr_group.show()
-            self._post_group.show()
             self._sync_asr_from_config()
 
     def _populate_asr_model_combo(self, combo: QComboBox):
-        """填充 ASR 模型 combo：本地已下载 + 标准模型大小。"""
-        from core.asr_engine import scan_local_asr_models
+        """填充 ASR 模型 combo：本地已下载 + 标准模型大小（O12 共享构建）。"""
+        from core.asr_engine import build_asr_model_items, scan_local_asr_models
 
         model_dir = str(BASE_DIR / "models" / "asr")
         local_models = scan_local_asr_models(model_dir)
         combo.blockSignals(True)
         combo.clear()
-        for path in local_models:
-            display = os.path.basename(path) if os.path.isdir(path) else path
-            combo.addItem(f"📁 {display}", path)
-        standard = [
-            "tiny",
-            "tiny.en",
-            "base",
-            "base.en",
-            "small",
-            "small.en",
-            "medium",
-            "medium.en",
-            "large-v1",
-            "large-v2",
-            "large-v3",
-            "distil-small.en",
-            "distil-medium.en",
-            "distil-large-v2",
-        ]
-        for size in standard:
-            if any(os.path.basename(p) == size for p in local_models):
-                continue
-            combo.addItem(f"⬇ {size}（在线下载）", size)
+        for display, data in build_asr_model_items(local_models):
+            combo.addItem(display, data)
         combo.blockSignals(False)
 
     def _sync_asr_from_config(self):
@@ -172,6 +113,27 @@ class RightPanelView(_ViewBase):
         self._asr_region_edit_r.setText(cp.asr_region_name)
         self._asr_region_edit_r.blockSignals(False)
 
+    def _sync_engine_combo_r(self):
+        """同步引擎下拉列表（由 MainWindow._refresh_engine_list 调用）。"""
+        names = self._engine_mgr.get_engine_names()
+        cur = self._current_engine
+        self._engine_combo_r.blockSignals(True)
+        self._engine_combo_r.clear()
+        self._engine_combo_r.addItems(names)
+        if cur in names:
+            self._engine_combo_r.setCurrentText(cur)
+        self._engine_combo_r.blockSignals(False)
+
+    def _on_engine_r_changed(self, name: str):
+        """右侧引擎切换 → 更新当前引擎并后台重建（R12 P0-③）。"""
+        if not name or name == self._current_engine:
+            return
+        self._current_engine = name
+        self._engine_mgr.set_current_engine(name)
+        self._config_mgr.set("last_engine", name)
+        self._restart_ocr_engine()
+        self._sync_region_defaults()
+
     def _on_asr_r_changed(self):
         """右侧 ASR 控件变更 → 同步到 ConfigPanel。"""
         cp = self._config_panel
@@ -194,17 +156,6 @@ class RightPanelView(_ViewBase):
         params["frame_interval"] = value
         self._config_panel.apply_mode_params(params)
 
-    def _on_post_option_r_changed(self):
-        """右侧后处理选项变更 → 同步到 ConfigPanel。"""
-        params = self._config_panel.get_mode_params()
-        params["post_sim_threshold"] = self._post_sim_threshold_r.value()
-        params["post_min_text_len"] = self._post_min_text_len_r.value()
-        params["post_conf_enabled"] = self._post_conf_check_r.isChecked()
-        params["post_conf_threshold"] = self._post_conf_threshold_r.value()
-        self._config_panel.apply_mode_params(params)
-        # 更新快速工具栏（apply 已触发 _on_mode_changed）
-        self.sync_quick_toggles()
-
     def build(self):
         """构建右侧面板（原 build_ui 内联代码搬移）。"""
         # 右：区域参数 + ASR 选项（可折叠）
@@ -225,6 +176,18 @@ class RightPanelView(_ViewBase):
         scl = QVBoxLayout(scroll_content)
         scl.setContentsMargins(6, 6, 6, 6)
         scl.setSpacing(4)
+
+        # ── OCR 引擎快速切换（R12 P0-③：最高频操作从设置对话框 4-5 步收敛到 1 步）──
+        self._engine_bar = QFrame()
+        self._engine_bar.setObjectName("tplBar")
+        eng_bl = QHBoxLayout(self._engine_bar)
+        eng_bl.setContentsMargins(4, 4, 4, 4)
+        eng_bl.setSpacing(4)
+        eng_bl.addWidget(QLabel(_("引擎:")))
+        self._engine_combo_r = QComboBox()
+        self._engine_combo_r.currentTextChanged.connect(self._on_engine_r_changed)
+        eng_bl.addWidget(self._engine_combo_r, 1)
+        scl.addWidget(self._engine_bar)
 
         # ── RegionManager ──
         self._region_manager = RegionManagerWidget()
@@ -305,47 +268,8 @@ class RightPanelView(_ViewBase):
         self._asr_group.addWidget(asr_form)
         scl.addWidget(self._asr_group)
 
-        # ── 后处理折叠组（相似度去重开关已在快速工具栏唯一入口，4b.7 收敛）──
-        self._post_group = CollapsibleGroup(_("🔧 后处理"), collapsed=True)
-        post_form = QWidget()
-        self._post_form = post_layout = QFormLayout(post_form)
-        post_layout.setSpacing(6)
-
-        self._post_sim_threshold_r = QDoubleSpinBox()
-        self._post_sim_threshold_r.setRange(0.0, 1.0)
-        self._post_sim_threshold_r.setSingleStep(0.05)
-        self._post_sim_threshold_r.setDecimals(2)
-        self._post_sim_threshold_r.setValue(0.9)
-        self._post_sim_threshold_r.setToolTip(_("相似度高于此阈值的结果将被去重合并"))
-        self._post_sim_threshold_r.valueChanged.connect(self._on_post_option_r_changed)
-        self._lbl_post_sim_threshold = QLabel(_("相似度阈值:"))
-        post_layout.addRow(self._lbl_post_sim_threshold, self._post_sim_threshold_r)
-
-        self._post_min_text_len_r = QSpinBox()
-        self._post_min_text_len_r.setRange(1, 100)
-        self._post_min_text_len_r.setValue(2)
-        self._post_min_text_len_r.setToolTip(_("小于此长度的结果将被过滤"))
-        self._post_min_text_len_r.valueChanged.connect(self._on_post_option_r_changed)
-        self._lbl_post_min_text_len = QLabel(_("最小文字长度:"))
-        post_layout.addRow(self._lbl_post_min_text_len, self._post_min_text_len_r)
-
-        self._post_conf_check_r = QCheckBox(_("置信度过滤"))
-        self._post_conf_check_r.setChecked(False)
-        self._post_conf_check_r.toggled.connect(self._on_post_option_r_changed)
-        post_layout.addRow("", self._post_conf_check_r)
-
-        self._post_conf_threshold_r = QDoubleSpinBox()
-        self._post_conf_threshold_r.setRange(0.0, 1.0)
-        self._post_conf_threshold_r.setSingleStep(0.05)
-        self._post_conf_threshold_r.setDecimals(2)
-        self._post_conf_threshold_r.setValue(0.6)
-        self._post_conf_threshold_r.setToolTip(_("仅 PaddleOCR：置信度低于此阈值的结果将被过滤"))
-        self._post_conf_threshold_r.valueChanged.connect(self._on_post_option_r_changed)
-        self._lbl_post_conf_threshold = QLabel(_("置信度阈值:"))
-        post_layout.addRow(self._lbl_post_conf_threshold, self._post_conf_threshold_r)
-
-        self._post_group.addWidget(post_form)
-        scl.addWidget(self._post_group)
+        # R12（P1-2）：后处理折叠组已删除（与设置页 tab3 完全重复，
+        # 主开关已在快速工具栏唯一入口；阈值项收敛到设置页）
 
         # 底部弹性空间
         scl.addStretch()
