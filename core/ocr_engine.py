@@ -256,17 +256,15 @@ class PaddleOCREngine(BaseOCREngine):
         return self._paddle_available
 
     def set_ocr_version(self, version: str):
-        """动态切换 OCR 模型版本（哨兵模式专用）。"""
+        """动态切换 OCR 模型版本（哨兵模式专用）。
+
+        R4：入参为规范 token（PP-OCRv4 / PP-OCRv5_mobile / PP-OCRv5_server），
+        删除 label→token 映射表（词汇表唯一化）。
+        """
         if not version or version == "跟随全局":
             return
-        ver_map = {
-            "PP-OCRv4 (最快)": "PP-OCRv4",
-            "PP-OCRv5_mobile (平衡)": "PP-OCRv5_mobile",
-            "PP-OCRv5_server (高精度)": None,
-        }
-        mapped = ver_map.get(version)
-        if mapped != self._ocr_version:
-            self._ocr_version = mapped
+        if version != self._ocr_version:
+            self._ocr_version = version
             self._ocr = None  # 下次 recognize 时重新初始化
 
     def set_hw_accel(self, enabled: bool):
@@ -594,7 +592,6 @@ class OpenAIVisionEngine(BaseOCREngine):
         self._model = cfg.get("model", "gpt-4o")
         self._prompt_template = cfg.get("prompt_template", "请识别图片中的文字，只返回文字内容")
         self._timeout = cfg.get("timeout", 30)
-        self._retry = cfg.get("retry", 2)
 
     def check_availability(self) -> bool:
         return _check_v1_availability(self._base_url, self._api_key)
@@ -647,7 +644,6 @@ class OllamaVisionEngine(BaseOCREngine):
         self._model = cfg.get("model", "llama3.2-vision:11b")
         self._prompt_template = cfg.get("prompt_template", "请识别图片中的文字，只返回文字内容")
         self._timeout = cfg.get("timeout", 60)
-        self._retry = cfg.get("retry", 2)
 
     def check_availability(self) -> bool:
         return _check_v1_availability(self._base_url)
@@ -690,7 +686,6 @@ class LlamaCppEngine(BaseOCREngine):
         self._model = cfg.get("model", "")
         self._prompt_template = cfg.get("prompt_template", "请识别图片中的文字，只返回文字内容")
         self._timeout = cfg.get("timeout", 60)
-        self._retry = cfg.get("retry", 2)
 
     def check_availability(self) -> bool:
         return _check_v1_availability(self._base_url, self._api_key)

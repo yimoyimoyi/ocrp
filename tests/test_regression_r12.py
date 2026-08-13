@@ -41,7 +41,8 @@ def _app():
 class TestConfigVersionMigration:
     """方向 D：config_version 版本号迁移链。"""
 
-    def test_migrate_v0_to_v1_removes_dead_keys(self):
+    def test_migrate_v0_to_v2_split_business_params(self, tmp_path):
+        """v2 迁移：死键清理 + 业务镜像迁入域文件 + 白名单化。"""
         from core.config_manager import ConfigManager
 
         cm = object.__new__(ConfigManager)
@@ -53,29 +54,35 @@ class TestConfigVersionMigration:
                 "corr_proofread": True,  # 死键
                 "corr_segmentation": "x",  # 死键
                 "corr_translate": True,
+                "asr_language": "en",
             },
         }
-        cm._migrate_settings(cfg)
-        assert cfg["config_version"] == 1
+        with mock.patch("core.config_manager.CONFIG_DIR", tmp_path):
+            cm._migrate_settings(cfg)
+        assert cfg["config_version"] == 2
         assert "ai_correction_enabled" not in cfg
         mp = cfg["mode_params"]
         assert "corr_context_window" not in mp
         assert "corr_proofread" not in mp
         assert "corr_segmentation" not in mp
-        # 合法键保留 + 默认值补齐
-        assert mp["corr_translate"] is True
-        assert "asr_language" in mp
-        assert "frame_interval" in mp
+        # 业务键已迁入域文件，不再留在 mp（R1/R2 收敛）
+        assert "corr_translate" not in mp
+        assert "asr_language" not in mp
+        # 合法白名单键保留 + 默认值补齐
+        assert mp["frame_interval"] == 0.1
+        assert "asr_model_path" in mp
 
-    def test_migrate_idempotent(self):
+    def test_migrate_v2_idempotent(self, tmp_path):
+        """v2 输入再迁移：不产生任何变化（幂等）。"""
         from core.config_manager import ConfigManager
 
         cm = object.__new__(ConfigManager)
-        cfg = {"config_version": 1, "mode_params": {"corr_translate": True}}
+        cfg = {"config_version": 2, "mode_params": {"corr_preset": "x"}}
         before = dict(cfg["mode_params"])
-        cm._migrate_settings(cfg)
-        assert cfg["config_version"] == 1
-        assert cfg["mode_params"] == before  # 幂等：v1 不重复迁移
+        with mock.patch("core.config_manager.CONFIG_DIR", tmp_path):
+            cm._migrate_settings(cfg)
+        assert cfg["config_version"] == 2
+        assert cfg["mode_params"] == before  # 幂等：v2 不重复迁移
 
 
 class TestOrphanKeysRemoved:
@@ -97,42 +104,55 @@ class TestOrphanKeysRemoved:
 
 
 class TestRestoreBusinessParams:
-    """方向 A：asr_*/corr_* 从专用文件反同步到 mode_params。"""
+    """方向 A 继承（v3）：业务参数由域对象承载（替代 _restore_business_params 人肉映射）。"""
 
     @staticmethod
-    def _new_win():
-        # PySide6 下 object.__new__(QMainWindow 子类) 不安全，需走 MainWindow.__new__
-        from ui.main_window import MainWindow
+    def _write_asr(cfg_dir, data: dict):
+        import json
 
-        return MainWindow.__new__(MainWindow)
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "asr_engines.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
-    def test_asr_restore_mapping(self):
+    @staticmethod
+    def _write_corr(cfg_dir, data: dict):
+        import json
 
-        win = self._new_win()
-        with mock.patch("core.asr_engine.load_asr_config", return_value={
-            "language": "en",
-            "vad_enabled": True,
-            "vad_min_silence_ms": 400,
-            "word_timestamps": False,
-            "beam_size": 3,
-            "model_size": "small",
-            "model_dir": "models/asr",
-        }), mock.patch("core.ai_correction.load_correction_config", return_value={}):
-            params = win._restore_business_params({})
-        assert params["asr_language"] == "en"
-        assert params["asr_vad"] is True
-        assert params["asr_vad_min_silence"] == 400
-        assert params["asr_word_ts"] is False
-        assert params["asr_beam_size"] == 3
-        # model_size 是标准名且本地目录不存在 → asr_model_path 用标准名
-        assert params["asr_model_path"] == "small"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "ai_correction.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
-    def test_corr_restore_mapping(self):
+    def test_asr_restore_mapping(self, tmp_path):
+        """asr 域对象文件键即持久化键（单一命名，无 mode_params 镜像）。"""
+        from core.settings.domains import AsrConfig
 
-        win = self._new_win()
-        with mock.patch("core.asr_engine.load_asr_config", return_value={}), mock.patch(
-            "core.ai_correction.load_correction_config",
-            return_value={
+        self._write_asr(
+            tmp_path,
+            {
+                "language": "en",
+                "vad_enabled": True,
+                "vad_min_silence_ms": 400,
+                "word_timestamps": False,
+                "beam_size": 3,
+                "model_size": "small",
+                "model_dir": "models/asr",
+            },
+        )
+        obj = AsrConfig(tmp_path)
+        assert obj.get("language") == "en"
+        assert obj.get("vad_enabled") is True
+        assert obj.get("vad_min_silence_ms") == 400
+        assert obj.get("word_timestamps") is False
+        assert obj.get("beam_size") == 3
+        # model_size 是标准名且本地目录不存在 → resolve_model_path 回退标准名
+        assert obj.resolve_model_path("") == "small"
+
+    def test_corr_restore_mapping(self, tmp_path):
+        """corr 域对象文件键即持久化键（KEY_MAP 覆盖全部业务键）。"""
+        from core.settings.domains import CorrectionConfig
+
+        self._write_corr(
+            tmp_path,
+            {
+                "engine": "llamacpp",
                 "enabled": True,
                 "batch_size": 8,
                 "retry_on_failure": 3,
@@ -144,27 +164,25 @@ class TestRestoreBusinessParams:
                 "seg_time_gap": 2.0,
                 "extract_environment": True,
             },
-        ):
-            params = win._restore_business_params({})
-        assert params["corr_enabled"] is True
-        assert params["corr_batch_size"] == 8
-        assert params["corr_retry"] == 3
-        assert params["corr_prompt"] == "校对提示"
-        assert params["corr_stream"] is True
-        assert params["corr_translate"] is True
-        assert params["corr_polish"] is True
-        assert params["seg_time_gap"] == 2.0
-        assert params["corr_extract_env"] is True
+        )
+        obj = CorrectionConfig(tmp_path)
+        assert obj.get("enabled") is True
+        assert obj.get("batch_size") == 8
+        assert obj.get("retry_on_failure") == 3
+        assert obj.get("correction_prompt") == "校对提示"
+        assert obj.get("stream_mode") is True
+        assert obj.get("translate_mode") is True
+        assert obj.get("enable_polish") is True
+        assert obj.get("seg_time_gap") == 2.0
+        assert obj.get("extract_environment") is True
 
-    def test_saved_path_preferred_for_model(self):
+    def test_saved_path_preferred_for_model(self, tmp_path):
+        """asr_model_path UI 选择状态优先于文件派生（resolve_model_path saved 参数）。"""
+        from core.settings.domains import AsrConfig
 
-        win = self._new_win()
-        saved = {"asr_model_path": "E:/models/asr/large-v3"}
-        with mock.patch("core.asr_engine.load_asr_config", return_value={"model_size": "small"}), mock.patch(
-            "core.ai_correction.load_correction_config", return_value={}
-        ):
-            params = win._restore_business_params(saved)
-        assert params["asr_model_path"] == "E:/models/asr/large-v3"  # UI 选择状态优先
+        self._write_asr(tmp_path, {"engine": "whisperx", "model_size": "small"})
+        obj = AsrConfig(tmp_path)
+        assert obj.resolve_model_path("E:/models/asr/large-v3") == "E:/models/asr/large-v3"  # saved 优先
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -173,36 +191,47 @@ class TestRestoreBusinessParams:
 
 
 class TestSyncCorrectionConfigFixes:
-    """R12：_sync_correction_config 断链修复分支。"""
+    """R12 断链修复继承（v3）：行为由 CorrectionConfig 域对象与对话框 commit 承载。"""
 
     @pytest.fixture(autouse=True)
     def _ensure_app(self):
         _app()
 
-    def test_retry_writes_retry_on_failure(self):
-        from ui.main_window import MainWindow
+    @staticmethod
+    def _corr(tmp_path):
+        from core.settings.domains import CorrectionConfig
 
-        src = inspect.getsource(MainWindow._sync_correction_config)
-        assert 'cfg["retry_on_failure"] = params["corr_retry"]' in src
-        assert 'cfg["retry"]' not in src.replace('cfg["retry_on_failure"]', "")
+        return CorrectionConfig(tmp_path)
+
+    def test_retry_writes_retry_on_failure(self, tmp_path):
+        """retry 死键清理；retry_on_failure 由域对象写入。"""
+        from core.settings.domains import CorrectionConfig
+
+        assert "retry" in CorrectionConfig.DEAD_KEYS  # 死键清理
+        obj = self._corr(tmp_path)
+        obj.update({"retry_on_failure": 3})
+        obj2 = self._corr(tmp_path)
+        assert obj2.get("retry_on_failure") == 3
 
     def test_seg_time_gap_branch_present(self):
-        from ui.main_window import MainWindow
+        """seg_time_gap 映射由域对象 KEY_MAP 承载。"""
+        from core.settings.domains import CorrectionConfig
 
-        src = inspect.getsource(MainWindow._sync_correction_config)
-        assert 'cfg["seg_time_gap"] = params["seg_time_gap"]' in src
+        assert CorrectionConfig.KEY_MAP["seg_time_gap"] == "seg_time_gap"
 
-    def test_extract_environment_branch_present(self):
-        from ui.main_window import MainWindow
-
-        src = inspect.getsource(MainWindow._sync_correction_config)
-        assert 'cfg["extract_environment"] = params["corr_extract_env"]' in src
+    def test_extract_environment_branch_present(self, tmp_path):
+        """extract_environment 由域对象写入。"""
+        obj = self._corr(tmp_path)
+        obj.update({"extract_environment": True})
+        obj2 = self._corr(tmp_path)
+        assert obj2.get("extract_environment") is True
 
     def test_corr_prompt_truthy(self):
-        from ui.main_window import MainWindow
+        """corr_prompt 空值不覆盖文件默认提示词（对话框 commit_to_domains 保留 truthy 语义）。"""
+        from ui.settings_dialog import SettingsDialog
 
-        src = inspect.getsource(MainWindow._sync_correction_config)
-        assert "if params.get(\"corr_prompt\"):" in src  # 空值不覆盖文件默认提示词
+        src = inspect.getsource(SettingsDialog.commit_to_domains)
+        assert "correction_prompt" in src
 
 
 class TestMinTextLenRegularMode:
@@ -273,17 +302,26 @@ class TestConfigTemplatesUpdated:
         assert "hf_endpoint" in tpl
         assert "enabled" not in tpl  # 死键删除
 
-    def test_corr_template_has_segmentation_keys(self):
+    def test_corr_template_dead_keys_removed(self):
+        """R3 死键清理：segmentation_* / prompts / enable_proofread / use_template 必须删除。"""
         from core.config_manager import _CONFIG_TEMPLATES
 
         tpl = _CONFIG_TEMPLATES["ai_correction.json"]
-        assert "enable_sentence_segmentation" in tpl
-        assert "segmentation_mode" in tpl
-        assert "segmentation_prompts" in tpl
-        assert "enable_proofread" in tpl
-        assert "context_window" in tpl
-        assert "use_template" in tpl
-        assert "retry" not in tpl  # 死键删除
+        for dead in (
+            "retry",
+            "prompts",
+            "enable_sentence_segmentation",
+            "segmentation_mode",
+            "sentence_segmentation_prompt",
+            "sentence_segmentation_system_prompt",
+            "segmentation_prompts",
+            "enable_proofread",
+            "use_template",
+        ):
+            assert dead not in tpl, f"死键未清理: {dead}"
+        assert "retry_on_failure" in tpl  # 真实现键保留
+        assert "translate_mode" in tpl  # R3 三方对齐：此前模板缺键
+        assert "extract_environment" in tpl
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -307,9 +345,13 @@ class TestSettingsFieldsR12:
         specs = [s for s in _FIELDS if s.get("attr") == "_btn_open_templates"]
         assert specs, "模板编辑器入口按钮缺失"
 
-    def test_retry_field_removed(self):
+    def test_retry_field_uses_file_key_domain(self):
+        """R1/R2：重试字段键收敛为文件键 retry_on_failure（domain="corr"），
+        不再存在 source="corr" 双轨制。"""
         specs = [s for s in _FIELDS if s.get("key") == "retry_on_failure"]
-        assert not specs, "retry_on_failure 字段应已删除（统一 corr_retry）"
+        assert specs, "retry_on_failure 字段应存在（文件键收敛）"
+        assert specs[0].get("domain") == "corr"
+        assert all(s.get("source") != "corr" for s in _FIELDS)
 
     def test_socr_version_field_exists(self):
         specs = [s for s in _FIELDS if s.get("key") == "s_ocr_version"]

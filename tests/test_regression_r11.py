@@ -93,62 +93,34 @@ class TestAsrCompareNormalized:
         win._last_mode_params = base
         win._config_panel.mode_changed.connect(win._on_mode_changed)
 
-    def test_missing_asr_key_not_misjudged(self):
-        """旧配置缺 asr_temperature 等新键：apply_mode_params 后不得误判 ASR 变更。"""
-        from ui.main_window import MainWindow
+    def test_missing_asr_key_not_misjudged(self, tmp_path):
+        """旧配置缺 asr 键：域对象载入默认补齐不发 changed（启动不触发重建）。"""
+        from core.settings.domains import AsrConfig
 
-        win = _make_window()
-        self._restore_mode_params(win, {"asr_language": "ja"})  # saved 缺 asr_temperature
-        with (
-            mock.patch.object(MainWindow, "_schedule_mode_save"),
-            mock.patch.object(MainWindow, "_schedule_asr_restart"),
-            mock.patch.object(MainWindow, "_restart_ocr_engine"),
-        ):
-            # 与 _restore_mode_params 相同的恢复路径：apply_mode_params 触发 mode_changed
-            win._config_panel.apply_mode_params({"asr_language": "ja"})
-            assert win._asr_params_changed is False
+        obj = AsrConfig(tmp_path)
+        emitted: list = []
+        obj.changed.connect(emitted.append)
+        obj.load()  # 重载无变化 → 不触发
+        assert emitted == []
 
-    def test_missing_multiple_asr_keys_not_misjudged(self):
-        """缺多个 asr 键（temperature/hotwords/vad）也不误判。"""
-        from ui.main_window import MainWindow
+    def test_real_asr_change_emits_changed(self, tmp_path):
+        """真正修改 asr 参数（如语言）必须触发域对象 changed 信号（驱动 router）。"""
+        from core.settings.domains import AsrConfig
 
-        win = _make_window()
-        saved = {"asr_model_size": "base", "asr_language": "en"}
-        self._restore_mode_params(win, saved)
-        with (
-            mock.patch.object(MainWindow, "_schedule_mode_save"),
-            mock.patch.object(MainWindow, "_schedule_asr_restart"),
-            mock.patch.object(MainWindow, "_restart_ocr_engine"),
-        ):
-            win._config_panel.apply_mode_params(saved)
-            assert win._asr_params_changed is False
-
-    def test_real_asr_change_still_detected(self):
-        """真正修改 asr 参数（如语言）必须被判定为变更（防止过度修复）。"""
-        from ui.main_window import MainWindow
-
-        win = _make_window()
-        self._restore_mode_params(win, {"asr_language": "zh"})
-        with (
-            mock.patch.object(MainWindow, "_schedule_mode_save"),
-            mock.patch.object(MainWindow, "_schedule_asr_restart"),
-            mock.patch.object(MainWindow, "_restart_ocr_engine"),
-        ):
-            win._config_panel.apply_mode_params({"asr_language": "ja"})
-            assert win._asr_params_changed is True
+        obj = AsrConfig(tmp_path)
+        emitted: list = []
+        obj.changed.connect(emitted.append)
+        obj.set("language", "ja")
+        assert "language" in emitted
 
     def test_corr_translate_synced_on_mode_changed(self):
-        """B4 联动：corr_translate 出现在 mode_params 中时同步到 corrector 实例。"""
+        """B4 联动：corr_translate 出现在 mode_changed 参数中时同步到 corrector 实例。"""
         from ui.main_window import MainWindow
 
         win = _make_window()
-        self._restore_mode_params(win, {})
-        with (
-            mock.patch.object(MainWindow, "_schedule_mode_save"),
-            mock.patch.object(MainWindow, "_schedule_asr_restart"),
-            mock.patch.object(MainWindow, "_restart_ocr_engine"),
-        ):
-            win._config_panel.apply_mode_params({"corr_translate": True})
+        win._router = mock.Mock()
+        with mock.patch.object(MainWindow, "_schedule_mode_save"):
+            win._on_mode_changed({"corr_translate": True})
             assert win._corrector.translate_mode is True
 
 
@@ -160,11 +132,11 @@ class TestAsrCompareNormalized:
 class TestSummaryPromptKey:
     """S2 回归：_FIELDS 中环境提示词 spec 键名必须为 summary_prompt（文件真实键）。"""
 
-    def test_spec_exists_with_correct_key_and_source(self):
+    def test_spec_exists_with_correct_key_and_domain(self):
         specs = [s for s in _FIELDS if s.get("key") == "summary_prompt"]
         assert len(specs) == 1
         spec = specs[0]
-        assert spec["source"] == "corr"  # 从 ai_correction.json 读取，而非 mode_params
+        assert spec.get("domain") == "corr"  # 从 ai_correction.json 域对象读取，而非 mode_params
         assert spec["attr"] == "_corr_summary_prompt"
         assert spec["widget"] == "text"
         assert spec.get("default") == ""
@@ -181,7 +153,7 @@ class TestSummaryPromptKey:
 
 @pytest.fixture()
 def dialog(app):
-    return SettingsDialog(ConfigPanel(), correction_config={}, filter_keywords=[], engine_manager=None)
+    return SettingsDialog(ConfigPanel(), registry=None, filter_keywords=[], engine_manager=None)
 
 
 class TestAcceptValidationConditional:
@@ -260,7 +232,7 @@ class TestModelFieldLoad:
 
     def test_wrong_type_swallowed(self, dialog):
         """spin 字段收到 None：int(None) 抛 TypeError，必须被捕获不崩（R11 防御）。"""
-        spin_spec = next(s for s in _FIELDS if s.get("key") == "corr_batch_size")
+        spin_spec = next(s for s in _FIELDS if s.get("key") == "batch_size")
         dialog._set_field_value(spin_spec, dialog._corr_batch, None)  # 不应抛异常
 
 
@@ -326,7 +298,8 @@ class TestSaveModeParamsFiltersJunkKeys:
         win._config_mgr.save_settings.assert_called_once()
 
     def test_no_junk_from_clean_state(self):
-        """全默认状态保存：恰好是 UI 状态键（非 asr_*/corr_*，除 corr_preset）。"""
+        """全默认状态保存：恰好是 UI 状态白名单（排除 corr_summary_prompt 运行时通道）。"""
+        from core.settings import UiStateConfig
 
         win = _make_window()
         win._config_mgr = mock.Mock()
@@ -335,37 +308,28 @@ class TestSaveModeParamsFiltersJunkKeys:
         win._save_mode_params()
         set_calls = [c for c in win._config_mgr.set.call_args_list if c.args and c.args[0] == "mode_params"]
         params = set_calls[-1].args[1]
-        expected = {
-            k for k in MODE_PARAMS_DEFAULTS
-            if k != "corr_summary_prompt"
-            and (k == "corr_preset" or not (k.startswith("asr_") or k.startswith("corr_")))
-        }
+        expected = UiStateConfig.UI_STATE_MODE_KEYS - {"corr_summary_prompt"}
         assert set(params) == expected
 
-    def test_corr_changed_flag_gates_sync(self):
-        """差异触发：_corr_params_changed=False 时不调用 _sync_correction_config。"""
-        from ui.main_window import MainWindow
-
+    def test_business_keys_not_saved_by_mode_params(self):
+        """v3：_save_mode_params 不再同步业务键（域对象由 RebuildRouter 防抖写盘）。"""
         win = _make_window()
         win._config_mgr = mock.Mock()
-        win._asr_params_changed = False
-        win._corr_params_changed = False
-        with mock.patch.object(MainWindow, "_sync_correction_config") as sync:
-            win._save_mode_params()
-            sync.assert_not_called()
-            win._config_mgr.save_settings.assert_called_once()  # 数据本身仍写盘
+        win._save_mode_params()
+        set_calls = [c for c in win._config_mgr.set.call_args_list if c.args and c.args[0] == "mode_params"]
+        params = set_calls[-1].args[1]
+        assert "corr_enabled" not in params
+        assert "asr_language" not in params
+        win._config_mgr.save_settings.assert_called_once()  # UI 状态本身仍写盘
 
 
 class TestSyncCorrectionConfigTranslateBranch:
-    """B3 回归：_sync_correction_config 必须包含 corr_translate → translate_mode 分支。"""
+    """B3 回归：corr_translate → translate_mode 映射由域对象 KEY_MAP 承载。"""
 
-    def test_translate_branch_present(self):
-        from ui.main_window import MainWindow
+    def test_translate_branch_in_key_map(self):
+        from core.settings.domains import CorrectionConfig
 
-        src = inspect.getsource(MainWindow._sync_correction_config)
-        assert '"translate_mode"' in src
-        assert '"corr_translate"' in src
-        assert src.index('"corr_translate"') < src.index('"translate_mode"')
+        assert CorrectionConfig.KEY_MAP["corr_translate"] == "translate_mode"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -480,17 +444,18 @@ class TestSettingsFieldStructure:
         assert "collapsed" not in groups["API 连接"] or groups["API 连接"].get("collapsed") is False
 
     def test_quick_fields_count(self):
-        """quick 字段应 ≥13 个（R11 承诺 13 个 + 实际实现），防止 tooltip 引导缺失回归。"""
-        quick = [s for s in _FIELDS if s.get("quick")]
-        assert len(quick) >= 13
+        """hint 字段（toolbar/right_panel）应 ≥10 个，防止 tooltip 引导缺失回归。"""
+        hint = [s for s in _FIELDS if s.get("hint")]
+        assert len(hint) >= 10
 
     def test_quick_tooltip_guidance_mechanism(self):
-        """quick 字段 tooltip 追加「主窗口可快捷调整」引导（源码级断言）。"""
+        """hint 字段 tooltip 按实际入口精确指引（2.5 对齐；源码级断言）。"""
         import ui.settings_dialog as sd
 
         src = inspect.getsource(sd.SettingsDialog._build_field)
-        assert "主窗口工具栏/右侧面板可快捷调整" in src or "可快捷调整" in src
-        assert "spec.get(\"quick\")" in src
+        assert "可在主窗口顶部快速开关调整" in src
+        assert "可在主窗口右侧面板调整" in src
+        assert 'spec.get("hint")' in src
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -508,17 +473,13 @@ class TestDirtyTrackingReject:
 
     def test_dirty_reject_prompts(self, dialog):
         dialog._mark_dirty()
-        with mock.patch.object(
-            QMessageBox, "question", return_value=QMessageBox.Yes
-        ) as question:
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.Yes) as question:
             dialog.reject()
             question.assert_called_once()
 
     def test_dirty_reject_no_keeps_open(self, dialog):
         dialog._mark_dirty()
-        with mock.patch.object(
-            QMessageBox, "question", return_value=QMessageBox.No
-        ) as question:
+        with mock.patch.object(QMessageBox, "question", return_value=QMessageBox.No) as question:
             dialog.reject()
             question.assert_called_once()
 
@@ -561,7 +522,7 @@ class TestDisplaySaveSplit:
         src = inspect.getsource(MainWindow._apply_theme_from_dialog)
         assert "config_mgr" not in src
         assert "save_settings" not in src
-        assert "set(\"theme\"" not in src
+        assert 'set("theme"' not in src
         assert "_apply_theme(" in src
 
     def test_display_dialog_wiring(self):

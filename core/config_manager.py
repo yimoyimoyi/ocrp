@@ -14,7 +14,8 @@ BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent
 CONFIG_DIR = BASE_DIR / "config"
 
 # 配置版本号（R12 迁移机制：加载时逐级执行 _MIGRATIONS 到当前版本）
-CONFIG_VERSION = 1
+# v2：mode_params 业务镜像（asr_*/corr_*/seg_time_gap）迁入域对象文件（方案 A）
+CONFIG_VERSION = 2
 
 DEFAULT_SETTINGS = {
     "config_version": CONFIG_VERSION,
@@ -29,6 +30,14 @@ DEFAULT_SETTINGS = {
     "hw_accel": False,
     "mode_params": {},
     "language": "",
+    # R11：窗口状态键注册（此前仅靠 _merge_defaults 未知键透传存活，无默认/迁移/清理机制）
+    "top_splitter_sizes": [400, 500],
+    "window_maximized": False,
+    "config_panel_tab": 0,
+    "engine_dialog_geometry": "",
+    "settings_dialog_geometry": "",
+    "display_dialog_geometry": "",
+    "preset_dialog_geometry": "",
 }
 
 
@@ -107,7 +116,10 @@ def load_json_with_comments(filepath: Union[str, Path]) -> Any:
     return json.loads("\n".join(lines))
 
 
-# mode_params 默认值，新增或改名时在此维护
+# mode_params 默认值，新增或改名时在此维护。
+# R1/R2 收敛（v2）：mode_params 只保留 UI 状态键（白名单），asr_*/corr_*/seg_time_gap
+# 业务镜像已迁入域对象文件（core/settings/domains.py AsrConfig/CorrectionConfig），
+# 内存中由 ConfigPanel 读透合并补充，不再持久化。
 MODE_PARAMS_DEFAULTS = {
     "frame_interval": 0.1,
     "process_mode": "OCR + ASR（完整流程）",
@@ -118,7 +130,7 @@ MODE_PARAMS_DEFAULTS = {
     "s_sim_threshold": 0.85,
     "s_min_text_len": 2,
     # R12：s_filter_keywords 孤儿键（无消费方）已删除
-    "s_ocr_version": "跟随全局",  # R12：默认跟随引擎配置版本（此前默认强制 PP-OCRv4）
+    "s_ocr_version": "跟随全局",  # R12：默认跟随引擎配置版本（此前默认强制 PP-OCRv4）；R4：存储值为规范 token
     "r_dedup": True,
     "r_sim_threshold": 0.9,
     "r_buffer_size": 5,
@@ -131,42 +143,14 @@ MODE_PARAMS_DEFAULTS = {
     "post_conf_threshold": 0.6,
     "post_sim_threshold": 0.9,
     "post_min_text_len": 2,
-    "corr_enabled": False,
-    "corr_batch_size": 5,
-    "corr_retry": 2,
-    "corr_prompt": "",
-    "corr_extract_env": False,
-    "corr_system_prompt": "",
-    "corr_output_format": "",
+    # ── UI 状态键（settings.json 持久化白名单，与 UiStateConfig.UI_STATE_MODE_KEYS 一致）──
     "corr_preset": "",
-    # ── 下列键由 settings_dialog._FIELDS / workflow 消费，统一在此注册默认值 ──
-    "corr_translate": False,
-    "corr_stream": False,
-    "corr_json": False,
     "corr_concurrency": 4,
     "corr_rpm": 30,
-    "seg_time_gap": 3.0,
-    "corr_polish": False,
-    # R12：corr_use_template / asr_enabled 孤儿键已删除（无 UI 设置源 / 值不产生分支差异）
     "corr_summary_prompt": "",  # 运行时环境提示词，保存时被 _save_mode_params 排除
     "srt_export_mode": "仅纠正结果",
     "post_conf_enabled": False,
-    "asr_model_dir": "models/asr",
-    "asr_model_size": "large-v3",
-    "asr_model_path": "",
-    "asr_language": "zh",
-    "asr_vad": False,
-    "asr_word_ts": True,
-    "asr_region_name": "语音",
-    "asr_beam_size": 5,
-    "asr_initial_prompt": "",
-    "asr_condition_prev": True,
-    "asr_no_speech_thresh": 0.6,
-    "asr_comp_ratio_thresh": 2.4,
-    "asr_temperature": "0.0,0.2,0.4,0.6,0.8,1.0",
-    "asr_hotwords": "",
-    "asr_vad_min_silence": 500,
-    "asr_vad_threshold": 0.5,
+    "asr_model_path": "",  # UI 模型选择状态（v2 起正式持久化）
 }
 
 # 旧名 → 新名 映射（用于配置文件自动迁移）
@@ -189,7 +173,6 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
                 "config": {
                     "lang": "ch",
                     "use_angle_cls": False,
-                    "use_gpu": False,
                     "show_log": False,
                     "fast_mode": True,
                     "rec_batch_num": 6,
@@ -197,7 +180,7 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
                     "base_url": "",
                     "model": "",
                     "timeout": 30,
-                    "device": "cpu",  # 与 use_gpu: False 保持一致（此前 gpu/false 矛盾导致 UI 误显 GPU 勾选）
+                    "device": "cpu",  # R5：唯一计算设备开关（use_gpu 已收敛删除，避免 gpu/false 矛盾）
                     "ocr_version": "PP-OCRv4",
                 },
             },
@@ -210,7 +193,6 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
                     "model": "gpt-4o",
                     "prompt_template": "请识别图片中的文字，只返回文字内容",
                     "timeout": 30,
-                    "retry": 2,
                     "device": "cpu",
                     "ocr_version": None,
                     "use_angle_cls": True,
@@ -224,7 +206,6 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
                     "model": "llama3.2-vision:11b",
                     "prompt_template": "请识别图片中的文字，只返回文字内容",
                     "timeout": 60,
-                    "retry": 2,
                 },
             },
             "llamacpp": {
@@ -236,7 +217,6 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
                     "model": "",
                     "prompt_template": "请识别图片中的文字，只返回文字内容",
                     "timeout": 60,
-                    "retry": 2,
                 },
             },
         },
@@ -278,16 +258,11 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
         "summary_prompt": "",
         "correction_system_prompt": "",
         "output_format": "",
-        "prompts": {"default": ""},
         "stream_mode": True,
         "json_mode": True,
-        "enable_sentence_segmentation": False,
-        "segmentation_mode": "2lines",
-        "sentence_segmentation_prompt": "",
-        "sentence_segmentation_system_prompt": "",
-        "segmentation_prompts": {"2lines": {"prompt": "", "system": ""}},
-        "enable_proofread": False,
-        "use_template": False,
+        # R3 三方对齐：此前模板缺这两个键（_sync_correction_config 在写，模板没有）
+        "translate_mode": False,
+        "extract_environment": False,
         "seg_time_gap": 3.0,
         "enable_polish": False,
         "polish_prompt": "你是一个专业的字幕润色专家。请对翻译/纠错后的字幕进行润色...",
@@ -353,10 +328,13 @@ class ConfigManager:
                 cfg = load_json_with_comments(self.settings_path)
                 if not isinstance(cfg, dict):
                     raise ValueError("settings.json 不是有效的对象")
+                version_before = int(cfg.get("config_version", 0) or 0)
                 self._migrate_settings(cfg)
                 merged = self._merge_defaults(cfg)
-                # 如果加载的配置与默认值有差异（缺键或多余键），重写文件
-                if set(cfg.keys()) != set(merged.keys()):
+                # F1 修复：配置版本变化（迁移执行）或键集差异（缺键/垃圾键）时重写文件，
+                # 不依赖顶层键集差异——否则版本号只在内存推进，每次启动重跑迁移链
+                version_after = int(cfg.get("config_version", 0) or 0)
+                if version_after != version_before or set(cfg.keys()) != set(merged.keys()):
                     self._save_settings(merged)
                 return merged
             except Exception as e:
@@ -381,7 +359,84 @@ class ConfigManager:
             self._migrate_mode_params(cfg)
             cfg.pop("ai_correction_enabled", None)  # 死键清理
             cfg["config_version"] = 1
-        # 未来版本在此追加：if version < 2: ...
+        # v1 → v2：mode_params 业务镜像迁入域对象文件（文件已有值优先，幂等）
+        if version < 2:
+            self._migrate_mode_params_split(cfg)
+            cfg["config_version"] = 2
+        # 版本号写盘由 _load_settings 统一处理（见 F1 注释）
+
+    def _migrate_mode_params_split(self, cfg: dict):
+        """v2 迁移：把 mode_params 的 asr_*/corr_*/seg_time_gap 镜像迁入业务文件。
+
+        规则：文件已有该键 → 以文件为准，不覆盖；文件缺键 → 用 mp 镜像回填。
+        s_ocr_version 旧带括号文案（"PP-OCRv4 (最快)"）转为规范 token（R4）。
+        迁移后 mp 只保留 UI 状态白名单键。幂等：v2 再跑不产生任何变化。
+        """
+        # 延迟导入避免循环（core.settings.domains → core.config_manager）
+        from core.settings.domains import AsrConfig, CorrectionConfig, UiStateConfig
+
+        mp = cfg.get("mode_params")
+        if not isinstance(mp, dict):
+            cfg["mode_params"] = mp = {}
+        if not mp:
+            # 空 mp：仅做白名单化 + 版本号推进（无镜像可迁移）
+            cfg["mode_params"] = {k: v for k, v in mp.items() if k in UiStateConfig.UI_STATE_MODE_KEYS}
+            return
+
+        # ── ASR：mp 业务键 → asr_engines.json ──
+        asr_path = CONFIG_DIR / "asr_engines.json"
+        asr_existed = asr_path.exists()
+        asr_cfg = load_json_with_comments(asr_path) if asr_existed else {}
+        if not isinstance(asr_cfg, dict):
+            asr_cfg = {}
+        for mp_key, file_key in AsrConfig.KEY_MAP.items():
+            if mp_key in mp and file_key not in asr_cfg:
+                asr_cfg[file_key] = mp[mp_key]
+        # asr_model_path 绝对路径 → 派生 model_dir/model_size（仅文件缺键时；
+        # F2 修复：条件改为 model_dir，避免 asr_model_size 镜像存在时跳过派生）
+        path_sel = mp.get("asr_model_path", "")
+        if path_sel and os.path.isabs(path_sel) and "model_dir" not in asr_cfg:
+            asr_cfg["model_size"] = os.path.basename(path_sel)
+            parent = os.path.dirname(path_sel)
+            if parent:
+                asr_cfg["model_dir"] = parent
+        if asr_cfg and not asr_existed:
+            # 文件缺失：用域默认值兜底生成完整文件（避免残缺模板）
+            asr_cfg = {**dict(AsrConfig.DEFAULTS), **asr_cfg}
+
+        # ── 纠错：corr_*/seg_time_gap → ai_correction.json ──
+        corr_path = CONFIG_DIR / "ai_correction.json"
+        corr_existed = corr_path.exists()
+        corr_cfg = load_json_with_comments(corr_path) if corr_existed else {}
+        if not isinstance(corr_cfg, dict):
+            corr_cfg = {}
+        for mp_key, file_key in CorrectionConfig.KEY_MAP.items():
+            if mp_key not in mp or file_key in corr_cfg:
+                continue
+            # corr_prompt 空值不覆盖文件默认提示词（truthy 语义保留）
+            if file_key == "correction_prompt" and not mp[mp_key]:
+                continue
+            corr_cfg[file_key] = mp[mp_key]
+        if corr_cfg and not corr_existed:
+            corr_cfg = {**dict(CorrectionConfig.DEFAULTS), **corr_cfg}
+
+        # ── s_ocr_version 旧 label → 规范 token（R4）──
+        label_map = {
+            "PP-OCRv4 (最快)": "PP-OCRv4",
+            "PP-OCRv5_mobile (平衡)": "PP-OCRv5_mobile",
+            "PP-OCRv5_server (高精度)": "PP-OCRv5_server",
+        }
+        if mp.get("s_ocr_version") in label_map:
+            mp["s_ocr_version"] = label_map[mp["s_ocr_version"]]
+
+        # ── 写回（仅当存在可迁移的键值）──
+        with _config_lock:
+            if asr_cfg and any(k in mp for k in AsrConfig.KEY_MAP):
+                atomic_write_json(asr_path, asr_cfg)
+            if corr_cfg and any(k in mp for k in CorrectionConfig.KEY_MAP):
+                atomic_write_json(corr_path, corr_cfg)
+        # mp 只留 UI 状态白名单键
+        cfg["mode_params"] = {k: v for k, v in mp.items() if k in UiStateConfig.UI_STATE_MODE_KEYS}
 
     def _migrate_mode_params(self, cfg: dict):
         """迁移 mode_params 中的旧键名 → 新键名，补充缺失默认值。

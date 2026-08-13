@@ -163,8 +163,6 @@ class AICorrector:
         self._output_format = self._config.get("output_format", "[纠正后文本]")
         self._seg_time_gap: float = self._config.get("seg_time_gap", 3.0)
         # ── 润色模式字段 ──
-        self._use_template: bool = self._config.get("use_template", False)
-        self._template_content: str = ""  # 由 ConfigPanel 或 main_window 设置
         self._polish_enabled: bool = self._config.get("enable_polish", False)
         self._polish_prompt = self._config.get(
             "polish_prompt",
@@ -190,8 +188,6 @@ class AICorrector:
         _translate = self._translate_mode
         _stream = self._stream_mode
         _json = self._json_mode
-        _use_tpl = self._use_template
-        _tpl_content = self._template_content
         _env_ctx = self._env_context
         _extract = self._extract_env
         _seg_tg = self._seg_time_gap
@@ -232,8 +228,6 @@ class AICorrector:
         self._translate_mode = _translate
         self._stream_mode = _stream
         self._json_mode = _json
-        self._use_template = _use_tpl
-        self._template_content = _tpl_content
         self._env_context = _env_ctx
         self._extract_env = _extract
         self._seg_time_gap = _seg_tg
@@ -278,18 +272,6 @@ class AICorrector:
     def polish_enabled(self, val: bool):
         self._polish_enabled = val
 
-    @property
-    def use_template(self) -> bool:
-        return self._use_template
-
-    @use_template.setter
-    def use_template(self, val: bool):
-        self._use_template = val
-
-    def set_template_content(self, content: str):
-        """设置当前选中的模板内容（由 ConfigPanel 或 main_window 注入）。"""
-        self._template_content = content
-
     def apply_preset(self, preset_name: str):
         """切换 API 预设。"""
         self._preset_name = preset_name
@@ -329,7 +311,7 @@ class AICorrector:
         if self._env_context:
             return True
         env_keywords = ("{环境信息}", "{环境上下文}", "{环境描述}")
-        combined_prompt = self._prompt_template + self._template_content + self._summary_prompt + self._polish_prompt
+        combined_prompt = self._prompt_template + self._summary_prompt + self._polish_prompt
         return any(kw in combined_prompt for kw in env_keywords)
 
     # ── API 调用辅助方法 ───────────────────────────────────────────
@@ -549,14 +531,6 @@ class AICorrector:
                 f"要求：译文自然流畅、符合中文字幕习惯；专有名词保留原文；"
                 f"中英混排时保留英文仅翻译中文。\n\n"
                 f"原文：\n{raw_text}"
-            )
-        elif self._use_template and self._template_content:
-            # 模板模式：模板内容直接作为 prompt
-            prompt = self._resolve_placeholders(
-                self._template_content,
-                raw_text=raw_text,
-                context=context_str,
-                env_context=self._env_context,
             )
         else:
             prompt = self._resolve_placeholders(

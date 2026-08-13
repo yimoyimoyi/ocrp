@@ -21,6 +21,8 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from unittest import mock
+
 import pytest
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication
@@ -393,34 +395,14 @@ def _bare_mw():
 
 
 class TestAsrDebounce:
-    """P1-4 回归：ASR 参数变更防抖调度，不再逐键立即重建。"""
+    """P1-4 回归：RebuildRouter 防抖调度，不再逐键立即重建。"""
 
-    def test_on_mode_changed_schedules_not_immediate(self, monkeypatch):
-        mw = _bare_mw()
-        mw._last_mode_params = {}
-        mw._corrector = _FakeCorrector()
-        scheduled = []
-        restarted = []
-        mw._schedule_asr_restart = lambda: scheduled.append(True)
-        mw._restart_asr_engine = lambda: restarted.append(True)
-        mw._restart_ocr_engine = lambda: None
-        mw._schedule_mode_save = lambda: None
-
-        mw._on_mode_changed({"asr_model_path": "large-v3", "corr_translate": True})
-        assert scheduled == [True]
-        assert restarted == []  # 不再立即重建
-
-        # 参数未变 → 不再调度
-        mw._on_mode_changed({"asr_model_path": "large-v3", "corr_translate": True})
-        assert scheduled == [True]
-
-        # 再次变更 → 重新调度
-        mw._on_mode_changed({"asr_model_path": "small", "corr_translate": True})
-        assert scheduled == [True, True]
-
-    def test_schedule_restart_uses_single_shot_400ms_timer(self, monkeypatch):
-        """_schedule_asr_restart 创建/复用单发 400ms 定时器。"""
+    @staticmethod
+    def _make_router(monkeypatch):
+        """构造 RebuildRouter + Fake QTimer（复用原 P1-4 测试模式）。"""
         import PySide6.QtCore
+
+        from core.settings.rebuild import RebuildRouter
 
         class _FakeSignal:
             def __init__(self):
@@ -433,7 +415,6 @@ class TestAsrDebounce:
             instances = []
 
             def __init__(self, parent=None):
-                self.parent = parent
                 self.single_shot = None
                 self.timeout = _FakeSignal()
                 self.started = []
@@ -446,41 +427,50 @@ class TestAsrDebounce:
                 self.started.append(ms)
 
         monkeypatch.setattr(PySide6.QtCore, "QTimer", _FakeTimer)
-        mw = _bare_mw()
-        mw._asr_restart_timer = None
-        mw._do_asr_restart = lambda: None  # 防抖到期动作测试见下
+        owner = mock.Mock()
+        owner._workflow = mock.Mock()
+        owner._workflow.is_asr_running.return_value = False
+        router = RebuildRouter(owner)
+        return router, _FakeTimer
 
-        mw._schedule_asr_restart()
-        mw._schedule_asr_restart()  # 二次调用复用同一定时器
-        assert len(_FakeTimer.instances) == 1
-        assert _FakeTimer.instances[0].single_shot is True
-        assert _FakeTimer.instances[0].timeout.cb is not None  # timeout → _do_asr_restart
-        assert _FakeTimer.instances[0].started == [400, 400]  # 每次重置 400ms
+    def test_notify_schedules_debounced_once(self, monkeypatch):
+        """多次 notify 复用同一单发 400ms 定时器（逐键输入合并为一次重建）。"""
+        router, FakeTimer = self._make_router(monkeypatch)
+        router.notify("asr", "model_size")
+        router.notify("asr", "vad_enabled")
+        assert len(FakeTimer.instances) == 1
+        assert FakeTimer.instances[0].single_shot is True
+        assert FakeTimer.instances[0].timeout.cb is not None  # timeout → _flush
+        assert FakeTimer.instances[0].started == [400, 400]  # 每次重置 400ms
 
-    def test_do_asr_restart_keeps_running_guard(self):
-        """_do_asr_restart：ASR 运行中 → 标记 pending 不重建；空闲 → 重建。"""
-        mw = _bare_mw()
+    def test_notify_no_immediate_rebuild(self, monkeypatch):
+        """notify 不立即重建（防抖期内仅记录 pending/脏域）。"""
+        router, _ = self._make_router(monkeypatch)
+        router.notify("asr", "model_size")
+        assert router._pending == {"asr"}
+        assert router._dirty_domains == {"asr"}
 
-        class _FakeWF:
-            def __init__(self):
-                self.running = False
+    def test_flush_running_guard(self, monkeypatch):
+        """_flush：ASR 运行中 → 标记 pending 不重建；process_finished 补建。"""
+        router, _ = self._make_router(monkeypatch)
+        router._owner._workflow.is_asr_running.return_value = True
+        router.notify("asr", "model_size")
+        with mock.patch.object(router, "_rebuild_asr") as rb:
+            router._flush()
+            rb.assert_not_called()
+        assert router._asr_pending is True
+        with mock.patch.object(router, "_rebuild_asr") as rb:
+            router.on_process_finished()
+            rb.assert_called_once()
+        assert router._asr_pending is False
 
-            def is_asr_running(self):
-                return self.running
-
-        wf = _FakeWF()
-        mw._workflow = wf
-        restarted = []
-        mw._restart_asr_engine = lambda: restarted.append(True)
-
-        mw._do_asr_restart()
-        assert restarted == [True]
-        assert not getattr(mw, "_asr_restart_pending", False)
-
-        wf.running = True
-        mw._do_asr_restart()
-        assert restarted == [True]  # 未重建
-        assert mw._asr_restart_pending is True  # 处理完成后补建
+    def test_flush_idle_rebuilds(self, monkeypatch):
+        """_flush：空闲 → 调度重建。"""
+        router, _ = self._make_router(monkeypatch)
+        router.notify("asr", "model_size")
+        with mock.patch.object(router, "_rebuild_asr") as rb:
+            router._flush()
+            rb.assert_called_once()
 
 
 # ══════════════════════════════════════════════════════════════════

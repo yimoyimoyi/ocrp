@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -46,7 +47,7 @@ from ui.collapsible_group import CollapsibleGroup
 # 字段描述表
 #
 # 每个字段 spec 的键：
-#   key         mode_params（或 _corr_cfg，若 source="corr"）中的键
+#   key         mode_params 白名单键（domain="ui"）或域对象文件键（domain="asr"/"corr"）
 #   tab/group   所属 tab 与分组（分组顺序见 _TAB_GROUPS）
 #   attr        控件绑定属性名（self.<attr>）
 #   widget      combo / combo_edit / combo_data / preset_combo / spin /
@@ -56,9 +57,9 @@ from ui.collapsible_group import CollapsibleGroup
 #   options     下拉选项（原文，tr_options=True 时构建期翻译）
 #   default     默认值；min/max/step/decimals/suffix 数值范围
 #   tooltip/placeholder/suffix/text  显示文本（tr_* 标志控制是否翻译）
-#   source      "corr" 表示读写 correction_config 而非 mode_params
+#   domain      "ui"（默认，读写 mode_params 白名单）/"asr"/"corr"（读写域对象，
+#               键为文件键，方案 A 删除 source="corr" 双轨制）
 #   load=False  不参与 _load_initial_values（如引擎字段、按钮行）
-#   sync=False  不参与 _sync_values_to_cp
 #   load_map    加载值预处理回调；on_load 加载后回调（方法名）
 #   sync_get    收集值回调（widget）-> value
 # ══════════════════════════════════════════════════════════════════
@@ -95,7 +96,7 @@ _FIELDS: list[dict] = [
         default="OCR + ASR（完整流程）",
         tooltip="选择开始处理时运行的流程模式",
         tr_tooltip=True,
-        quick=True,
+        hint="toolbar",
     ),
     dict(
         key="frame_interval",
@@ -114,7 +115,7 @@ _FIELDS: list[dict] = [
         tr_suffix=True,
         tooltip="每隔多少秒处理一帧",
         tr_tooltip=True,
-        quick=True,
+        hint="right_panel",
     ),
     dict(
         key="subtitle_duration",
@@ -164,7 +165,7 @@ _FIELDS: list[dict] = [
         load_map=_map_subtitle_mode,
         on_load="_on_subtitle_mode_changed",
         on_change="_on_subtitle_mode_changed",
-        quick=True,
+        hint="toolbar",
     ),
     dict(
         key="sentinel_enabled",
@@ -176,11 +177,12 @@ _FIELDS: list[dict] = [
         tr_text=True,
         label="",
         default=True,
-        quick=True,
+        hint="toolbar",
     ),
     dict(
         # R12（P2-8）：s_ocr_version 此前无任何 UI（只能手改 settings.json），
         # 补充哨兵 OCR 版本选择；"跟随全局"为默认，与引擎配置版本解耦
+        # R4：存储值 = 规范 token（OCR_VERSION_TOKENS），显示与数据同源，无第三套词汇表
         key="s_ocr_version",
         tab="asr",
         group="流式参数（哨兵去重）",
@@ -188,7 +190,7 @@ _FIELDS: list[dict] = [
         widget="combo",
         label="哨兵 OCR 版本:",
         tr_label=True,
-        options=("跟随全局", "PP-OCRv4 (最快)", "PP-OCRv5_mobile (平衡)", "PP-OCRv5_server (高精度)"),
+        options=("跟随全局", "PP-OCRv4", "PP-OCRv5_mobile", "PP-OCRv5_server"),
         tr_options=True,
         default="跟随全局",
         tooltip="哨兵模式使用的 OCR 模型版本（仅本地 PaddleOCR 生效）",
@@ -318,7 +320,7 @@ _FIELDS: list[dict] = [
         tr_tooltip=True,
     ),
     dict(
-        key="asr_model_dir",
+        key="model_dir",
         tab="asr",
         group="ASR 语音识别引擎",
         attr="_asr_model_dir",
@@ -328,6 +330,7 @@ _FIELDS: list[dict] = [
         default="models/asr",
         placeholder="留空使用默认缓存",
         tr_placeholder=True,
+        domain="asr",
         sync_get=lambda w: w.text().strip() or "models/asr",
     ),
     dict(
@@ -340,7 +343,7 @@ _FIELDS: list[dict] = [
         tr_label=True,
         default="",
         on_load="_load_asr_model_value",
-        quick=True,
+        hint="right_panel",
     ),
     dict(
         tab="asr",
@@ -350,7 +353,7 @@ _FIELDS: list[dict] = [
         label="",
     ),
     dict(
-        key="asr_language",
+        key="language",
         tab="asr",
         group="ASR 语音识别引擎",
         attr="_asr_lang",
@@ -360,7 +363,8 @@ _FIELDS: list[dict] = [
         options=("auto", "zh", "en", "ja", "ko"),
         default="zh",
         init_text="zh",
-        quick=True,
+        domain="asr",
+        hint="right_panel",
     ),
     dict(
         key="asr_region_name",
@@ -373,10 +377,11 @@ _FIELDS: list[dict] = [
         default="语音",
         tooltip="ASR 结果在表格中显示的区域名称",
         tr_tooltip=True,
-        quick=True,
+        domain="asr",
+        hint="right_panel",
     ),
     dict(
-        key="asr_beam_size",
+        key="beam_size",
         tab="asr",
         group="解码参数",
         attr="_asr_beam",
@@ -386,11 +391,12 @@ _FIELDS: list[dict] = [
         min=1,
         max=20,
         default=5,
+        domain="asr",
         tooltip="Beam size，越大精度越高但越慢",
         tr_tooltip=True,
     ),
     dict(
-        key="asr_word_ts",
+        key="word_timestamps",
         tab="asr",
         group="解码参数",
         attr="_asr_word_ts",
@@ -399,9 +405,10 @@ _FIELDS: list[dict] = [
         tr_text=True,
         label="",
         default=True,
+        domain="asr",
     ),
     dict(
-        key="asr_condition_prev",
+        key="condition_on_previous_text",
         tab="asr",
         group="解码参数",
         attr="_asr_condition",
@@ -410,9 +417,10 @@ _FIELDS: list[dict] = [
         tr_text=True,
         label="",
         default=True,
+        domain="asr",
     ),
     dict(
-        key="asr_no_speech_thresh",
+        key="no_speech_threshold",
         tab="asr",
         group="解码参数",
         attr="_asr_no_speech",
@@ -423,11 +431,12 @@ _FIELDS: list[dict] = [
         max=1.0,
         step=0.1,
         default=0.6,
+        domain="asr",
         tooltip="越高越容易跳过无声音片段",
         tr_tooltip=True,
     ),
     dict(
-        key="asr_comp_ratio_thresh",
+        key="compression_ratio_threshold",
         tab="asr",
         group="解码参数",
         attr="_asr_comp_ratio",
@@ -438,9 +447,10 @@ _FIELDS: list[dict] = [
         max=10.0,
         step=0.1,
         default=2.4,
+        domain="asr",
     ),
     dict(
-        key="asr_temperature",
+        key="temperature",
         tab="asr",
         group="解码参数",
         attr="_asr_temp",
@@ -450,11 +460,12 @@ _FIELDS: list[dict] = [
         default="0.0,0.2,0.4,0.6,0.8,1.0",
         placeholder="0.0,0.2,0.4,0.6,0.8,1.0",
         tr_placeholder=True,
+        domain="asr",
         tooltip="温度参数（逗号分隔），越低越确定",
         tr_tooltip=True,
     ),
     dict(
-        key="asr_hotwords",
+        key="hotwords",
         tab="asr",
         group="解码参数",
         attr="_asr_hotwords",
@@ -463,11 +474,12 @@ _FIELDS: list[dict] = [
         tr_label=True,
         placeholder="热词，逗号分隔",
         tr_placeholder=True,
+        domain="asr",
         tooltip="提升特定词汇的识别率",
         tr_tooltip=True,
     ),
     dict(
-        key="asr_initial_prompt",
+        key="initial_prompt",
         tab="asr",
         group="解码参数",
         attr="_asr_prompt",
@@ -476,9 +488,10 @@ _FIELDS: list[dict] = [
         tr_label=True,
         placeholder="初始提示词，如: 以下是普通话的转录",
         tr_placeholder=True,
+        domain="asr",
     ),
     dict(
-        key="asr_vad",
+        key="vad_enabled",
         tab="asr",
         group="VAD (语音活动检测)",
         attr="_asr_vad",
@@ -488,11 +501,12 @@ _FIELDS: list[dict] = [
         label="",
         tr_label=True,
         default=False,
+        domain="asr",
         tooltip="自动检测并跳过静音部分，加速处理",
         tr_tooltip=True,
     ),
     dict(
-        key="asr_vad_min_silence",
+        key="vad_min_silence_ms",
         tab="asr",
         group="VAD (语音活动检测)",
         attr="_asr_vad_silence",
@@ -505,9 +519,10 @@ _FIELDS: list[dict] = [
         default=500,
         suffix=" ms",
         tr_suffix=True,
+        domain="asr",
     ),
     dict(
-        key="asr_vad_threshold",
+        key="vad_threshold",
         tab="asr",
         group="VAD (语音活动检测)",
         attr="_asr_vad_thresh",
@@ -517,6 +532,7 @@ _FIELDS: list[dict] = [
         min=0.0,
         max=1.0,
         step=0.05,
+        domain="asr",
         default=0.5,
     ),
     # ── Tab 3: OCR 字幕处理 ──
@@ -530,7 +546,7 @@ _FIELDS: list[dict] = [
         tr_text=True,
         label="",
         default=True,
-        quick=True,
+        hint="toolbar",
     ),
     dict(
         key="post_conf_enabled",
@@ -542,7 +558,6 @@ _FIELDS: list[dict] = [
         tr_text=True,
         label="",
         default=False,
-        quick=True,
     ),
     dict(
         key="post_conf_threshold",
@@ -557,7 +572,6 @@ _FIELDS: list[dict] = [
         step=0.05,
         decimals=2,
         default=0.6,
-        quick=True,
     ),
     dict(
         key="post_sim_threshold",
@@ -572,7 +586,6 @@ _FIELDS: list[dict] = [
         step=0.05,
         decimals=2,
         default=0.9,
-        quick=True,
     ),
     dict(
         key="post_min_text_len",
@@ -585,11 +598,10 @@ _FIELDS: list[dict] = [
         min=1,
         max=100,
         default=2,
-        quick=True,
     ),
     # ── Tab 4: AI 纠错 ──
     dict(
-        key="corr_enabled",
+        key="enabled",
         tab="correction",
         group="纠错模式",
         attr="_corr_enabled",
@@ -597,12 +609,13 @@ _FIELDS: list[dict] = [
         text="启用 AI 纠错",
         tr_text=True,
         default=False,
+        domain="corr",
         tooltip="总开关：开启后将使用 LLM 对 OCR 结果进行纠错",
         tr_tooltip=True,
-        quick=True,
+        hint="toolbar",
     ),
     dict(
-        key="corr_translate",
+        key="translate_mode",
         tab="correction",
         group="纠错模式",
         attr="_corr_translate",
@@ -610,12 +623,13 @@ _FIELDS: list[dict] = [
         text="🌐 翻译模式（将结果翻译为中文）",
         tr_text=True,
         default=False,
+        domain="corr",
         tooltip="开启后 LLM 将把 OCR 结果翻译为中文，纠错提示词仅作参考",
         tr_tooltip=True,
-        quick=True,
+        hint="toolbar",
     ),
     dict(
-        key="corr_stream",
+        key="stream_mode",
         tab="correction",
         group="纠错模式",
         attr="_corr_stream",
@@ -623,9 +637,10 @@ _FIELDS: list[dict] = [
         text="🔴 流式输出模式（实时逐字显示 API 响应）",
         tr_text=True,
         default=False,
+        domain="corr",
     ),
     dict(
-        key="corr_json",
+        key="json_mode",
         tab="correction",
         group="纠错模式",
         attr="_corr_json",
@@ -633,9 +648,10 @@ _FIELDS: list[dict] = [
         text="📋 JSON 输出模式（API 返回结构化 JSON）",
         tr_text=True,
         default=False,
+        domain="corr",
     ),
     dict(
-        key="corr_extract_env",
+        key="extract_environment",
         tab="correction",
         group="纠错模式",
         attr="_corr_extract_env",
@@ -643,6 +659,7 @@ _FIELDS: list[dict] = [
         text="提取全文环境（领域/氛围/内容摘要作为参考）",
         tr_text=True,
         default=False,
+        domain="corr",
     ),
     dict(
         key="enable_polish",
@@ -653,8 +670,7 @@ _FIELDS: list[dict] = [
         text="✨ 润色模式（纠错/翻译后二次润色质量）",
         tr_text=True,
         default=False,
-        source="corr",
-        sync=False,
+        domain="corr",
         tooltip="开启后 LLM 将对纠错/翻译结果进行二次润色，使表达更自然流畅",
         tr_tooltip=True,
     ),
@@ -674,11 +690,11 @@ _FIELDS: list[dict] = [
         widget="text",
         min_height=50,
         max_height=80,
-        # source="corr"：与 ai_correction.json 的 summary_prompt 同源读写，
+        # domain="corr"：与 ai_correction.json 的 summary_prompt 同源读写，
         # 避免从未持久化的 mode_params 读到 "None"（设置同步 P2/P3 修复；
-        # R11：key 由 corr_summary_prompt 修正为文件真实键 summary_prompt，
-        # 此前键名不符导致加载恒空、保存时清空已存环境提示词）
-        source="corr",
+        # R11：key 修正为文件真实键 summary_prompt，此前键名不符导致加载
+        # 恒空、保存时清空已存环境提示词）
+        domain="corr",
         default="",
         load_map=_clean_summary_load,  # 清洗历史脏值 "None"
         placeholder="点击上方按钮自动提取环境信息，也可手动编辑...",
@@ -687,7 +703,7 @@ _FIELDS: list[dict] = [
         tr_tooltip=True,
     ),
     dict(
-        key="corr_system_prompt",
+        key="correction_system_prompt",
         tab="correction",
         group="提示词配置",
         attr="_corr_system_prompt",
@@ -698,9 +714,10 @@ _FIELDS: list[dict] = [
         max_height=100,
         placeholder="自定义纠错系统提示词（可选）",
         tr_placeholder=True,
+        domain="corr",
     ),
     dict(
-        key="corr_prompt",
+        key="correction_prompt",
         tab="correction",
         group="提示词配置",
         attr="_corr_prompt",
@@ -711,9 +728,10 @@ _FIELDS: list[dict] = [
         max_height=100,
         placeholder="自定义纠错提示词（可选）",
         tr_placeholder=True,
+        domain="corr",
     ),
     dict(
-        key="corr_output_format",
+        key="output_format",
         tab="correction",
         group="提示词配置",
         attr="_corr_output_format",
@@ -722,6 +740,7 @@ _FIELDS: list[dict] = [
         tr_label=True,
         placeholder="[纠正后文本]",
         tr_placeholder=True,
+        domain="corr",
     ),
     dict(
         # R12（P1-4）：模板编辑器入口并入设置页（模板仍按区域独立选择）
@@ -745,7 +764,7 @@ _FIELDS: list[dict] = [
         tr_tooltip=True,
     ),
     dict(
-        key="corr_batch_size",
+        key="batch_size",
         tab="correction",
         group="批量参数",
         attr="_corr_batch",
@@ -757,9 +776,10 @@ _FIELDS: list[dict] = [
         default=5,
         suffix=" 条/次",
         tr_suffix=True,
+        domain="corr",
     ),
     dict(
-        key="corr_retry",
+        key="retry_on_failure",
         tab="correction",
         group="批量参数",
         attr="_corr_retry",
@@ -769,6 +789,7 @@ _FIELDS: list[dict] = [
         min=0,
         max=10,
         default=2,
+        domain="corr",
     ),
     dict(
         key="corr_concurrency",
@@ -815,6 +836,7 @@ _FIELDS: list[dict] = [
         default=3.0,
         suffix=" 秒",
         tr_suffix=True,
+        domain="corr",
         tooltip="上下文窗口中，跳过时间间隔超过此值的行",
         tr_tooltip=True,
     ),
@@ -829,8 +851,7 @@ _FIELDS: list[dict] = [
         placeholder="sk-xxx（可选）",
         tr_placeholder=True,
         echo="password",
-        source="corr",
-        sync=False,
+        domain="corr",
         default="",  # 缺省空串，避免 str(None)="None" 字面量污染（R11）
     ),
     dict(
@@ -844,8 +865,7 @@ _FIELDS: list[dict] = [
         placeholder="http://127.0.0.1:8080",
         tr_placeholder=True,
         default="http://127.0.0.1:8080",
-        source="corr",
-        sync=False,
+        domain="corr",
     ),
     dict(
         key="model",
@@ -855,8 +875,7 @@ _FIELDS: list[dict] = [
         widget="corr_model_row",
         label="模型:",
         tr_label=True,
-        source="corr",
-        sync=False,
+        domain="corr",
         default="",  # 缺省空串（R11）
     ),
     dict(
@@ -872,8 +891,7 @@ _FIELDS: list[dict] = [
         default=30,
         suffix=" 秒",
         tr_suffix=True,
-        source="corr",
-        sync=False,
+        domain="corr",
     ),
     # R12（P1-⑥）：retry_on_failure 字段删除——与"批量参数"组的 corr_retry
     # 是同一概念两套键名，重试统一走 corr_retry（写入文件 retry_on_failure）
@@ -896,23 +914,21 @@ _FIELDS: list[dict] = [
 #   visible_when(is_local, is_paddle) -> bool  字段可见性
 #   engine_get(widget, eng_cfg)                引擎切换时回填
 #   engine_out=(cfg_key, getter(widget))       收集到 get_engine_config()
-_VER_MAP = {0: "PP-OCRv5_server", 1: "PP-OCRv5_mobile", 2: "PP-OCRv4"}
+# R4：OCR 版本词汇表唯一化——引擎面板与哨兵下拉共用 OCR_VERSION_TOKENS，
+# 存储值即规范 token（删除 _VER_MAP 第三套词汇与 contains 判断）
+_ENGINE_VERSION_TOKENS = ("PP-OCRv4", "PP-OCRv5_mobile", "PP-OCRv5_server")
 
 
 def _fill_paddle_version(widget, cfg: dict):
-    """按 ocr_version 文本回填模型版本下拉框。"""
+    """按 ocr_version token 精确回填模型版本下拉框。"""
     ver = cfg.get("ocr_version") or ""
-    if "v4" in ver:
-        widget.setCurrentIndex(2)
-    elif "mobile" in ver:
-        widget.setCurrentIndex(1)
-    else:
-        widget.setCurrentIndex(0)
+    idx = _ENGINE_VERSION_TOKENS.index(ver) if ver in _ENGINE_VERSION_TOKENS else 0
+    widget.setCurrentIndex(idx)
 
 
 def _paddle_version_out(widget):
-    """将模型版本下拉框索引映射为 ocr_version 配置值。"""
-    return _VER_MAP.get(widget.currentIndex())
+    """下拉框索引 → ocr_version 规范 token。"""
+    return _ENGINE_VERSION_TOKENS[widget.currentIndex()]
 
 
 _ENGINE_FIELDS: list[dict] = [
@@ -980,7 +996,7 @@ _ENGINE_FIELDS: list[dict] = [
         widget="combo",
         label="模型版本:",
         tr_label=True,
-        options=["PP-OCRv5_server (高精度/慢)", "PP-OCRv5_mobile (平衡)", "PP-OCRv4 (快速)"],
+        options=list(_ENGINE_VERSION_TOKENS),
         visible_when=lambda is_local, is_paddle: is_paddle,
         engine_get=_fill_paddle_version,
         engine_out=("ocr_version", _paddle_version_out),
@@ -1063,7 +1079,7 @@ class SettingsDialog(QDialog):
     def __init__(
         self,
         config_panel,
-        correction_config: dict = None,
+        registry=None,
         parent=None,
         filter_keywords: list[str] | None = None,
         engine_manager=None,
@@ -1075,7 +1091,8 @@ class SettingsDialog(QDialog):
         self.resize(860, 700)
         self.setObjectName("settingsDialog")
         self._cp = config_panel
-        self._corr_cfg = correction_config or {}
+        # 域对象注册中心（方案 A：对话框直接读写域对象，删除 source="corr" 双轨制）
+        self._registry = registry
         self._sort_items: list = []
         self._filter_items: list = []
         self._initial_filter_keywords = filter_keywords or []
@@ -1100,6 +1117,10 @@ class SettingsDialog(QDialog):
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self._on_accept)
         btns.rejected.connect(self.reject)
+        # 恢复出厂设置（2.3：顶层重置入口，二次确认；取消不落盘）
+        self._btn_factory_reset = QPushButton(_("恢复出厂设置"))
+        self._btn_factory_reset.clicked.connect(self._on_factory_reset)
+        btns.addButton(self._btn_factory_reset, QDialogButtonBox.ActionRole)
         layout.addWidget(btns)
 
     # ── 通用字段读写 ──
@@ -1114,6 +1135,63 @@ class SettingsDialog(QDialog):
 
     def _mark_dirty(self, *_):
         self._dirty = True
+
+    # ── 恢复默认（2.3：每字段右键 + 顶层恢复出厂）──
+
+    def _field_default(self, spec: dict):
+        """字段默认值：域对象 DEFAULTS 优先（出厂值），回退 spec default（UI 默认）。"""
+        domain = spec.get("domain", "ui")
+        reg = self._registry
+        if domain == "corr" and reg is not None:
+            return reg.correction.DEFAULTS.get(spec["key"], spec.get("default"))
+        if domain == "asr" and reg is not None:
+            return reg.asr.DEFAULTS.get(spec["key"], spec.get("default"))
+        return spec.get("default")
+
+    def _show_field_reset_menu(self, spec: dict, widget, pos):
+        """每字段右键菜单：恢复默认值。"""
+        menu = QMenu(widget)
+        action = menu.addAction(_("恢复默认值"))
+        action.triggered.connect(lambda: self._reset_field_to_default(spec, widget))
+        menu.exec(widget.mapToGlobal(pos))
+
+    def _reset_field_to_default(self, spec: dict, widget):
+        """将字段恢复为默认值（仅内存，落盘由 OK 的 commit_to_domains 完成）。"""
+        self._set_field_value(spec, widget, self._field_default(spec))
+        self._mark_dirty()
+
+    def _on_factory_reset(self):
+        """恢复出厂：重置全部字段为域默认值（二次确认；OK 时落盘，取消不生效）。"""
+        if self._registry is None:
+            return
+        ret = QMessageBox.question(
+            self,
+            _("恢复出厂设置"),
+            _("确定将所有参数恢复为默认值吗？\n（API Key 等连接配置也将被清空，点击「确定」后生效）"),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ret != QMessageBox.Yes:
+            return
+        # 业务字段（asr/corr）→ 域 DEFAULTS；UI 字段 → spec default
+        for spec in _FIELDS:
+            if "key" not in spec:
+                continue
+            w = getattr(self, spec.get("attr"), None)
+            if w is not None:
+                self._set_field_value(spec, w, self._field_default(spec))
+        # 引擎面板 → 当前引擎的域默认 config（engine_get 回填语义复用）
+        eng_name = self._engine_combo.currentText()
+        eng_default = self._registry.ocr_engines.DEFAULTS.get("engines", {}).get(eng_name, {}).get("config", {})
+        for spec in _ENGINE_FIELDS:
+            w = getattr(self, spec.get("attr"), None)
+            eg = spec.get("engine_get")
+            if w is not None and eg is not None and eng_default:
+                try:
+                    eg(w, eng_default)
+                except Exception:
+                    pass
+        self._mark_dirty()
 
     def _wire_dirty_tracking(self):
         """为声明式表单控件统一接线变更信号（初始值加载完成后调用）。"""
@@ -1183,7 +1261,9 @@ class SettingsDialog(QDialog):
             return self._rev_map(widget.currentText(), *spec["options"])
         if wtype == "combo_data":
             return widget.currentData() or ""
-        if wtype in ("combo_edit", "preset_combo"):
+        if wtype in ("combo_edit", "preset_combo", "corr_model_row"):
+            # corr_model_row 为可编辑 QComboBox（D1 修复：此前缺分支导致
+            # commit_to_domains 把 model 收集为 None → 写盘 null → 重建崩溃）
             return widget.currentText()
         if wtype == "spin":
             return widget.value()
@@ -1196,13 +1276,24 @@ class SettingsDialog(QDialog):
         return None
 
     def _load_initial_values(self):
-        """从 ConfigPanel 的公共属性读取所有参数初始值（描述表驱动）。"""
+        """按字段 domain 分流读取初始值（描述表驱动）。
+
+        - ui：ConfigPanel 读透合并（白名单 + 域对象）
+        - asr/corr：直接读域对象（文件键，方案 A 单一事实源）
+        """
         mp = self._cp.get_mode_params()
+        reg = self._registry
         for spec in _FIELDS:
             widget = getattr(self, spec.get("attr"), None)
             if widget is None or "key" not in spec or spec.get("load") is False:
                 continue
-            source = self._corr_cfg if spec.get("source") == "corr" else mp
+            domain = spec.get("domain", "ui")
+            if domain == "corr" and reg is not None:
+                source = reg.correction
+            elif domain == "asr" and reg is not None:
+                source = reg.asr
+            else:
+                source = mp
             value = source.get(spec["key"], spec.get("default"))
             if spec.get("load_map"):
                 value = spec["load_map"](value)
@@ -1246,10 +1337,14 @@ class SettingsDialog(QDialog):
         return translated
 
     def _sync_values_to_cp(self):
-        """将对话框中的值通过 ConfigPanel 公共 API 写回（描述表驱动）。"""
+        """将对话框中的 UI 状态字段通过 ConfigPanel 写回（描述表驱动）。
+
+        asr/corr 业务字段不在此收集——由 commit_to_domains 直接写域对象
+        （R1/R2：业务参数不再进 mode_params 镜像）。
+        """
         params = {}
         for spec in _FIELDS:
-            if "key" not in spec or spec.get("sync") is False or spec.get("source") == "corr":
+            if "key" not in spec or spec.get("domain", "ui") != "ui":
                 continue
             widget = getattr(self, spec["attr"], None)
             if widget is None:
@@ -1409,13 +1504,20 @@ class SettingsDialog(QDialog):
             w = self._build_corr_model_row(spec)
         else:
             raise ValueError(f"未知字段类型: {wtype}")
-        # tooltip：显式提示 + quick 标记字段追加"主窗口可快捷调整"引导（R11 UX）
+        # tooltip：显式提示 + hint 标记按实际入口精确指引（2.5 对齐，消除误导）
         if wtype not in ("button", "corr_model_row"):
             tip = self._t(spec, "tooltip") if spec.get("tooltip") else ""
-            if spec.get("quick"):
-                tip = (tip + "；" if tip else "") + _("提示：主窗口工具栏/右侧面板可快捷调整")
+            hint = spec.get("hint")
+            if hint == "toolbar":
+                tip = (tip + "；" if tip else "") + _("提示：可在主窗口顶部快速开关调整")
+            elif hint == "right_panel":
+                tip = (tip + "；" if tip else "") + _("提示：可在主窗口右侧面板调整")
             if tip:
                 w.setToolTip(tip)
+        # 恢复默认右键菜单（2.3：每字段 context menu「恢复默认」）
+        if "key" in spec and wtype not in ("button", "btn_asr_refresh"):
+            w.setContextMenuPolicy(Qt.CustomContextMenu)
+            w.customContextMenuRequested.connect(lambda pos, s=spec, wt=w: self._show_field_reset_menu(s, wt, pos))
         if spec.get("attr") and not hasattr(self, spec["attr"]):
             setattr(self, spec["attr"], w)
         return w
@@ -1839,27 +1941,42 @@ class SettingsDialog(QDialog):
         self._corr_api_model.setEditText(preset.get("model", ""))
         self._corr_api_timeout.setValue(preset.get("timeout", 30))
 
-    def get_corr_api_config(self) -> dict:
-        """获取 API 连接配置（纯读取）。
+    def commit_to_domains(self, registry) -> None:
+        """把对话框中的 asr/corr 业务字段写入域对象（OK 时由主窗口调用）。
 
-        stream_mode/json_mode/translate_mode 一并返回：重建 AICorrector 时
-        保持与 UI 勾选一致（设置同步 P9/R11 修复，配合 AICorrector.__init__ 读配置）。
+        - 文件键收敛：字段 key 即文件键（KEY_MAP 单一命名）
+        - corr_prompt 空值不覆盖文件提示词（truthy 语义保留）
+        - asr_model_path（UI 选择）推导 model_size/model_dir（apply_model_selection）
         """
-        return {
-            "enabled": self._corr_enabled.isChecked(),
-            "api_key": self._corr_api_key.text(),
-            "base_url": self._corr_api_url.text(),
-            "model": self._corr_api_model.currentText(),
-            "timeout": self._corr_api_timeout.value(),
-            # R12（P1-⑥）：重试统一走 corr_retry（批量参数组），
-            # 由 _sync_correction_config 写入文件 retry_on_failure
-            "summary_prompt": self._corr_summary_prompt.toPlainText(),
-            "correction_system_prompt": self._corr_system_prompt.toPlainText(),
-            "output_format": self._corr_output_format.text(),
-            "stream_mode": self._corr_stream.isChecked(),
-            "json_mode": self._corr_json.isChecked(),
-            "translate_mode": self._corr_translate.isChecked(),
-        }
+        asr_patch: dict = {}
+        corr_patch: dict = {}
+        for spec in _FIELDS:
+            domain = spec.get("domain", "ui")
+            if domain == "ui" or "key" not in spec:
+                continue
+            widget = getattr(self, spec["attr"], None)
+            if widget is None:
+                continue
+            getter = spec.get("sync_get")
+            value = getter(widget) if getter else self._field_value(spec, widget)
+            if domain == "asr":
+                asr_patch[spec["key"]] = value
+            else:
+                corr_patch[spec["key"]] = value
+        # corr_prompt 空值不覆盖文件默认提示词（truthy 语义，R12 修复保留）
+        if not corr_patch.get("correction_prompt"):
+            corr_patch.pop("correction_prompt", None)
+        # asr_model_path（UI 选择状态）→ 推导 model_size/model_dir（域对象单侧逻辑）
+        path_spec = next((s for s in _FIELDS if s.get("key") == "asr_model_path"), None)
+        if path_spec:
+            w = getattr(self, path_spec["attr"], None)
+            if w is not None:
+                registry.asr.apply_model_selection(self._field_value(path_spec, w))
+        # 域对象 update 默认持久化（单次写盘合并全部变更）
+        if asr_patch:
+            registry.asr.update(asr_patch)
+        if corr_patch:
+            registry.correction.update(corr_patch)
 
     def _on_test_connection(self):
         """测试纠错 API 连接（R12 P0-②：后台线程，完成后弹结果）。

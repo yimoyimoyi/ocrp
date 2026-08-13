@@ -32,12 +32,13 @@ if str(BASE_DIR) not in sys.path:
 
 from core.ai_correction import AICorrector, load_correction_config
 from core.asr_engine import ASREngineManager
-from core.config_manager import MODE_PARAMS_DEFAULTS, ConfigManager, atomic_write_json, load_json_with_comments
+from core.config_manager import MODE_PARAMS_DEFAULTS
 from core.filter_manager import FilterManager
 from core.i18n import LANGUAGE_DISPLAY_NAMES, SUPPORTED_LANGUAGES, LanguageManager, _
 from core.ocr_engine import OCREngineManager
 from core.prompt_manager import PromptTemplateManager
 from core.result_processor import export_results
+from core.settings import ConfigRegistry, RebuildRouter, UiStateConfig
 from core.workflow import WorkflowManager
 from ui.config_panel import ConfigPanel
 from ui.dialogs import PresetManageDialog
@@ -67,7 +68,10 @@ class MainWindow(QMainWindow):
 
     def setup(self):
         """构建完整 UI —— 与 __init__ 分离，确保窗口在完全就绪后才首次渲染。"""
-        self._config_mgr = ConfigManager()
+        # 配置域注册中心（方案 A）：settings.json 由 ConfigManager 承载，
+        # asr/corr/ocr 业务域由域对象承载（单一事实源）
+        self._registry = ConfigRegistry()
+        self._config_mgr = self._registry.config_mgr
         self._engine_mgr = OCREngineManager()
         self._asr_mgr = ASREngineManager()
         self._corrector = AICorrector(load_correction_config(), engine_manager=self._engine_mgr)
@@ -82,7 +86,6 @@ class MainWindow(QMainWindow):
         self._current_engine: str = "paddleocr"
         self._current_template: str = ""
         self._batch_files: list[str] = []
-        self._asr_params_changed: bool = False
         self._paused: bool = False  # P1-5：暂停状态布尔标志（替代按钮文本判断）
 
         self._theme = self._config_mgr.get_theme()
@@ -117,6 +120,13 @@ class MainWindow(QMainWindow):
         self._refresh_template_list()
         self._video_preview.set_hw_accel(hw)
         self._restore_mode_params()
+        # 重建路由器（C5/C6 收编）：域变更 → 防抖 → 持久化 + 引擎重建。
+        # 接线在 restore 之后——启动期的域对象载入不触发重建
+        self._router = RebuildRouter(self)
+        self._registry.asr.changed.connect(lambda k: self._router.notify("asr", k))
+        self._registry.correction.changed.connect(lambda k: self._router.notify("correction", k))
+        self._registry.ocr_engines.changed.connect(lambda k: self._router.notify("ocr", k))
+        self._router.rebuild_requested.connect(self._on_engine_rebuild)
         self._configure_workflow()
         self.sync_quick_toggles()
         self._install_wheel_blocker()
@@ -171,53 +181,6 @@ class MainWindow(QMainWindow):
         blocker = WheelBlocker(self)
         app.installEventFilter(blocker)
         self._wheel_blocker = blocker
-
-    def _restart_ocr_engine(self):
-        """OCR 设置变更后重建引擎（后台线程）。
-
-        P0-T1：reload_config 现在会释放旧引擎（子进程 shutdown 最坏阻塞 5s），
-        必须搬离主线程避免卡 UI。
-        """
-        import threading
-
-        def _restart():
-            self._engine_mgr.reload_config()
-            logger.info("OCR 配置已重载，引擎将在下次处理时重建")
-
-        threading.Thread(target=_restart, daemon=True).start()
-
-    def _restart_asr_engine(self):
-        """ASR 设置变更后重建引擎实例（后台线程）。"""
-        import threading
-
-        def _restart():
-            if self._asr_mgr:
-                self._asr_mgr.reload_config()
-                asr = self._asr_mgr.get_engine()
-                if asr:
-                    logger.info("ASR 引擎已重建")
-
-        threading.Thread(target=_restart, daemon=True).start()
-
-    def _schedule_asr_restart(self):
-        """ASR 参数变更防抖（P1-4 修复）：打字期间每键重置 400ms，停顿后仅重建一次。
-
-        此前右侧面板区域名输入框每次击键都杀子进程 + 重启一轮（可能重载模型）。
-        """
-        if getattr(self, "_asr_restart_timer", None) is None:
-            from PySide6.QtCore import QTimer
-
-            self._asr_restart_timer = QTimer(self)
-            self._asr_restart_timer.setSingleShot(True)
-            self._asr_restart_timer.timeout.connect(self._do_asr_restart)
-        self._asr_restart_timer.start(400)
-
-    def _do_asr_restart(self):
-        """防抖到期：执行重建（保留 ASR 运行中保护）。"""
-        if self._workflow.is_asr_running():
-            self._asr_restart_pending = True  # 运行中 → 处理完成后补建
-        else:
-            self._restart_asr_engine()
 
     # ── 顶端快速开关工具栏 ──
 
@@ -470,8 +433,8 @@ class MainWindow(QMainWindow):
 
         root.addWidget(self._main_splitter, 1)
 
-        # ── ConfigPanel（纯状态管理类，无 UI）──
-        self._config_panel = ConfigPanel()
+        # ── ConfigPanel（纯状态管理类，无 UI；注入域注册中心做读透合并）──
+        self._config_panel = ConfigPanel(registry=self._registry)
         self._config_panel.prompt_changed.connect(self._on_prompt_changed)
         self._config_panel.mode_changed.connect(self._on_mode_changed)
         self._config_panel.template_saved.connect(self._on_config_template_saved)
@@ -517,17 +480,25 @@ class MainWindow(QMainWindow):
     # ── 参数设置对话框 ──
     def _open_settings(self, tab_index: int = -1):
         """打开参数设置对话框，合并处理参数 + 纠错 API 配置。"""
-        corr_cfg = load_correction_config()
-        corr_cfg.setdefault("enabled", self._corrector.enabled)
-        corr_cfg.setdefault("api_key", "")
-        corr_cfg.setdefault("base_url", "http://127.0.0.1:8080")
-        corr_cfg.setdefault("model", "")
-        corr_cfg.setdefault("timeout", 30)
-        corr_cfg.setdefault("retry_on_failure", 2)
-
+        # 外部修改检测（2.4）：会话内手改 config/*.json → 提示重载，避免 UI 覆盖
+        changed = self._registry.check_external_changes()
+        if changed:
+            names = "、".join(changed)
+            if self._message_service.question(
+                _("配置文件已被外部修改"),
+                _("文件 {names} 已在外部被修改。\n[是] 重新加载磁盘值并刷新界面\n[否] 忽略（继续使用当前值）").format(
+                    names=names
+                ),
+            ):
+                self._registry.reload_all()
+                self._config_mgr.reload()
+                self._refresh_engine_list()
+                self._refresh_template_list()
+                self.sync_quick_toggles()
+                self._message_service.info_toast(_("✅ 已重新加载配置"))
         dlg = SettingsDialog(
             self._config_panel,
-            correction_config=corr_cfg,
+            registry=self._registry,
             parent=self,
             filter_keywords=self._filter_mgr.get_keywords(),
             engine_manager=self._engine_mgr,
@@ -544,32 +515,48 @@ class MainWindow(QMainWindow):
             self._save_dialog_geometry(dlg, "settings_dialog_geometry")
             # 保存处理参数：_sync_values_to_cp → apply_mode_params 已 emit
             # mode_changed → _on_mode_changed（P8 冗余清理，此处不再补调）
-            # 保存纠错 API 配置
-            api_cfg = dlg.get_corr_api_config()
+            # 保存业务参数（方案 A）：asr/corr 字段直接写域对象（单次原子写盘）
+            dlg.commit_to_domains(self._registry)
+            # 重建纠错器（从域对象读最新配置，含 stream/json/translate 模式保持）
             preset_name = self._config_panel.corr_preset_name
-            self._corrector = AICorrector(api_cfg, engine_manager=self._engine_mgr, preset_name=preset_name)
+            self._corrector = AICorrector(
+                self._registry.correction.get_all(),
+                engine_manager=self._engine_mgr,
+                preset_name=preset_name,
+            )
             self._workflow._corrector = self._corrector  # 同步到工作流
-            corr_file_cfg = load_correction_config()
-            corr_file_cfg.update(api_cfg)
-            atomic_write_json(BASE_DIR / "config" / "ai_correction.json", corr_file_cfg)
-            # 保存引擎配置
+            # 保存引擎配置（域对象写盘）
             eng_name, eng_cfg = dlg.get_engine_config()
-            engs = self._engine_mgr._config.get("engines", {})
+            engs = self._registry.ocr_engines.get_all().get("engines", {})
             if eng_name in engs:
-                engs[eng_name].setdefault("config", {}).update(eng_cfg)
+                self._registry.ocr_engines.set_engine_config(eng_name, eng_cfg)
                 self._engine_mgr._engines.pop(eng_name, None)
                 # 设置同步 P4 修复：对话框切换引擎后同步会话内当前引擎与下次启动恢复值
                 self._current_engine = eng_name
                 self._engine_mgr.set_current_engine(eng_name)
                 self._config_mgr.set("last_engine", eng_name)
-            try:
-                atomic_write_json(BASE_DIR / "config" / "ocr_engines.json", self._engine_mgr._config)
-            except Exception as e:
-                logger.error("保存引擎配置失败: %s", e)
             self._sync_region_defaults()
             self._config_mgr.save_settings()
             self._status_label.setText(_("✅ 参数设置已更新"))
+            self._message_service.info_toast(_("✅ 参数已保存"))
             self.sync_quick_toggles()
+
+    def _on_reload_config(self):
+        """菜单「重新加载配置」：读盘 + 刷新 UI + 引擎句柄重建（2.4）。"""
+        self._registry.reload_all()
+        self._config_mgr.reload()
+        self._refresh_engine_list()
+        self._refresh_template_list()
+        self._restore_mode_params()
+        self.sync_quick_toggles()
+        self._message_service.info_toast(_("✅ 配置已重新加载"))
+
+    def _on_engine_rebuild(self, targets: str):
+        """引擎重建反馈（2.11：toast 告知重建代价已执行）。"""
+        if "asr" in targets:
+            self._message_service.info_toast(_("🔁 ASR 引擎已重新加载"))
+        if "ocr" in targets:
+            self._message_service.info_toast(_("🔁 OCR 引擎已重新加载"))
 
     def _open_display_settings(self):
         """打开显示设置对话框。"""
@@ -709,29 +696,23 @@ class MainWindow(QMainWindow):
         self._config_mgr.save_settings()
 
     def _restore_mode_params(self):
-        """从 settings.json + 业务配置文件恢复参数（R12 方向 A）。
+        """从 settings.json + 域对象文件恢复参数（v2 方案 A）。
 
-        asr_*/corr_* 业务参数以 asr_engines.json / ai_correction.json 为
-        事实源（settings.json 不再持久化，消除双写）；corr_preset 等 UI
-        状态键仍从 settings.json 恢复。
+        asr_*/corr_* 业务参数以域对象为事实源（读透合并返回完整键集）；
+        corr_preset 等 UI 状态键仍从 settings.json 恢复。
         """
         saved = self._config_mgr.get("mode_params", {})
-        business = self._restore_business_params(saved)
-        # saved 中业务参数以文件为准（过滤存量 asr_*/corr_* 键，仅保留 UI 状态键）
-        ui_saved = {
-            k: v
-            for k, v in saved.items()
-            if k == "corr_preset" or not (k.startswith("asr_") or k.startswith("corr_"))
-        }
+        # 读透合并（D2 修复：saved 用户白名单值最后覆盖——merged 含域默认值，
+        # 若先 update saved 会被 merged 全量覆盖回默认，恢复失效）
+        merged = self._config_panel.get_mode_params()
         base = dict(MODE_PARAMS_DEFAULTS)
-        base.update(business)
-        base.update(ui_saved)
-        # 比较基准 = 最终全量（含文件反同步值），apply 时 diff 为零，
-        # 不会误触发 ASR 引擎重建
+        base.update(merged)
+        base.update({k: v for k, v in saved.items() if k in UiStateConfig.UI_STATE_MODE_KEYS})
+        # 比较基准 = 最终全量，apply 时 diff 为零，不会误触发 ASR 引擎重建
         self._last_mode_params = dict(base)
-        if saved or business:
-            # 恢复自定义提示词（文件值优先，回退 saved）
-            self._custom_prompt = business.get("corr_prompt") or saved.get("corr_prompt", "")
+        if saved or merged:
+            # 恢复自定义提示词（域文件值优先，回退 saved）
+            self._custom_prompt = merged.get("corr_prompt") or saved.get("corr_prompt", "")
             # 回填所有 UI 控件
             self._config_panel.apply_mode_params(base)
             # 显式应用 API 预设（幂等，apply_preset 可安全重复调用）
@@ -745,65 +726,6 @@ class MainWindow(QMainWindow):
             self._restore_right_panel_params(saved)
         # 同步区域默认值（引擎/模板/提示词），确保新创建的区域使用当前提示词
         self._sync_region_defaults()
-
-    def _restore_business_params(self, saved: dict) -> dict:
-        """R12 方向 A：从 asr_engines.json / ai_correction.json 反同步业务参数。
-
-        返回文件值映射到 mode_params 键的字典（缺键时回退默认值）。
-        """
-        params: dict = {}
-        try:
-            from core.asr_engine import load_asr_config
-
-            acfg = load_asr_config()
-            ms = acfg.get("model_size", "")
-            md = acfg.get("model_dir", "")
-            # asr_model_path 是 UI 选择状态：saved 有值优先（上次选择），
-            # 否则从 model_dir/model_size 派生（本地模型目录存在时拼绝对路径）
-            saved_path = saved.get("asr_model_path")
-            if saved_path:
-                params["asr_model_path"] = saved_path
-            elif ms:
-                md_abs = md if os.path.isabs(md) else os.path.join(str(BASE_DIR), md)
-                local_dir = os.path.join(md_abs, ms) if md_abs else ""
-                params["asr_model_path"] = local_dir if os.path.isdir(local_dir) else ms
-            params["asr_model_size"] = ms or ""
-            params["asr_model_dir"] = md or "models/asr"
-            params["asr_language"] = acfg.get("language", "zh")
-            params["asr_vad"] = bool(acfg.get("vad_enabled", False))
-            params["asr_vad_min_silence"] = acfg.get("vad_min_silence_ms", 500)
-            params["asr_vad_threshold"] = acfg.get("vad_threshold", 0.5)
-            params["asr_word_ts"] = bool(acfg.get("word_timestamps", True))
-            params["asr_region_name"] = acfg.get("asr_region_name", "语音")
-            params["asr_beam_size"] = acfg.get("beam_size", 5)
-            params["asr_initial_prompt"] = acfg.get("initial_prompt", "")
-            params["asr_condition_prev"] = bool(acfg.get("condition_on_previous_text", True))
-            params["asr_no_speech_thresh"] = acfg.get("no_speech_threshold", 0.6)
-            params["asr_comp_ratio_thresh"] = acfg.get("compression_ratio_threshold", 2.4)
-            params["asr_temperature"] = acfg.get("temperature", "0.0,0.2,0.4,0.6,0.8,1.0")
-            params["asr_hotwords"] = acfg.get("hotwords", "")
-        except Exception as e:
-            logger.warning("ASR 配置反同步失败: %s", e)
-        try:
-            from core.ai_correction import load_correction_config
-
-            ccfg = load_correction_config()
-            params["corr_enabled"] = bool(ccfg.get("enabled", False))
-            params["corr_batch_size"] = ccfg.get("batch_size", 5)
-            params["corr_retry"] = ccfg.get("retry_on_failure", 2)
-            params["corr_prompt"] = ccfg.get("correction_prompt", "")
-            params["corr_summary_prompt"] = ccfg.get("summary_prompt", "")
-            params["corr_system_prompt"] = ccfg.get("correction_system_prompt", "")
-            params["corr_output_format"] = ccfg.get("output_format", "")
-            params["corr_stream"] = bool(ccfg.get("stream_mode", False))
-            params["corr_json"] = bool(ccfg.get("json_mode", False))
-            params["corr_polish"] = bool(ccfg.get("enable_polish", False))
-            params["corr_translate"] = bool(ccfg.get("translate_mode", False))
-            params["seg_time_gap"] = ccfg.get("seg_time_gap", 3.0)
-            params["corr_extract_env"] = bool(ccfg.get("extract_environment", False))
-        except Exception as e:
-            logger.warning("纠错配置反同步失败: %s", e)
-        return params
 
     def _schedule_mode_save(self):
         """延迟合并保存，避免频繁切换预设时连续写盘卡 UI。"""
@@ -820,29 +742,17 @@ class MainWindow(QMainWindow):
     def _save_mode_params(self):
         """保存当前 UI 配置参数。
 
-        R12 方向 A：settings.json 只持久化 UI 状态键（非 asr_*/corr_*，
-        除 corr_preset）；业务参数（asr_*/corr_*）由专用文件承载——
-        同步函数使用全量参数，写盘使用过滤后子集，消除双写。
+        v2（方案 A）：settings.json 只持久化 UI 状态白名单键
+        （UiStateConfig.UI_STATE_MODE_KEYS，corr_summary_prompt 运行时通道除外）；
+        业务参数（asr_*/corr_*）由 RebuildRouter 在域变更防抖后统一写盘。
         """
         try:
             full = self._config_panel.get_mode_params()
-            # 业务参数同步（差异触发，使用全量）
-            if getattr(self, "_asr_params_changed", False):
-                self._sync_asr_config(full)
-                self._asr_params_changed = False
-            if getattr(self, "_corr_params_changed", False):
-                self._sync_correction_config(full)
-                self._corr_params_changed = False
-            # settings.json 仅保存 UI 状态键：
-            #   - defaults 之外的垃圾键（历史残留）不写
-            #   - corr_summary_prompt 运行时通道不持久化
-            #   - asr_*/corr_* 业务键不写（文件为事实源），corr_preset 是 UI 状态例外
+            # 显式白名单过滤（替代 startswith 前缀 + 例外键判断）
+            from core.settings import UiStateConfig
+
             params = {
-                k: v
-                for k, v in full.items()
-                if k in MODE_PARAMS_DEFAULTS
-                and k != "corr_summary_prompt"
-                and (k == "corr_preset" or not (k.startswith("asr_") or k.startswith("corr_")))
+                k: v for k, v in full.items() if k in UiStateConfig.UI_STATE_MODE_KEYS and k != "corr_summary_prompt"
             }
             self._config_mgr.set("mode_params", params)
         except Exception as e:
@@ -1227,139 +1137,13 @@ class MainWindow(QMainWindow):
             self._corrector.stream_mode = p["corr_stream"]
         if "corr_json" in p:
             self._corrector.json_mode = p["corr_json"]
-        # R11 修复：ASR 参数变更判定改为键集合归一化——
-        # 此前两字典直接比较，键集合不同即恒不相等（saved 缺新增 asr 键、
-        # 部分字典调用等场景）→ 启动即重建 ASR 引擎（加载模型/启动子进程）。
-        # 两侧都用默认值补全：p 缺键按默认值比较（幂等），多余键不影响。
-        old_full = dict(MODE_PARAMS_DEFAULTS)
-        old_full.update(old_params)
-        p_full = dict(MODE_PARAMS_DEFAULTS)
-        p_full.update(p)
-        asr_keys = {k for k in p_full if k.startswith("asr_")} | {
-            k for k in old_full if k.startswith("asr_")
-        }
-        self._asr_params_changed = any(p_full.get(k) != old_full.get(k) for k in asr_keys)
-        # R11：corr_* 差异标记（_save_mode_params 据此决定是否重写 ai_correction.json；
-        # 同样按默认值归一化，垃圾 corr 键不影响判定）
-        self._corr_params_changed = any(
-            p_full.get(k) != old_full.get(k) for k in p_full if k.startswith("corr_")
-        )
-        # OCR 版本变更 → 重建 OCR 引擎
+        # OCR 版本变更（UI 白名单键）→ 路由到重建（批次 3：业务键差异
+        # 由域对象 changed → RebuildRouter 接管，此处仅剩 UI 键路由）
         if p.get("s_ocr_version") != old_params.get("s_ocr_version"):
-            self._restart_ocr_engine()
-        # ASR 参数变更 → 防抖后重建（P1-4：逐键输入合并为一次重建；
-        # R5 运行中保护在 _do_asr_restart 内保留，避免杀掉正在识别的子进程）
-        if self._asr_params_changed:
-            self._schedule_asr_restart()
+            self._router.notify_ui_key("s_ocr_version")
         self._last_mode_params = dict(p)
-        # 延迟写盘合并多次连续变更
+        # 延迟写盘合并多次连续变更（UI 状态白名单）
         self._schedule_mode_save()
-
-    def _sync_asr_config(self, params: dict):
-        """将 UI 中的 ASR 参数同步写入 asr_engines.json。"""
-        config_path = BASE_DIR / "config" / "asr_engines.json"
-        cfg = self._asr_mgr._config
-        # asr_model_path 可能是完整本地路径或标准模型名称（如 large-v3）
-        model_path = params.get("asr_model_path", "")
-        if model_path:
-            if os.path.isabs(model_path) or os.sep in model_path:
-                # 本地模型完整路径 → 提取目录名作为 model_size，父目录作为 model_dir
-                cfg["model_size"] = os.path.basename(model_path)
-                parent = os.path.dirname(model_path)
-                if parent:
-                    cfg["model_dir"] = parent
-            else:
-                # 标准模型名称（如 large-v3）→ 直接作为 model_size
-                cfg["model_size"] = model_path
-        else:
-            cfg["model_size"] = params.get("asr_model_size", cfg.get("model_size", "large-v3"))
-        cfg["language"] = params.get("asr_language", cfg.get("language", "zh"))
-        cfg["vad_enabled"] = params.get("asr_vad", cfg.get("vad_enabled", False))
-        cfg["vad_min_silence_ms"] = params.get("asr_vad_min_silence", cfg.get("vad_min_silence_ms", 500))
-        cfg["vad_threshold"] = params.get("asr_vad_threshold", cfg.get("vad_threshold", 0.5))
-        cfg["word_timestamps"] = params.get("asr_word_ts", cfg.get("word_timestamps", True))
-        cfg["asr_region_name"] = params.get("asr_region_name", cfg.get("asr_region_name", "语音"))
-        cfg["model_dir"] = params.get("asr_model_dir", cfg.get("model_dir", ""))
-        cfg["beam_size"] = params.get("asr_beam_size", cfg.get("beam_size", 5))
-        cfg["initial_prompt"] = params.get("asr_initial_prompt", cfg.get("initial_prompt", ""))
-        cfg["condition_on_previous_text"] = params.get(
-            "asr_condition_prev", cfg.get("condition_on_previous_text", True)
-        )
-        cfg["no_speech_threshold"] = params.get("asr_no_speech_thresh", cfg.get("no_speech_threshold", 0.6))
-        cfg["compression_ratio_threshold"] = params.get(
-            "asr_comp_ratio_thresh", cfg.get("compression_ratio_threshold", 2.4)
-        )
-        cfg["temperature"] = params.get("asr_temperature", cfg.get("temperature", "0.0,0.2,0.4,0.6,0.8,1.0"))
-        cfg["hotwords"] = params.get("asr_hotwords", cfg.get("hotwords", ""))
-        # 1. 先写文件（主线程，快）
-        try:
-            atomic_write_json(config_path, cfg)
-        except Exception as e:
-            logger.warning("保存 ASR 配置失败: %s", e)
-        # 2. reload + 同步引擎参数放后台线程（避免子进程启停阻塞 UI）
-        cfg_copy = dict(cfg)
-        asr_mgr = self._asr_mgr
-
-        def _apply_asr():
-            asr_mgr.reload_config()
-            eng = asr_mgr.get_engine()
-            if eng and hasattr(eng, "sync_params_from_config"):
-                eng.sync_params_from_config(cfg_copy)
-
-        import threading
-
-        threading.Thread(target=_apply_asr, daemon=True).start()
-
-    def _sync_correction_config(self, params: dict):
-        """将 UI 中的纠错参数同步写入 ai_correction.json。"""
-        config_path = BASE_DIR / "config" / "ai_correction.json"
-        try:
-            # P2-6：统一注释支持解析器（裸 json.load 失败后 cfg={} 会被原子写清空 API 键）
-            cfg = load_json_with_comments(config_path)
-        except Exception as e:
-            logger.warning("读取纠错配置失败: %s", e)
-            cfg = {}
-        if not isinstance(cfg, dict):
-            cfg = {}
-        if "corr_enabled" in params:
-            cfg["enabled"] = params["corr_enabled"]
-        if "corr_batch_size" in params:
-            cfg["batch_size"] = params["corr_batch_size"]
-        # R12（P1-⑥）：重试键名统一——AICorrector 读 retry_on_failure，
-        # 文件里的 retry 是死键；corr_retry 是唯一 UI 入口
-        if "corr_retry" in params:
-            cfg["retry_on_failure"] = params["corr_retry"]
-        # R12：corr_prompt 空值不覆盖文件默认提示词（truthy 判断）
-        if params.get("corr_prompt"):
-            cfg["correction_prompt"] = params["corr_prompt"]
-        if params.get("corr_summary_prompt"):
-            cfg["summary_prompt"] = params["corr_summary_prompt"]
-        if params.get("corr_system_prompt"):
-            cfg["correction_system_prompt"] = params["corr_system_prompt"]
-        if params.get("corr_output_format"):
-            cfg["output_format"] = params["corr_output_format"]
-        if "corr_stream" in params:
-            cfg["stream_mode"] = params["corr_stream"]
-        if "corr_json" in params:
-            cfg["json_mode"] = params["corr_json"]
-        if "corr_polish" in params:
-            cfg["enable_polish"] = params["corr_polish"]
-        # R12（P1-⑦）：corr_extract_env 同步到文件键 extract_environment——
-        # 此前文件键无任何写入口，AICorrector._extract_env 恒 False
-        if "corr_extract_env" in params:
-            cfg["extract_environment"] = params["corr_extract_env"]
-        # R12（P1-⑤）：seg_time_gap 写入链路补齐——此前只写 mode_params
-        # 不写文件，AICorrector 读文件导致"上下文时间间隔"改设置无效
-        if "seg_time_gap" in params:
-            cfg["seg_time_gap"] = params["seg_time_gap"]
-        # R11：翻译模式持久化——此前无此分支，AICorrector 重建后 translate 恒 False
-        if "corr_translate" in params:
-            cfg["translate_mode"] = params["corr_translate"]
-        try:
-            atomic_write_json(config_path, cfg)
-        except Exception as e:
-            logger.warning("保存纠错配置失败: %s", e)
-        self._corrector.reload_config()
 
     # ── 模板 ──
     def _on_template_edit(self):
@@ -1546,12 +1330,10 @@ class MainWindow(QMainWindow):
     def _on_workflow_process_finished(self):
         """处理会话完成（process_finished 信号，同步 DirectConnection）。
 
-        设置同步 R5 修复：ASR 运行中改设置时引擎重建被延迟（_asr_restart_pending），
-        在此补建；随后执行原有的 end_sec 回填。
+        设置同步 R5 修复：ASR 运行中改设置时引擎重建被延迟
+        （RebuildRouter._asr_pending），在此补建；随后执行原有的 end_sec 回填。
         """
-        if getattr(self, "_asr_restart_pending", False):
-            self._asr_restart_pending = False
-            self._restart_asr_engine()
+        self._router.on_process_finished()
         self._recalculate_end_seconds()
 
     def _on_correction_selected(self):
@@ -1702,7 +1484,9 @@ class MainWindow(QMainWindow):
                 "双语对照（原文+纠正）": "dual",
                 "原文 换行 纠正": "dual",
             }
-            srt_mode = srt_mode_map.get(self._config_panel.get_mode_params().get("srt_export_mode", "仅纠正结果"), "corrected")
+            srt_mode = srt_mode_map.get(
+                self._config_panel.get_mode_params().get("srt_export_mode", "仅纠正结果"), "corrected"
+            )
             export_results(
                 polished,
                 path,

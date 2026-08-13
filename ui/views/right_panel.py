@@ -125,22 +125,30 @@ class RightPanelView(_ViewBase):
         self._engine_combo_r.blockSignals(False)
 
     def _on_engine_r_changed(self, name: str):
-        """右侧引擎切换 → 更新当前引擎并后台重建（R12 P0-③）。"""
+        """右侧引擎切换 → 更新当前引擎并路由重建（R12 P0-③；v3 收编 RebuildRouter）。"""
         if not name or name == self._current_engine:
             return
         self._current_engine = name
         self._engine_mgr.set_current_engine(name)
         self._config_mgr.set("last_engine", name)
-        self._restart_ocr_engine()
+        self._router.notify("ocr", "engine")
         self._sync_region_defaults()
 
     def _on_asr_r_changed(self):
-        """右侧 ASR 控件变更 → 同步到 ConfigPanel。"""
+        """右侧 ASR 控件变更 → 同步到 ConfigPanel。
+
+        模型切换走域对象 apply_model_selection + 路由重建（asr_model_path 是
+        UI 状态键，不经域对象 changed，需显式通知）；语言/区域名经域对象
+        setter 触发 changed → router 路由。
+        """
         cp = self._config_panel
         # 同步模型选择
         model_data = self._asr_model_combo_r.currentData()
-        if model_data:
+        if model_data and model_data != cp.asr_model:
             cp.asr_model = model_data
+            # 推导域对象 model_size/model_dir 并路由 ASR 重建（防抖合并）
+            self._registry.asr.apply_model_selection(model_data)
+            self._router.notify("asr", "model_size")
         # 同步语言和区域名
         cp.asr_language = self._asr_lang_combo_r.currentText()
         cp.asr_region_name = self._asr_region_edit_r.text()

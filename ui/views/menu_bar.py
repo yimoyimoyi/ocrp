@@ -32,6 +32,11 @@ class MenuBarView(_ViewBase):
             action.triggered.connect(lambda checked, idx=tab_idx: self._open_settings(idx))
             self._settings_menu.addAction(action)
             self._settings_menu_actions.append(action)
+        # 重新加载配置（2.4：外部手改 JSON 后读盘刷新，避免 UI 覆盖丢失）
+        self._settings_menu.addSeparator()
+        self._reload_config_action = QAction(_("🔄 重新加载配置..."), self._mgr)
+        self._reload_config_action.triggered.connect(self._on_reload_config)
+        self._settings_menu.addAction(self._reload_config_action)
 
         # ── 显示菜单 ──
         self._display_menu = mb.addMenu(_("显示(&V)"))
