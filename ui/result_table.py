@@ -12,7 +12,7 @@
 import bisect
 
 from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtGui import QColor, QFont, QPainter, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPushButton,
     QStyledItemDelegate,
     QTableView,
     QTextEdit,
@@ -53,6 +52,7 @@ _CELL_STYLE = (
 # 搜索高亮颜色
 _MATCH_BG = QColor(45, 160, 60, 60)
 _CUR_BG = QColor(50, 200, 70, 100)
+_PLAYING_BG = QColor(66, 165, 245, 50)
 
 
 def _get_cell_font():
@@ -75,7 +75,19 @@ COL_CORRECTED = 6
 COL_CONFIDENCE = 7
 COL_FILTER = 8
 EDITABLE_COLS = (COL_RAW, COL_SEGMENTED, COL_CORRECTED)
-COL_WIDTHS = [32, 65, 65, 65, 200, 200, 200, 55, 40]
+COL_WIDTHS = [28, 75, 75, 75, 220, 220, 220, 60, 36]
+
+COL_HEADERS = [
+    "",
+    _("时间"),
+    _("区域"),
+    _("引擎"),
+    _("原始识别"),
+    _("纠错结果"),
+    _("润色结果"),
+    _("置信度"),
+    _("操作"),
+]
 
 
 class _ResultsModel(QAbstractTableModel):
@@ -87,6 +99,7 @@ class _ResultsModel(QAbstractTableModel):
         self._checked_rows: set[int] = set()
         self._match_rows: set[int] = set()
         self._current_row: int = -1
+        self._playing_row: int = -1
 
     # ── 基础 ──
     def rowCount(self, parent=None) -> int:
@@ -96,6 +109,15 @@ class _ResultsModel(QAbstractTableModel):
     def columnCount(self, parent=None) -> int:
         parent = parent or QModelIndex()
         return 0 if parent.isValid() else COL_COUNT
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Horizontal:
+            if int(role) == int(Qt.ItemDataRole.DisplayRole):
+                if 0 <= section < len(COL_HEADERS):
+                    return COL_HEADERS[section]
+            if int(role) == int(Qt.ItemDataRole.TextAlignmentRole):
+                return int(Qt.AlignCenter)
+        return super().headerData(section, orientation, role)
 
     def removeRows(self, row: int, count: int, parent=None) -> bool:
         """防御性实现（P0-T6 修复）：外部调用 removeRow 不再静默空操作。
@@ -157,6 +179,8 @@ class _ResultsModel(QAbstractTableModel):
             COL_CORRECTED,
             COL_CONFIDENCE,
         ):
+            if index.row() == self._playing_row:
+                return _PLAYING_BG
             if index.row() == self._current_row:
                 return _CUR_BG
             if index.row() in self._match_rows:
@@ -243,6 +267,25 @@ class _ResultsModel(QAbstractTableModel):
     def clear_checked(self):
         self._checked_rows.clear()
 
+    def set_playing_row(self, row: int):
+        """设置当前播放行高亮。"""
+        if self._playing_row == row:
+            return
+        old_row = self._playing_row
+        self._playing_row = row
+        if 0 <= old_row < len(self._results):
+            self.dataChanged.emit(
+                self.index(old_row, 0),
+                self.index(old_row, COL_COUNT - 1),
+                [Qt.ItemDataRole.BackgroundRole],
+            )
+        if 0 <= row < len(self._results):
+            self.dataChanged.emit(
+                self.index(row, 0),
+                self.index(row, COL_COUNT - 1),
+                [Qt.ItemDataRole.BackgroundRole],
+            )
+
 
 class _CellDelegate(QStyledItemDelegate):
     """内联编辑委托 —— 透明无边框编辑器，编辑前后视觉一致。
@@ -288,6 +331,75 @@ class _CellDelegate(QStyledItemDelegate):
         else:
             text = editor.text()
         model.setData(index, text, Qt.ItemDataRole.EditRole)
+
+
+class _ActionCellDelegate(QStyledItemDelegate):
+    """过滤按钮列委托 —— 使用 QPainter 绘制操作按钮，杜绝 setIndexWidget 违背虚拟化导致万行卡顿。"""
+
+    def __init__(self, table_widget: "ResultTableWidget", parent=None):
+        super().__init__(parent)
+        self._table_widget = table_widget
+        self._hover_row = -1
+
+    def paint(self, painter, option, index: QModelIndex):
+        rect = option.rect
+        btn_w, btn_h = 24, 20
+        btn_rect = rect.adjusted(
+            (rect.width() - btn_w) // 2,
+            (rect.height() - btn_h) // 2,
+            -(rect.width() - btn_w) // 2,
+            -(rect.height() - btn_h) // 2,
+        )
+
+        painter.save()
+        painter.setRenderHint(painter.RenderHint.Antialiasing)
+
+        is_hover = index.row() == self._hover_row
+        if is_hover:
+            bg_color = QColor(66, 165, 245, 60)
+            border_color = QColor(66, 165, 245, 180)
+            text_color = QColor(66, 165, 245)
+        else:
+            bg_color = QColor(128, 128, 128, 35)
+            border_color = QColor(128, 128, 128, 70)
+            text_color = option.palette.color(QPalette.ColorRole.Text)
+
+        painter.setPen(border_color)
+        painter.setBrush(bg_color)
+        painter.drawRoundedRect(btn_rect, 4, 4)
+
+        painter.setPen(text_color)
+        font = _get_cell_font()
+        font.setPointSize(11)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(btn_rect, int(Qt.AlignCenter), "+")
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index: QModelIndex) -> bool:
+        if not index.isValid():
+            return False
+        if event.type() == QEvent.Type.MouseButtonRelease:
+            if event.button() == Qt.LeftButton:
+                self._table_widget._on_filter_row(index.row())
+                return True
+        return super().editorEvent(event, model, option, index)
+
+
+class _ResultsTableView(QTableView):
+    """带空状态友好提示的结果表格视图。"""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        model = self.model()
+        if model is not None and model.rowCount() == 0:
+            painter = QPainter(self.viewport())
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setFont(QFont("Microsoft YaHei", 10))
+            painter.setPen(QColor(130, 140, 155, 160))
+            rect = self.viewport().rect()
+            text = _("📋 暂无识别结果\n\n拖入音视频文件后，点击下方「开始」或按 Space 播放以提取字幕")
+            painter.drawText(rect, int(Qt.AlignCenter), text)
 
 
 class ResultTableWidget(QWidget):
@@ -455,19 +567,27 @@ class ResultTableWidget(QWidget):
         layout.addWidget(_sep2)
 
         # 表格（QTableView）
-        self._table = QTableView()
+        self._table = _ResultsTableView()
         self._table.setModel(self._model)
         self._table.setItemDelegate(_CellDelegate(self._table))
+        self._table.setItemDelegateForColumn(COL_FILTER, _ActionCellDelegate(self, self._table))
         self._table.setShowGrid(False)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setStretchLastSection(False)
-        for i in range(COL_COUNT):
+        for i, w in enumerate(COL_WIDTHS):
+            self._table.setColumnWidth(i, w)
             self._table.horizontalHeader().setSectionResizeMode(i, QHeaderView.Interactive)
-        # 第0列（复选框）固定宽度
-        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        self._table.setColumnWidth(0, 28)
+        # 固定列
+        self._table.horizontalHeader().setSectionResizeMode(COL_CHECKBOX, QHeaderView.Fixed)
+        self._table.setColumnWidth(COL_CHECKBOX, COL_WIDTHS[COL_CHECKBOX])
+        self._table.horizontalHeader().setSectionResizeMode(COL_FILTER, QHeaderView.Fixed)
+        self._table.setColumnWidth(COL_FILTER, COL_WIDTHS[COL_FILTER])
+        # 文本列随视口自适应拉伸
+        self._table.horizontalHeader().setSectionResizeMode(COL_RAW, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(COL_SEGMENTED, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(COL_CORRECTED, QHeaderView.Stretch)
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(36)
         self._table.verticalHeader().setMinimumSectionSize(30)
@@ -482,16 +602,41 @@ class ResultTableWidget(QWidget):
         self._model.dataChanged.connect(self._on_model_data_changed)
         layout.addWidget(self._table)
 
-        # ── 选中行计数栏 ──
-        selection_bar = QFrame()
-        selection_bar.setObjectName("selectionBar")
-        sbl = QHBoxLayout(selection_bar)
-        sbl.setContentsMargins(4, 2, 4, 2)
-        sbl.setSpacing(8)
-        self._selection_label = QLabel(_("未选中任何行"))
+        # ── 选中行计数与批量操作栏 ──
+        self._selection_bar = QFrame()
+        self._selection_bar.setObjectName("selectionBar")
+        sbl = QHBoxLayout(self._selection_bar)
+        sbl.setContentsMargins(6, 3, 6, 3)
+        sbl.setSpacing(6)
+        self._selection_label = QLabel(_("共 0 行，未选中任何行"))
         self._selection_label.setStyleSheet("color: #78909c; font-size: 12px;")
-        sbl.addWidget(self._selection_label, 1)
-        layout.addWidget(selection_bar)
+        sbl.addWidget(self._selection_label)
+
+        # 批量操作按钮组
+        self._btn_batch_delete = QToolButton()
+        self._btn_batch_delete.setText(_("🗑 批量删除"))
+        self._btn_batch_delete.setToolTip(_("批量删除当前勾选的字幕行"))
+        self._btn_batch_delete.setAutoRaise(True)
+        self._btn_batch_delete.clicked.connect(self._on_batch_delete_checked)
+        self._btn_batch_delete.setEnabled(False)
+        sbl.addWidget(self._btn_batch_delete)
+
+        self._btn_batch_invert = QToolButton()
+        self._btn_batch_invert.setText(_("🔀 反选"))
+        self._btn_batch_invert.setToolTip(_("反转当前行的勾选状态"))
+        self._btn_batch_invert.setAutoRaise(True)
+        self._btn_batch_invert.clicked.connect(self._on_invert_checked)
+        sbl.addWidget(self._btn_batch_invert)
+
+        self._btn_batch_clear = QToolButton()
+        self._btn_batch_clear.setText(_("取消勾选"))
+        self._btn_batch_clear.setAutoRaise(True)
+        self._btn_batch_clear.clicked.connect(lambda: self.select_all(False))
+        self._btn_batch_clear.setEnabled(False)
+        sbl.addWidget(self._btn_batch_clear)
+
+        sbl.addStretch()
+        layout.addWidget(self._selection_bar)
 
         self._table.selectionModel().selectionChanged.connect(self._on_selection_changed)
 
@@ -505,14 +650,40 @@ class ResultTableWidget(QWidget):
             self.cell_edit_activated.emit(top_left.row())
 
     def _on_selection_changed(self):
-        """选中行变化时更新计数栏。"""
+        """选中行变化时更新计数栏与批量按钮状态。"""
         count = len(self._model._checked_rows)
+        total = len(self._results)
         if count == 0:
-            self._selection_label.setText(_("未选中任何行"))
+            self._selection_label.setText(f"共 {total} 行，未选中任何行")
             self._selection_label.setStyleSheet("color: #78909c; font-size: 12px;")
+            self._btn_batch_delete.setEnabled(False)
+            self._btn_batch_clear.setEnabled(False)
         else:
-            self._selection_label.setText(f"已选中 {count} 行")
+            self._selection_label.setText(f"已选中 {count} / {total} 行")
             self._selection_label.setStyleSheet("color: #42a5f5; font-size: 12px; font-weight: bold;")
+            self._btn_batch_delete.setEnabled(True)
+            self._btn_batch_clear.setEnabled(True)
+
+    def _on_batch_delete_checked(self):
+        """批量删除所有勾选行。"""
+        checked = set(self._model._checked_rows)
+        if not checked:
+            return
+        # 按索引收集保留行并重建
+        kept = [r for i, r in enumerate(self._results) if i not in checked]
+        self._rebuild_table_rows(kept)
+        self._on_selection_changed()
+
+    def _on_invert_checked(self):
+        """反转勾选状态。"""
+        all_rows = set(range(len(self._results)))
+        self._model._checked_rows = all_rows - self._model._checked_rows
+        if self._results:
+            self._model.dataChanged.emit(
+                self._model.index(0, COL_CHECKBOX),
+                self._model.index(len(self._results) - 1, COL_CHECKBOX),
+            )
+        self._on_selection_changed()
 
     def get_selected_rows(self) -> set[int]:
         """返回当前选中的行号集合。"""
@@ -527,26 +698,34 @@ class ResultTableWidget(QWidget):
         self._model.set_all_checked(checked)
         self._on_selection_changed()
 
-    # ── 公共方法 ──
+    def _refresh_filter_buttons(self):
+        """兼容保留方法（已改用 _ActionCellDelegate 虚拟渲染）。"""
+        pass
 
-    def _make_filter_btn(self, row: int) -> QWidget:
-        """创建居中对齐的过滤按钮容器。"""
-        btn = QPushButton("+")
-        btn.setToolTip(_("将此条内容加入过滤器"))
-        btn.setFixedSize(28, 22)
-        btn.setStyleSheet("QPushButton { font-size: 11px; padding: 0; margin: 0; }")
-        btn.clicked.connect(lambda checked, r=row: self._on_filter_row(r))
-        wrapper = QWidget()
-        wrapper.setAutoFillBackground(True)
-        lo = QHBoxLayout(wrapper)
-        lo.setContentsMargins(0, 0, 0, 0)
-        lo.setAlignment(Qt.AlignCenter)
-        lo.addWidget(btn)
-        return wrapper
+    def sync_play_position(self, timestamp: float, auto_scroll: bool = True) -> str:
+        """根据播放时间戳高亮当前正在播放的字幕行，并平滑居中滚动。返回当前字幕文本。"""
+        if not self._results:
+            self._model.set_playing_row(-1)
+            return ""
 
-    def _set_filter_button(self, row: int):
-        """为指定行设置过滤按钮（col 8）。"""
-        self._table.setIndexWidget(self._model.index(row, COL_FILTER), self._make_filter_btn(row))
+        active_idx = -1
+        for i, r in enumerate(self._results):
+            start = r.get("time_sec", 0.0) or 0.0
+            end = r.get("end_sec", 0.0) or 0.0
+            if end <= start:
+                end = start + 2.0
+            if start <= timestamp <= end:
+                active_idx = i
+                break
+
+        self._model.set_playing_row(active_idx)
+        if active_idx >= 0:
+            if auto_scroll:
+                idx = self._model.index(active_idx, COL_RAW)
+                self._table.scrollTo(idx, QAbstractItemView.ScrollHint.PositionAtCenter)
+            r = self._results[active_idx]
+            return r.get("corrected") or r.get("segmented") or r.get("raw", "")
+        return ""
 
     def add_result(
         self,
@@ -589,9 +768,6 @@ class ResultTableWidget(QWidget):
             self._model.beginInsertRows(QModelIndex(), row, row)
             self._results.append(result_item)
             self._model.endInsertRows()
-
-        # 过滤按钮列（col 8）
-        self._set_filter_button(row)
 
         self._update_count()
         # 惰性滚动到底：QTableView scrollToBottom 为 O(n)，流式逐条添加时合并为一次
@@ -639,11 +815,6 @@ class ResultTableWidget(QWidget):
         self._model.endResetModel()
         self._refresh_filter_buttons()
         self._update_count()
-
-    def _refresh_filter_buttons(self):
-        """重建全部过滤按钮（行索引变化后）。"""
-        for row in range(len(self._results)):
-            self._set_filter_button(row)
 
     def _rebuild_table_rows(self, new_results: list):
         self._model.beginResetModel()
@@ -775,8 +946,8 @@ class ResultTableWidget(QWidget):
             self.filter_requested.emit(self._results[row]["raw"])
 
     def _on_cell_clicked(self, index: QModelIndex):
-        # P1-3：仅可编辑列点击触发跳转（复选框列/过滤按钮列不再误跳）
-        if index.column() in EDITABLE_COLS:
+        # 点击时间戳列或可编辑列触发跳转（复选框列/过滤按钮列不再误跳）
+        if index.column() == COL_TIME or index.column() in EDITABLE_COLS:
             self.cell_edit_activated.emit(index.row())
 
     def _on_cell_double_clicked(self, index: QModelIndex):
@@ -906,27 +1077,42 @@ class ResultTableWidget(QWidget):
         self._search_count_label.setText(f"{self._search_current_idx + 1}/{len(self._search_matches)}")
 
     def _on_replace_current(self):
-        if not self._search_matches:
+        if not self._search_matches or not (0 <= self._search_current_idx < len(self._search_matches)):
             return
         row = self._search_matches[self._search_current_idx]
-        text = self._replace_edit.text()
+        old = self._search_edit.text()
+        new = self._replace_edit.text()
+        if not old:
+            return
         r = self._results[row]
-        r["raw"] = r.get("raw", "").replace(self._search_edit.text(), text, 1)
-        self._model.notify_row(row, COL_RAW)
+        changed_cols = []
+        for col_idx, key in [(COL_RAW, "raw"), (COL_SEGMENTED, "segmented"), (COL_CORRECTED, "corrected")]:
+            val = r.get(key, "")
+            if old in val:
+                r[key] = val.replace(old, new, 1)
+                changed_cols.append(col_idx)
+        for col_idx in changed_cols:
+            self._model.notify_row(row, col_idx)
         # 重新搜索
-        self._on_search_text_changed(self._search_edit.text())
+        self._on_search_text_changed(old)
 
     def _on_replace_all(self):
         if not self._search_matches:
             return
         old = self._search_edit.text()
         new = self._replace_edit.text()
+        if not old:
+            return
         count = 0
         for row in self._search_matches:
             r = self._results[row]
-            raw = r.get("raw", "")
-            if old in raw:
-                r["raw"] = raw.replace(old, new)
+            row_changed = False
+            for col_idx, key in [(COL_RAW, "raw"), (COL_SEGMENTED, "segmented"), (COL_CORRECTED, "corrected")]:
+                val = r.get(key, "")
+                if old in val:
+                    r[key] = val.replace(old, new)
+                    row_changed = True
+            if row_changed:
                 count += 1
         if count:
             self._model.notify_all()

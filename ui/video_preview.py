@@ -104,6 +104,21 @@ class _SeekResultBridge(QObject):
     frame_ready = Signal(object)  # np.ndarray
 
 
+class _ClickableSlider(QSlider):
+    """支持鼠标单点直接精准跳转的水平滑块。"""
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.maximum() > self.minimum():
+            pos = event.position().x() if hasattr(event, "position") else event.x()
+            w = max(1, self.width())
+            ratio = max(0.0, min(1.0, pos / w))
+            val = int(self.minimum() + ratio * (self.maximum() - self.minimum()))
+            self.setValue(val)
+            self.sliderMoved.emit(val)
+            event.accept()
+        super().mousePressEvent(event)
+
+
 class _PreviewLabel(QLabel):
     """预览标签 —— 手动居中绘制 pixmap（保持宽高比），并在之上绘制 ROI 矩形。
 
@@ -128,11 +143,12 @@ class _PreviewLabel(QLabel):
         self._drawing_ref = lambda: False  # () -> bool
         self._start_point_ref = lambda: QPoint()
         self._end_point_ref = lambda: QPoint()
+        self._subtitle_ref = lambda: ""  # () -> str
         self._placeholder_text = _(
-            "拖放视频/图片文件到此处\n或 Ctrl+V 粘贴文件路径\n\nSpace 播放/暂停 · ← → 快进/退 5s · S 切换速度"
+            "拖放视频/图片文件到此处\n或 Ctrl+V 粘贴文件路径\n\nSpace 播放/暂停 · ← → 快进/退 5s · , . 逐帧 · [ ] 100ms · S 切换速度"
         )
 
-    def set_refs(self, pixmap_fn, regions_fn, selected_fn, color_pool_fn, drawing_fn, start_fn, end_fn):
+    def set_refs(self, pixmap_fn, regions_fn, selected_fn, color_pool_fn, drawing_fn, start_fn, end_fn, subtitle_fn=None):
         """设置对 VideoPreviewWidget 状态的引用。"""
         self._pixmap_ref = pixmap_fn
         self._regions_ref = regions_fn
@@ -141,9 +157,10 @@ class _PreviewLabel(QLabel):
         self._drawing_ref = drawing_fn
         self._start_point_ref = start_fn
         self._end_point_ref = end_fn
+        self._subtitle_ref = subtitle_fn or (lambda: "")
 
     def paintEvent(self, event):
-        """手动绘制：背景 → 居中 pixmap → ROI 矩形 → 拖拽预览。"""
+        """手动绘制：背景 → 居中 pixmap → ROI 矩形 → OSD 字幕叠加 → 拖拽预览。"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
 
@@ -207,12 +224,49 @@ class _PreviewLabel(QLabel):
             fill.setAlpha(25 if i == selected else 15)
             painter.fillRect(rx, ry, rw, rh, fill)
 
-            # 边框
+            # 边框（选中区域加粗虚线）
             pen = QPen(color, 2.5 if i == selected else 1.5)
             if i == selected:
                 pen.setStyle(Qt.DashLine)
             painter.setPen(pen)
             painter.drawRoundedRect(rx, ry, rw, rh, 3, 3)
+
+            # 绘制 8 个显式控制手柄与尺寸标签（仅选中区域）
+            if i == selected:
+                painter.save()
+                handle_size = 7
+                half = handle_size // 2
+                painter.setPen(QPen(QColor(30, 30, 30), 1))
+                painter.setBrush(QColor(255, 255, 255))
+                xm = rx + rw // 2
+                ym = ry + rh // 2
+                points = [
+                    (rx, ry),
+                    (xm, ry),
+                    (rx + rw, ry),
+                    (rx + rw, ym),
+                    (rx + rw, ry + rh),
+                    (xm, ry + rh),
+                    (rx, ry + rh),
+                    (rx, ym),
+                ]
+                for px, py in points:
+                    painter.drawRect(px - half, py - half, handle_size, handle_size)
+
+                # 绘制当前 ROI 尺寸与坐标指示标签
+                coord_text = f"X:{fx} Y:{fy}  {fw}×{fh}"
+                painter.setFont(QFont("Consolas", 8, QFont.Bold))
+                fm = painter.fontMetrics()
+                cw = fm.horizontalAdvance(coord_text) + 8
+                ch = fm.height() + 4
+                cx = rx + rw - cw
+                cy = ry + rh + 4 if ry + rh + ch + 4 < lh else ry - ch - 4
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(20, 20, 20, 200))
+                painter.drawRoundedRect(cx, cy, cw, ch, 3, 3)
+                painter.setPen(QColor(255, 255, 255))
+                painter.drawText(cx + 4, cy + fm.ascent() + 2, coord_text)
+                painter.restore()
 
             # 区域名标签（带背景）
             name = r.get("name", "")
@@ -233,6 +287,34 @@ class _PreviewLabel(QLabel):
                 painter.setPen(label_text_color(lbl_bg))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawText(lx + 5, ly + fm.ascent() + 2, name)
+
+        # 绘制 OSD 画面字幕叠加层（Subtitle Overlay）
+        sub_text = self._subtitle_ref() if hasattr(self, "_subtitle_ref") and self._subtitle_ref else ""
+        if sub_text:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.TextAntialiasing)
+            font_size = max(12, int(min(lw, lh) * 0.035))
+            sub_font = QFont("Microsoft YaHei", font_size, QFont.Bold)
+            painter.setFont(sub_font)
+            fm = painter.fontMetrics()
+            tw = fm.horizontalAdvance(sub_text) + 24
+            th = fm.height() + 10
+            sub_w = min(tw, img_w - 20)
+            sub_x = ox + (img_w - sub_w) // 2
+            sub_y = oy + img_h - th - max(10, int(img_h * 0.05))
+            sub_rect = QRect(sub_x, sub_y, sub_w, th)
+
+            # 半透明黑色背板
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 165))
+            painter.drawRoundedRect(sub_rect, 6, 6)
+
+            # 居中文本
+            painter.setPen(QColor(255, 255, 255))
+            elided = fm.elidedText(sub_text, Qt.ElideRight, sub_w - 16)
+            painter.drawText(sub_rect, Qt.AlignCenter, elided)
+            painter.restore()
 
         # 拖拽中的矩形预览（带尺寸提示）
         if self._drawing_ref():
@@ -258,6 +340,7 @@ class _PreviewLabel(QLabel):
 class VideoPreviewWidget(QWidget):
     video_loaded = Signal(str)
     frame_captured = Signal(object)
+    position_changed = Signal(float)
     regions_changed = Signal(list)
     files_dropped = Signal(list)  # 拖放多个文件到队列
 
@@ -273,6 +356,7 @@ class VideoPreviewWidget(QWidget):
         self._current_frame: np.ndarray | None = None
         self._display_pixmap: QPixmap | None = None
         self._is_image: bool = False
+        self._subtitle_overlay_text = ""
         self._regions: list[dict] = []
         self._region_counter = 0
         self._selected_region_index: int = -1
@@ -314,6 +398,7 @@ class VideoPreviewWidget(QWidget):
             lambda: self._drawing,
             lambda: self._start_point,
             lambda: self._end_point,
+            lambda: getattr(self, "_subtitle_overlay_text", ""),
         )
         self._label.mousePressEvent = self._on_mouse_press
         self._label.mouseMoveEvent = self._on_mouse_move
@@ -381,8 +466,8 @@ class VideoPreviewWidget(QWidget):
 
         play_bar.addSpacing(8)
 
-        # 进度条
-        self._preview_slider = QSlider(Qt.Horizontal)
+        # 进度条（支持单击精准直接跳转）
+        self._preview_slider = _ClickableSlider(Qt.Horizontal)
         self._preview_slider.setObjectName("previewSlider")
         self._preview_slider.setRange(0, 0)
         self._preview_slider.setTracking(True)
@@ -511,6 +596,15 @@ class VideoPreviewWidget(QWidget):
         self._label._placeholder_text = _("⏳ 加载中...")
         self._label.update()
 
+    def _cleanup_audio_temp(self):
+        """清理预提取的音频临时文件。"""
+        if hasattr(self, "_audio_temp") and self._audio_temp:
+            try:
+                os.unlink(self._audio_temp)
+            except OSError:
+                pass
+            self._audio_temp = None
+
     def _on_video_loaded(self, frame, info):
         """视频加载完成（在主线程执行）。"""
         self._cleanup_audio_temp()
@@ -520,6 +614,7 @@ class VideoPreviewWidget(QWidget):
         self._selected_region_index = -1
         self._ffmpeg = info["reader"]
         self._video_duration = info["duration"]
+        self._video_fps = info.get("fps", 25.0) or 25.0
         # 缓存预提取的音频（加载阶段已完成，播放时直接可用）
         self._audio_temp = info.get("audio_path")
         self._current_frame = frame.copy()
@@ -641,6 +736,12 @@ class VideoPreviewWidget(QWidget):
             self._display_frame(self._current_frame)
             self.frame_captured.emit(self._current_frame)
 
+    def set_subtitle_overlay(self, text: str):
+        """设置当前在视频预览画面上叠加渲染的字幕文字。"""
+        if getattr(self, "_subtitle_overlay_text", "") != text:
+            self._subtitle_overlay_text = text
+            self._label.update()
+
     def seek_to(self, position_sec: float):
         """异步 seek：立即更新 UI，后台线程解码帧。"""
         # 立即更新滑块和标签（不等待帧）
@@ -651,6 +752,7 @@ class VideoPreviewWidget(QWidget):
             self._preview_slider.blockSignals(False)
         self._current_position = position_sec
         self._update_preview_label()
+        self.position_changed.emit(position_sec)
 
         # 后台线程执行 seek + 解码，不阻塞 UI
         self._seek_target = position_sec
@@ -667,16 +769,30 @@ class VideoPreviewWidget(QWidget):
         if ff and hasattr(ff, "is_opened") and ff.is_opened():
             import threading
 
+            if not hasattr(self, "_seek_lock"):
+                self._seek_lock = threading.Lock()
+
+            self._seek_seq = getattr(self, "_seek_seq", 0) + 1
+            current_seq = self._seek_seq
+
             bridge = _SeekResultBridge()
-            bridge.frame_ready.connect(self._apply_seek_frame)
+
+            def _on_frame(frame, seq=current_seq):
+                if seq == getattr(self, "_seek_seq", 0):
+                    self._apply_seek_frame(frame)
+
+            bridge.frame_ready.connect(_on_frame)
 
             def _seek_and_update():
-                try:
-                    frame = ff.seek_sec(target)
-                    if frame is not None and frame.size > 0:
-                        bridge.frame_ready.emit(frame.copy())
-                except Exception as e:
-                    logger.warning("后台 seek 失败: %s", e)
+                with self._seek_lock:
+                    if current_seq != getattr(self, "_seek_seq", 0):
+                        return
+                    try:
+                        frame = ff.seek_sec(target)
+                        if frame is not None and frame.size > 0:
+                            bridge.frame_ready.emit(frame.copy())
+                    except Exception as e:
+                        logger.warning("后台 seek 失败: %s", e)
 
             threading.Thread(target=_seek_and_update, daemon=True).start()
 
@@ -729,6 +845,30 @@ class VideoPreviewWidget(QWidget):
             self._audio_player.durationChanged.connect(self._on_audio_duration)
             self._audio_player.playbackStateChanged.connect(self._on_audio_state)
             self._audio_player.errorOccurred.connect(self._on_video_audio_error)
+
+    def _on_audio_position(self, pos_ms: int):
+        if getattr(self, "_audio_seek_pending", False) or self._slider_dragging:
+            return
+        if self._is_audio:
+            sec = pos_ms / 1000.0
+            self._current_position = sec
+            self._set_slider(sec)
+            self._update_preview_label()
+            self.position_changed.emit(sec)
+
+    def _on_audio_duration(self, dur_ms: int):
+        if dur_ms > 0 and self._is_audio:
+            dur_sec = dur_ms / 1000.0
+            self._video_duration = dur_sec
+            self._preview_slider.setRange(0, int(dur_sec * 100))
+            self._update_preview_label()
+
+    def _on_audio_state(self, state):
+        if self._is_audio and state == QMediaPlayer.PlaybackState.StoppedState:
+            self._on_player_finished()
+
+    def _on_video_audio_error(self, error, error_string: str = ""):
+        logger.warning("音频播放错误: %s (%s)", error, error_string)
 
     def _play_audio_source(self, url: QUrl):
         """加载并播放音频源。
@@ -823,6 +963,7 @@ class VideoPreviewWidget(QWidget):
         self._display_frame(self._current_frame)
         self._set_slider(timestamp)
         self._update_preview_label()
+        self.position_changed.emit(timestamp)
 
     def _on_player_finished(self):
         """播放器自然结束。"""
@@ -883,10 +1024,23 @@ class VideoPreviewWidget(QWidget):
     def _update_preview_label(self):
         pos = max(0.0, self._current_position)
         dur = max(0.0, self._video_duration)
-        m1, s1 = divmod(int(pos), 60)
-        m2, s2 = divmod(int(dur), 60)
-        ms1 = int((pos - int(pos)) * 10)
-        self._preview_time_label.setText(f"{m1:02d}:{s1:02d}.{ms1} / {m2:02d}:{s2:02d}")
+        h1 = int(pos // 3600)
+        m1 = int((pos % 3600) // 60)
+        s1 = int(pos % 60)
+        ms1 = int((pos - int(pos)) * 1000)
+
+        h2 = int(dur // 3600)
+        m2 = int((dur % 3600) // 60)
+        s2 = int(dur % 60)
+        ms2 = int((dur - int(dur)) * 1000)
+
+        if h2 > 0 or h1 > 0:
+            pos_str = f"{h1:02d}:{m1:02d}:{s1:02d}.{ms1:03d}"
+            dur_str = f"{h2:02d}:{m2:02d}:{s2:02d}.{ms2:03d}"
+        else:
+            pos_str = f"{m1:02d}:{s1:02d}.{ms1:03d}"
+            dur_str = f"{m2:02d}:{s2:02d}.{ms2:03d}"
+        self._preview_time_label.setText(f"{pos_str} / {dur_str}")
 
     def _on_timeline_seek_start(self):
         self._time_start = self._timeline_start.value() / 100.0
@@ -1025,7 +1179,29 @@ class VideoPreviewWidget(QWidget):
         r["x"] = max(0, min(pw - w, r["x"]))
         r["y"] = max(0, min(ph - h, r["y"]))
 
-    def _get_region_at(self, pos: QPoint, margin: int = 6) -> tuple[int, str]:
+    def _apply_edge_snapping(self, r: dict, snap_threshold: int = 6):
+        """当 ROI 边缘距离图像边界小于阈值时自动吸附。"""
+        pix = self._display_pixmap
+        if pix is None or pix.isNull():
+            return
+        pw, ph = pix.width(), pix.height()
+        if pw <= 0 or ph <= 0:
+            return
+
+        # 左/顶吸附
+        if r["x"] <= snap_threshold:
+            r["w"] += r["x"]
+            r["x"] = 0
+        if r["y"] <= snap_threshold:
+            r["h"] += r["y"]
+            r["y"] = 0
+        # 右/底吸附
+        if abs((r["x"] + r["w"]) - pw) <= snap_threshold:
+            r["w"] = pw - r["x"]
+        if abs((r["y"] + r["h"]) - ph) <= snap_threshold:
+            r["h"] = ph - r["y"]
+
+    def _get_region_at(self, pos: QPoint, margin: int = 8) -> tuple[int, str]:
         r = self._get_image_display_rect()
         if r is None:
             return -1, ""
@@ -1035,16 +1211,35 @@ class VideoPreviewWidget(QWidget):
         def to_label(fx, fy):
             return QPoint(int(fx * img_w / pw) + ox, int(fy * img_h / ph) + oy)
 
-        for i, r in enumerate(self._regions):
-            p1 = to_label(r["x"], r["y"])
-            p2 = to_label(r["x"] + r["w"], r["y"] + r["h"])
+        # 优先检测当前选中区域的 8 个手柄
+        selected = self._selected_region_index
+        indices = [selected] if 0 <= selected < len(self._regions) else []
+        indices += [i for i in range(len(self._regions)) if i != selected]
+
+        for i in indices:
+            reg = self._regions[i]
+            p1 = to_label(reg["x"], reg["y"])
+            p2 = to_label(reg["x"] + reg["w"], reg["y"] + reg["h"])
             x1, y1, x2, y2 = p1.x(), p1.y(), p2.x(), p2.y()
+            xm, ym = (x1 + x2) // 2, (y1 + y2) // 2
             px, py = pos.x(), pos.y()
-            # 1) 四角检测优先（6px 以内）
-            for corner, cx, cy in [("tl", x1, y1), ("tr", x2, y1), ("bl", x1, y2), ("br", x2, y2)]:
-                if abs(px - cx) <= margin and abs(py - cy) <= margin:
-                    return i, corner
-            # 2) 四条边检测：沿整条边的 full-width 检测（不仅限于中心）
+
+            # 1) 8 个手柄点检测（四角 + 四边中点）
+            handles = [
+                ("tl", x1, y1),
+                ("top", xm, y1),
+                ("tr", x2, y1),
+                ("right", x2, ym),
+                ("br", x2, y2),
+                ("bottom", xm, y2),
+                ("bl", x1, y2),
+                ("left", x1, ym),
+            ]
+            for handle_name, hx, hy in handles:
+                if abs(px - hx) <= margin and abs(py - hy) <= margin:
+                    return i, handle_name
+
+            # 2) 四条边检测：沿整条边的 full-width 检测
             if abs(py - y1) <= margin and x1 - margin <= px <= x2 + margin:
                 return i, "top"
             if abs(py - y2) <= margin and x1 - margin <= px <= x2 + margin:
@@ -1053,6 +1248,7 @@ class VideoPreviewWidget(QWidget):
                 return i, "left"
             if abs(px - x2) <= margin and y1 - margin <= py <= y2 + margin:
                 return i, "right"
+
             # 3) 内部 → 移动
             if x1 <= px <= x2 and y1 <= py <= y2:
                 return i, "move"
@@ -1147,11 +1343,84 @@ class VideoPreviewWidget(QWidget):
                         self._handle_pasted_files(valid_paths)
                     return
 
+        # ── ROI 选区微调快捷键 ──
+        if self._selected_region_index >= 0 and 0 <= self._selected_region_index < len(self._regions):
+            reg = self._regions[self._selected_region_index]
+            step = 5 if (mods & Qt.ShiftModifier) else 1
+            pix = self._display_pixmap
+            pw = pix.width() if pix else 1920
+            ph = pix.height() if pix else 1080
+
+            # Delete / Backspace: 删除选区
+            if key in (Qt.Key_Delete, Qt.Key_Backspace):
+                self.remove_region(self._selected_region_index)
+                return
+
+            # Escape: 取消选中
+            if key == Qt.Key_Escape:
+                self.select_region(-1)
+                return
+
+            # Ctrl + 方向键: 微调移动 ROI (1px / 5px)
+            if (mods & Qt.ControlModifier) and not (mods & Qt.AltModifier):
+                if key == Qt.Key_Left:
+                    reg["x"] = max(0, reg["x"] - step)
+                elif key == Qt.Key_Right:
+                    reg["x"] = min(pw - reg["w"], reg["x"] + step)
+                elif key == Qt.Key_Up:
+                    reg["y"] = max(0, reg["y"] - step)
+                elif key == Qt.Key_Down:
+                    reg["y"] = min(ph - reg["h"], reg["y"] + step)
+                else:
+                    reg = None
+                if reg is not None:
+                    self._clamp_move_to_frame(reg)
+                    self.regions_changed.emit(self._regions)
+                    self._label.update()
+                    return
+
+            # Alt + 方向键: 微调缩放 ROI 大小 (1px / 5px)
+            if (mods & Qt.AltModifier) and not (mods & Qt.ControlModifier):
+                if key == Qt.Key_Left:
+                    reg["w"] = max(5, reg["w"] - step)
+                elif key == Qt.Key_Right:
+                    reg["w"] = min(pw - reg["x"], reg["w"] + step)
+                elif key == Qt.Key_Up:
+                    reg["h"] = max(5, reg["h"] - step)
+                elif key == Qt.Key_Down:
+                    reg["h"] = min(ph - reg["y"], reg["h"] + step)
+                else:
+                    reg = None
+                if reg is not None:
+                    self.regions_changed.emit(self._regions)
+                    self._label.update()
+                    return
+
         # Space 播放/暂停
         if key == Qt.Key_Space and mods == Qt.NoModifier:
             if self._video_path and not self._is_image:
                 self._on_play_pause()
                 return
+
+        # , (Comma) 或 Alt+Left: 逐帧后退 (-1 帧)
+        if (key == Qt.Key_Comma and mods == Qt.NoModifier) or (key == Qt.Key_Left and mods == Qt.AltModifier):
+            self._step_frame(-1)
+            return
+
+        # . (Period) 或 Alt+Right: 逐帧前进 (+1 帧)
+        if (key == Qt.Key_Period and mods == Qt.NoModifier) or (key == Qt.Key_Right and mods == Qt.AltModifier):
+            self._step_frame(1)
+            return
+
+        # [ 或 Shift+Left: 微调 -100ms
+        if (key == Qt.Key_BracketLeft and mods == Qt.NoModifier) or (key == Qt.Key_Left and mods == Qt.ShiftModifier):
+            self._skip(-0.1)
+            return
+
+        # ] 或 Shift+Right: 微调 +100ms
+        if (key == Qt.Key_BracketRight and mods == Qt.NoModifier) or (key == Qt.Key_Right and mods == Qt.ShiftModifier):
+            self._skip(0.1)
+            return
 
         # ← → 前进后退 5 秒
         if key == Qt.Key_Left and mods == Qt.NoModifier:
@@ -1175,6 +1444,12 @@ class VideoPreviewWidget(QWidget):
             return
 
         super().keyPressEvent(event)
+
+    def _step_frame(self, step: int = 1):
+        """逐帧微调播放位置（默认 25fps 或原生 fps）。"""
+        fps = getattr(self, "_video_fps", 25.0) or 25.0
+        frame_dur = 1.0 / max(1.0, fps)
+        self._skip(step * frame_dur)
 
     def _handle_pasted_files(self, paths: list):
         """处理粘贴的文件列表（与 dropEvent 行为一致）。"""
@@ -1233,6 +1508,7 @@ class VideoPreviewWidget(QWidget):
         self._end_point = event.pos()
         idx, handle = self._get_region_at(event.pos())
         if idx >= 0:
+            self.select_region(idx)
             if handle == "move":
                 self._moving_region_index = idx
                 r = self._regions[idx]
@@ -1245,6 +1521,7 @@ class VideoPreviewWidget(QWidget):
                 self._resizing_region_index = idx
                 self._resize_handle = handle
         else:
+            self.select_region(-1)
             self._drawing = True
 
     def _on_mouse_move(self, event: QMouseEvent):
@@ -1258,6 +1535,7 @@ class VideoPreviewWidget(QWidget):
             r["x"], r["y"] = fp.x(), fp.y()
             # 禁止移出帧边界（ROI 停在边界上，不被强制缩小）
             self._clamp_move_to_frame(r)
+            self._apply_edge_snapping(r)
             self._label.update()
             return
         if self._resizing_region_index >= 0:
@@ -1288,6 +1566,7 @@ class VideoPreviewWidget(QWidget):
             if is_bottom:
                 # 底部拖拽：保持上边界不变
                 r["h"] = max(5, min(fy - r["y"], ph - r["y"]))
+            self._apply_edge_snapping(r)
             self._label.update()
             return
         if self._drawing:
@@ -1319,7 +1598,10 @@ class VideoPreviewWidget(QWidget):
                 x, y = min(p1.x(), p2.x()), min(p1.y(), p2.y())
                 w, h = abs(p2.x() - p1.x()), abs(p2.y() - p1.y())
                 if w > 5 and h > 5:
-                    self.add_region(x, y, w, h)
+                    new_reg = {"x": x, "y": y, "w": w, "h": h}
+                    self._apply_edge_snapping(new_reg)
+                    self.add_region(new_reg["x"], new_reg["y"], new_reg["w"], new_reg["h"])
+                    self.select_region(len(self._regions) - 1)
         was_moved = self._moving_region_index >= 0 or self._resizing_region_index >= 0
         self._moving_region_index = -1
         self._resizing_region_index = -1

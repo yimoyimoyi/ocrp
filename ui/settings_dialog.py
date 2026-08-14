@@ -1100,8 +1100,23 @@ class SettingsDialog(QDialog):
         self._current_engine = current_engine
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
+
+        # 顶层设置搜索栏（50+ 项参数实时检索）
+        search_box = QHBoxLayout()
+        search_box.setSpacing(8)
+        self._search_input = QLineEdit()
+        self._search_input.setPlaceholderText(_("🔍 搜索设置项（50+ 项参数实时检索）..."))
+        self._search_input.setClearButtonEnabled(True)
+        self._search_input.setObjectName("settingsSearchInput")
+        self._search_input.textChanged.connect(self._on_search_settings)
+        search_box.addWidget(self._search_input, 1)
+
+        self._search_match_label = QLabel("")
+        self._search_match_label.setStyleSheet("color: #78909c; font-size: 12px;")
+        search_box.addWidget(self._search_match_label)
+        layout.addLayout(search_box)
 
         self._tabs = QTabWidget()
         self._tabs.setDocumentMode(True)
@@ -1122,6 +1137,49 @@ class SettingsDialog(QDialog):
         self._btn_factory_reset.clicked.connect(self._on_factory_reset)
         btns.addButton(self._btn_factory_reset, QDialogButtonBox.ActionRole)
         layout.addWidget(btns)
+
+    # ── 实时搜索 ──
+
+    def _on_search_settings(self, query: str):
+        """实时搜索设置项并更新 Tab 匹配计数与切换。"""
+        query = query.strip().lower()
+        if not query:
+            self._search_match_label.setText("")
+            for i, (tab_id, title) in enumerate(_TABS):
+                self._tabs.setTabText(i, title)
+            return
+
+        total_matches = 0
+        tab_match_counts = {}
+
+        for spec in _FIELDS:
+            label = spec.get("label", "")
+            text = spec.get("text", "")
+            tooltip = spec.get("tooltip", "")
+            group = spec.get("group", "")
+            key = spec.get("key", "")
+            matched = any(query in str(s).lower() for s in (label, text, tooltip, group, key))
+            if matched:
+                total_matches += 1
+                tab_id = spec.get("tab", "")
+                tab_match_counts[tab_id] = tab_match_counts.get(tab_id, 0) + 1
+
+        first_match_tab_idx = -1
+        for i, (tab_id, title) in enumerate(_TABS):
+            cnt = tab_match_counts.get(tab_id, 0)
+            if cnt > 0:
+                self._tabs.setTabText(i, f"{title} ({cnt})")
+                if first_match_tab_idx < 0:
+                    first_match_tab_idx = i
+            else:
+                self._tabs.setTabText(i, title)
+
+        if total_matches > 0:
+            self._search_match_label.setText(_(f"找到 {total_matches} 个匹配项"))
+            if first_match_tab_idx >= 0:
+                self._tabs.setCurrentIndex(first_match_tab_idx)
+        else:
+            self._search_match_label.setText(_("无匹配项"))
 
     # ── 通用字段读写 ──
 
@@ -1668,7 +1726,12 @@ class SettingsDialog(QDialog):
 
         bridge = _Bridge(self)
         bridge.done.connect(self._on_eng_models_done)
-        bridge.err.connect(lambda m: self._eng_model_status.setText(f"❌ {m[:20]}"))
+
+        def _on_eng_err(m: str):
+            self._eng_model_status.setText(f"❌ {m[:40]}")
+            self._eng_model_status.setToolTip(m)
+
+        bridge.err.connect(_on_eng_err)
         api_key = self._eng_api_key.text()
 
         def _fetch():
@@ -2035,7 +2098,12 @@ class SettingsDialog(QDialog):
 
         bridge = _FetchBridge()
         bridge.done.connect(self._on_corr_fetch_done)
-        bridge.err.connect(lambda msg: self._corr_model_status.setText(f"❌ {msg[:20]}"))
+
+        def _on_corr_err(msg: str):
+            self._corr_model_status.setText(f"❌ {msg[:40]}")
+            self._corr_model_status.setToolTip(msg)
+
+        bridge.err.connect(_on_corr_err)
         api_key = self._corr_api_key.text()
 
         def _fetch():

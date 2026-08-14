@@ -114,6 +114,9 @@ QWidget#collapsibleHeader {
     border-radius: 10px 10px 0 0;
     min-height: 34px;
 }
+QWidget#collapsibleHeader[collapsed="true"] {
+    border-radius: 10px;
+}
 QWidget#collapsibleHeader:hover {
     background-color: #303030;
 }
@@ -411,6 +414,9 @@ QWidget#collapsibleHeader {
     border-radius: 10px 10px 0 0;
     min-height: 34px;
 }
+QWidget#collapsibleHeader[collapsed="true"] {
+    border-radius: 10px;
+}
 QWidget#collapsibleHeader:hover {
     background-color: #eeeeee;
 }
@@ -684,6 +690,9 @@ QWidget#collapsibleHeader {
     border: none;
     border-radius: 10px 10px 0 0;
     min-height: 34px;
+}
+QWidget#collapsibleHeader[collapsed="true"] {
+    border-radius: 10px;
 }
 QWidget#collapsibleHeader:hover {
     background-color: #eaeaea;
@@ -978,6 +987,9 @@ QWidget#collapsibleHeader {
     border: none;
     border-radius: 10px 10px 0 0;
     min-height: 34px;
+}
+QWidget#collapsibleHeader[collapsed="true"] {
+    border-radius: 10px;
 }
 QWidget#collapsibleHeader:hover {
     background-color: #303030;

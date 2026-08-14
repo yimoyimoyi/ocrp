@@ -322,3 +322,23 @@ class TestExternalChangeDetection:
         reg.asr.set("language", "en")
         reg.asr.commit()
         assert reg.check_external_changes() == []
+
+
+class TestSettingsDialogSearch:
+    def test_search_settings_matches(self, qapp, tmp_path):
+        from core.settings.registry import ConfigRegistry
+        from ui.config_panel import ConfigPanel
+        from ui.settings_dialog import SettingsDialog
+
+        reg = ConfigRegistry(tmp_path)
+        cp = ConfigPanel(registry=reg)
+        dialog = SettingsDialog(config_panel=cp, registry=reg)
+
+        # 搜索 "置信度"
+        dialog._search_input.setText("置信度")
+        assert "找到" in dialog._search_match_label.text()
+        assert "OCR" in dialog._tabs.tabText(dialog._tabs.currentIndex())
+
+        # 清空搜索
+        dialog._search_input.setText("")
+        assert dialog._search_match_label.text() == ""

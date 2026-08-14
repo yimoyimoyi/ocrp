@@ -366,12 +366,13 @@ class TestEditRoleOnlyTriggersJump:
         for i in range(2):
             _add(table, i)
         model = table._table.model()
-        table._on_cell_clicked(model.index(0, 0))  # 复选框列
-        table._on_cell_clicked(model.index(0, 8))  # 过滤按钮列
-        table._on_cell_clicked(model.index(0, 1))  # 时间列
+        table._on_cell_clicked(model.index(0, 0))  # 复选框列（不跳转）
+        table._on_cell_clicked(model.index(0, 8))  # 过滤按钮列（不跳转）
         assert spy == []
-        table._on_cell_clicked(model.index(0, 4))  # 原始结果列（可编辑）
+        table._on_cell_clicked(model.index(0, 1))  # 时间列（触发跳转）
         assert spy == [0]
+        table._on_cell_clicked(model.index(0, 4))  # 原始结果列（可编辑，触发跳转）
+        assert spy == [0, 0]
 
 
 class _FakeLineEdit:

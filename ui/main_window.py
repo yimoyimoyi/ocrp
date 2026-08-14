@@ -400,6 +400,7 @@ class MainWindow(QMainWindow):
         self._video_preview.frame_captured.connect(self._on_frame_captured)
         self._video_preview.regions_changed.connect(self._on_preview_regions_changed)
         self._video_preview.files_dropped.connect(self._on_batch_files_dropped)
+        self._video_preview.position_changed.connect(self._on_video_position_changed)
         ll.addWidget(self._video_preview, 1)
         self._top_splitter.addWidget(left)
 
@@ -1111,6 +1112,11 @@ class MainWindow(QMainWindow):
             vp._on_stop_playback()
             vp.seek_to(ts)
         self._status_label.setText(f"已跳转到 {r.get('time', '--:--')}")
+
+    def _on_video_position_changed(self, ts: float):
+        """视频播放或跳转时同步表格高亮及画面字幕叠加。"""
+        sub_text = self._result_table.sync_play_position(ts)
+        self._video_preview.set_subtitle_overlay(sub_text)
 
     def _on_prompt_changed(self, p):
         self._custom_prompt = p

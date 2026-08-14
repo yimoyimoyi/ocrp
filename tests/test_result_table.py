@@ -93,6 +93,27 @@ class TestSearchReplace:
         table._on_replace_all()
         assert all("新文本" in r["raw"] for r in table._results)
 
+    def test_replace_all_multi_columns(self, table):
+        """验证全部替换时 raw、segmented、corrected 三列同步更新。"""
+        _add(table, 0, text="错别字原文")
+        table.update_correction_result(0, "错别字纠错")
+        table.update_correction(0, "错别字润色")
+        table._search_edit.setText("错别字")
+        table._on_search_text_changed("错别字")
+        table._replace_edit.setText("正确字")
+        table._on_replace_all()
+        assert table._results[0]["raw"] == "正确字原文"
+        assert table._results[0]["segmented"] == "正确字纠错"
+        assert table._results[0]["corrected"] == "正确字润色"
+
+    def test_filter_column_action_delegate_no_index_widgets(self, table):
+        """验证第 8 列使用 Delegate 渲染，无真实 QWidget 挂载（内存与性能保护）。"""
+        for i in range(5):
+            _add(table, i)
+        for i in range(5):
+            idx = table._table.model().index(i, 8)
+            assert table._table.indexWidget(idx) is None
+
 
 class TestSortAndDelete:
     def test_sort_by_time(self, table):
@@ -161,3 +182,63 @@ class TestInlineEdit:
         assert editor.autoFillBackground() is True
         base = editor.palette().color(editor.palette().ColorRole.Base)
         assert base.alpha() == 255
+
+
+class TestSyncPlayPosition:
+    """测试视频播放位置与字幕行实时高亮与跟随。"""
+
+    def test_sync_highlights_matching_row(self, table):
+        table.add_result("00:01", "r1", "eng", "第一句", 0.9, time_sec=1.0, end_sec=3.0)
+        table.add_result("00:04", "r1", "eng", "第二句", 0.9, time_sec=4.0, end_sec=6.0)
+
+        # 2.0s 在第一句区间内
+        text = table.sync_play_position(2.0, auto_scroll=False)
+        assert text == "第一句"
+        assert table._model._playing_row == 0
+        assert table._table.model().index(0, 4).data(Qt.ItemDataRole.BackgroundRole) is not None
+
+        # 5.0s 在第二句区间内
+        text2 = table.sync_play_position(5.0, auto_scroll=False)
+        assert text2 == "第二句"
+        assert table._model._playing_row == 1
+
+        # 10.0s 超出区间
+        text_out = table.sync_play_position(10.0, auto_scroll=False)
+        assert text_out == ""
+        assert table._model._playing_row == -1
+
+
+class TestHeaderData:
+    """测试表头标题与列显示名称。"""
+
+    def test_horizontal_header_titles(self, table):
+        model = table._table.model()
+        assert model.headerData(1, Qt.Horizontal, Qt.ItemDataRole.DisplayRole) == "时间"
+        assert model.headerData(2, Qt.Horizontal, Qt.ItemDataRole.DisplayRole) == "区域"
+        assert model.headerData(3, Qt.Horizontal, Qt.ItemDataRole.DisplayRole) == "引擎"
+        assert model.headerData(4, Qt.Horizontal, Qt.ItemDataRole.DisplayRole) == "原始识别"
+        assert model.headerData(5, Qt.Horizontal, Qt.ItemDataRole.DisplayRole) == "纠错结果"
+        assert model.headerData(6, Qt.Horizontal, Qt.ItemDataRole.DisplayRole) == "润色结果"
+        assert model.headerData(7, Qt.Horizontal, Qt.ItemDataRole.DisplayRole) == "置信度"
+        assert model.headerData(8, Qt.Horizontal, Qt.ItemDataRole.DisplayRole) == "操作"
+
+
+class TestBatchOperations:
+    """测试批量删除与反选操作。"""
+
+    def test_batch_delete_checked(self, table):
+        for i in range(5):
+            _add(table, i, text=f"条目{i}")
+        # 勾选第 0, 2, 4 行
+        table._model._checked_rows = {0, 2, 4}
+        table._on_batch_delete_checked()
+        assert len(table._results) == 2
+        assert table._results[0]["raw"] == "条目1"
+        assert table._results[1]["raw"] == "条目3"
+
+    def test_invert_checked(self, table):
+        for i in range(4):
+            _add(table, i)
+        table._model._checked_rows = {1, 3}
+        table._on_invert_checked()
+        assert table._model._checked_rows == {0, 2}

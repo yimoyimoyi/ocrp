@@ -125,7 +125,12 @@ class PresetManageDialog(QDialog):
 
         bridge = _FetchBridge()
         bridge.done.connect(self._on_fetch_done)
-        bridge.err.connect(lambda msg: self._model_status.setText(f"❌ {msg[:20]}"))
+
+        def _on_err(msg: str):
+            self._model_status.setText(f"❌ {msg[:40]}")
+            self._model_status.setToolTip(msg)
+
+        bridge.err.connect(_on_err)
         api_key = self._key_edit.text()
 
         def _fetch():

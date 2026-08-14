@@ -113,18 +113,15 @@ class CollapsibleGroup(QWidget):
             self._update_border_radius(True)
 
     def _update_border_radius(self, collapsed: bool):
-        """动态调整整体和标题栏的圆角。"""
+        """动态调整整体和标题栏的折叠属性供 QSS 样式渲染，避免 setStyleSheet 抹除全局样式。"""
+        self.setProperty("collapsed", "true" if collapsed else "false")
         header = self.findChild(QWidget, "collapsibleHeader")
-        if collapsed:
-            # 折叠：整体四角全圆
-            self.setStyleSheet("#collapsibleGroup { border-radius: 10px; }")
-            if header:
-                header.setStyleSheet("#collapsibleHeader { border-radius: 10px; }")
-        else:
-            # 展开：整体圆角，标题栏仅顶部圆角
-            self.setStyleSheet("#collapsibleGroup { border-radius: 10px; }")
-            if header:
-                header.setStyleSheet("#collapsibleHeader { border-radius: 10px 10px 0 0; }")
+        if header:
+            header.setProperty("collapsed", "true" if collapsed else "false")
+            header.style().unpolish(header)
+            header.style().polish(header)
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def _collapse(self, coll: bool):
         if self._collapsed == coll:

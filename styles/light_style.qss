@@ -480,11 +480,12 @@ QLabel#regionChip {
 #settingsDialog QDialogButtonBox QPushButton { min-width: 80px; }
 
 /* ── 可折叠组 ── */
-#collapsibleGroup { margin: 4px 0; }
+#collapsibleGroup { margin: 4px 0; border-radius: 6px; }
 #collapsibleHeader {
     background-color: #f6f8fa; border: 1px solid #c0c8d0;
     border-radius: 6px 6px 0 0; padding: 4px 0;
 }
+#collapsibleHeader[collapsed="true"] { border-radius: 6px; }
 #collapsibleHeader:hover { background-color: #eaeef2; }
 #collapsibleTitle { color: #0d9488; font-weight: bold; font-size: 12px; }
 #collapsibleToggle { color: #0d9488; }
