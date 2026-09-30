@@ -84,7 +84,8 @@ class TestBatchVideoParams:
     def test_all_params_written_to_frame_processor(self):
         _, fp = self._process_video(_MODE_PARAMS)
         # 修复前缺失的参数（此前批量始终走默认流式）
-        assert fp._subtitle_mode == "流式字幕（去重）"
+        # 字幕模式归一为规范 token（P22：旧中文标签 "流式字幕（去重）" → "stream"）
+        assert fp._subtitle_mode == "stream"
         assert fp._s_ocr_version == "PP-OCRv4 (最快)"
         assert fp._r_dedup is True
         assert fp._r_sim_threshold == 0.9
@@ -110,6 +111,7 @@ class TestBatchVideoParams:
     def test_custom_values_override(self):
         custom = dict(_MODE_PARAMS, subtitle_mode="固定间隔", r_interval=5.0, r_dedup=False)
         _, fp = self._process_video(custom)
-        assert fp._subtitle_mode == "固定间隔"
+        # 旧中文标签 "固定间隔" 归一为 "regular"
+        assert fp._subtitle_mode == "regular"
         assert fp._r_interval == 5.0
         assert fp._r_dedup is False

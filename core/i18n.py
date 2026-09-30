@@ -13,9 +13,11 @@
     locale/ja_JP/LC_MESSAGES/orcp.po  (日本語)
 """
 
+import ast
 import gettext
 import locale
 import os
+import warnings
 from pathlib import Path
 
 _LOCALE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "locale"
@@ -37,19 +39,67 @@ LANGUAGE_DISPLAY_NAMES = {
 }
 
 
+# 语言关键字 → 受支持语言代码（按优先级匹配，均为小写子串）
+# 覆盖 POSIX 的 "zh_CN.UTF-8" 与 Windows 的 "Chinese (Simplified)_China" 两种形态
+_LANGUAGE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("chinese (simplified)", "zh_CN"),
+    ("chinese_simplified", "zh_CN"),
+    ("zh_hans", "zh_CN"),
+    ("zh_cn", "zh_CN"),
+    ("chinese", "zh_CN"),
+    ("japanese", "ja_JP"),
+    ("ja_jp", "ja_JP"),
+    ("english", "en_US"),
+    ("en_us", "en_US"),
+)
+
+# 短语言代码 → 受支持语言代码
+_LANGUAGE_SHORT_CODES = {"zh": "zh_CN", "en": "en_US", "ja": "ja_JP"}
+
+
+def _normalize_lang(raw: str) -> str:
+    """把任意形态的系统语言标识归一为受支持的语言代码（未知回落 en_US）。
+
+    处理 POSIX（zh_CN.UTF-8 / zh-CN / ja）与 Windows
+    （Chinese (Simplified)_China / Japanese_Japan）两类命名。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return "en_US"
+
+    # 去掉 POSIX 修饰符（"zh_CN.UTF-8@euro" → "zh_CN"）
+    text = text.split("@", 1)[0]
+    text = text.replace("-", "_")
+    head = text.split(".", 1)[0]
+    if head in SUPPORTED_LANGUAGES:
+        return head
+
+    lowered = text.lower()
+    for keyword, code in _LANGUAGE_KEYWORDS:
+        if keyword in lowered:
+            return code
+
+    short = head.split("_", 1)[0].lower()
+    return _LANGUAGE_SHORT_CODES.get(short, "en_US")
+
+
 def _get_system_lang() -> str:
-    """检测系统语言，返回语言代码。"""
+    """检测系统语言，返回受支持的语言代码。
+
+    不使用已废弃的 ``locale.getdefaultlocale()``（Python 3.15 移除）：
+    依次尝试环境变量（POSIX 生效）→ ``locale.getlocale()``（Windows 生效）。
+    """
+    for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            # LANGUAGE 可能是冒号分隔列表（"zh_CN:en_US"），取首个
+            return _normalize_lang(value.split(":", 1)[0])
+
     try:
-        lang = locale.getdefaultlocale()[0] or "en_US"
-    except Exception:
-        lang = "en_US"
-    lang = lang.replace("-", "_")
-    if "_" not in lang:
-        lang_map = {"zh": "zh_CN", "en": "en_US", "ja": "ja_JP"}
-        lang = lang_map.get(lang, "en_US")
-    if lang not in SUPPORTED_LANGUAGES:
-        lang = "en_US"
-    return lang
+        detected = locale.getlocale(locale.LC_CTYPE)[0]
+    except (locale.Error, TypeError, ValueError):
+        detected = None
+    return _normalize_lang(detected or "")
 
 
 def setup_i18n(lang: str = "") -> str:
@@ -86,6 +136,27 @@ def setup_i18n(lang: str = "") -> str:
     return lang
 
 
+def _unescape_po(text: str) -> str:
+    """还原 .po 引号内的转义序列（``\\n`` / ``\\"`` / ``\\\\`` / ``\\t`` 等）。
+
+    此前直接使用引号之间的原始文本，于是 msgid 里的 ``\\n`` 是**两个字符**
+    （反斜杠 + n），与代码中真实的换行符永不相等 —— 所有含换行的条目运行时
+    都查不到译文，静默回落中文原文（gettext 的 .po→.mo 编译会做这步还原，
+    本模块是手写解析器，此前漏了）。
+    """
+    if "\\" not in text:
+        return text
+    try:
+        with warnings.catch_warnings():
+            # 译文里可能出现非法的 Python 转义（如正则 "\d"），literal_eval
+            # 仍能还原，只是会发 SyntaxWarning —— 这里不需要噪音
+            warnings.simplefilter("ignore")
+            value = ast.literal_eval(f'"{text}"')
+    except (SyntaxError, ValueError):
+        return text
+    return value if isinstance(value, str) else text
+
+
 def _load_po_catalog(lang: str) -> dict[str, str]:
     """从 .po 文件加载翻译 catalog。"""
     po_path = _LOCALE_DIR / lang / "LC_MESSAGES" / f"{_DOMAIN}.po"
@@ -102,9 +173,9 @@ def _load_po_catalog(lang: str) -> dict[str, str]:
             def _flush():
                 """将当前积累的 msgid/msgstr 写入 catalog。"""
                 if msgid_lines and msgstr_lines:
-                    msgid = "".join(msgid_lines)
+                    msgid = _unescape_po("".join(msgid_lines))
                     if msgid:
-                        catalog[msgid] = "".join(msgstr_lines)
+                        catalog[msgid] = _unescape_po("".join(msgstr_lines))
 
             for line in f:
                 line = line.strip()

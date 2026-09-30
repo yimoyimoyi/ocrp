@@ -128,7 +128,8 @@ class QtSubprocessManager(QObject):
             logger.warning("send_json: 子进程未运行")
             return
         data = json.dumps(obj, ensure_ascii=False) + "\n"
-        self._proc.writeData(data.encode("utf-8"))
+        # 使用公开的 write()（writeData 是 QIODevice 受保护虚函数，桩签名要求 len 参数）
+        self._proc.write(data.encode("utf-8"))
 
     def read_json_response(self, timeout: float = 300.0, request_id: int | None = None) -> dict | None:
         """同步等待一条 JSON 响应。
@@ -400,7 +401,10 @@ class SharedMemoryManager:
                 self._capacity = max(n, self._capacity * 2)
                 self._shm = SharedMemory(name=self._name, create=True, size=self._capacity)
 
-            self._shm.buf[:n] = raw
+            buf = self._shm.buf
+            if buf is None:
+                raise RuntimeError("共享内存缓冲区不可用")
+            buf[:n] = raw
             return n
 
     @staticmethod
@@ -428,7 +432,10 @@ class SharedMemoryManager:
         arr = None
         try:
             n = width * height * channels
-            arr = np.frombuffer(shm.buf[:n], dtype=np.uint8).reshape((height, width, channels))
+            buf = shm.buf
+            if buf is None:
+                raise RuntimeError(f"共享内存缓冲区不可用: {name}")
+            arr = np.frombuffer(buf[:n], dtype=np.uint8).reshape((height, width, channels))
             out = arr.copy()  # copy 确保返回值不持有共享内存引用
         finally:
             # 回归修复：finally 先解除 numpy 对缓冲的引用再 close——

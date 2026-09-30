@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from core.i18n import _
 from ui.style_loader import THEME_COLORS, THEME_DISPLAY_NAMES
+from ui.theme_tokens import muted_text_color
 
 
 class _ThemeCard(QFrame):
@@ -114,7 +115,7 @@ class DisplayDialog(QDialog):
         # 深色/浅色分组
         for section_name, prefix in [(_("深色"), "dark_"), (_("浅色"), "light_")]:
             section_label = QLabel(section_name)
-            section_label.setStyleSheet("color: #808080; font-size: 11px; margin-top: 4px;")
+            section_label.setStyleSheet(f"color: {muted_text_color(self)}; font-size: 11px; margin-top: 4px;")
             layout.addWidget(section_label)
 
             grid_widget = QWidget()

@@ -18,6 +18,10 @@ logger = get_logger(__name__)
 
 from core.workflow.base import _FlowBase
 
+# 润色收尾时等待 worker 线程退出的上限（毫秒）。worker 在 run() 返回前就发出
+# batch_finished，正常情况下几十毫秒内即退出；超时则转入 draining 列表保引用。
+POLISH_DRAIN_WAIT_MS = 2000
+
 
 class CorrectionFlow(_FlowBase):
     """AI 纠错/润色/环境提取 —— 含并行批处理调度状态机。"""
@@ -110,16 +114,17 @@ class CorrectionFlow(_FlowBase):
             on_done: 提取完成（或无需提取）后的回调
         """
         if mp.get("corr_extract_env", False) and self._corrector and not self._env_extraction_running:
-            if hasattr(self._corrector, "_should_skip_env_extraction"):
-                if self._corrector._should_skip_env_extraction():
-                    logger.info(
-                        "跳过环境提取: extract_env=%s, env_context=%s",
-                        self._corrector._extract_env,
-                        bool(self._corrector._env_context),
-                    )
-                    if on_done:
-                        on_done()
-                    return
+            # 通过公开 API 判断，不再 hasattr 探测私有方法/私有属性
+            # （私有成员改名只在运行时炸，且破坏了 AICorrector 的封装）
+            if self._corrector.should_skip_env_extraction():
+                logger.info(
+                    "跳过环境提取: extract_env=%s, env_context=%s",
+                    self._corrector.extract_env,
+                    bool(self._corrector.env_context),
+                )
+                if on_done:
+                    on_done()
+                return
             self._env_extraction_running = True
             self.status_msg.emit(_("⏳ AI 纠错: 提取全文环境中..."))
             all_texts = [r.get("raw", "") for r in results if r.get("raw", "").strip()]
@@ -457,15 +462,34 @@ class CorrectionFlow(_FlowBase):
 
     def _on_polish_finished(self):
         self._polish_in_progress = False
-        # P1-2 防御：clear 前等待仍在运行的 worker 退出（刚发完 batch_finished 即将退出）
+        # P1-2 强化：不能 "wait(100) 后无条件 clear()"。worker 在 run() 返回**之前**
+        # 就发出 batch_finished，主线程可能先一步恢复；此时若丢掉最后一个 Python
+        # 引用，运行中的 QThread 会被 GC，Qt 抛
+        # "QThread: Destroyed while thread is still running" 直接 abort。
+        # 100ms 只是经验值 —— 改为：等一个宽松上限；仍未退出的移入
+        # _polish_draining 保留引用，线程结束回调里再移除。
+        still_running: list = []
         with self._polish_workers_lock:
             for w in self._polish_workers:
-                if w.isRunning():
-                    w.wait(100)
-            self._polish_workers.clear()
+                if w.isRunning() and not w.wait(POLISH_DRAIN_WAIT_MS):
+                    still_running.append(w)
+            self._polish_workers = []
+            self._polish_draining.extend(still_running)
+        for w in still_running:
+            # 无 finished 信号的替身（测试/非 QThread）直接丢弃引用即可
+            if hasattr(w, "finished"):
+                w.finished.connect(lambda w=w: self._discard_draining_polish_worker(w))
         self._set_buttons(polish=True, polish_all=True)
         n = self._get_table_row_count()
         self.status_msg.emit(f"✅ 完成: {n} 条结果 | 润色完成")
+
+    def _discard_draining_polish_worker(self, worker):
+        """润色 worker 线程真正结束后从 draining 列表移除并释放。"""
+        with self._polish_workers_lock:
+            if worker in self._polish_draining:
+                self._polish_draining.remove(worker)
+        if hasattr(worker, "deleteLater"):
+            worker.deleteLater()
 
     def extract_environment(self, summary_prompt_setter: Callable[[str], None] | None = None):
         """手动提取全文环境。"""

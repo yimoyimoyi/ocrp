@@ -28,9 +28,10 @@ from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication
 
 import core.workflow.correction_flow as correction_flow_mod
+import core.workflow.manager as manager_mod
 import ui.main_window as main_window_mod
 from core.utils import MODE_OCR_ONLY
-from core.workflow.manager import WorkflowManager
+from core.workflow.manager import IDLE_BUTTON_STATES, WorkflowManager
 
 _LIVE_PARAMS = {
     "process_mode": MODE_OCR_ONLY,
@@ -100,6 +101,7 @@ class _FakeBatchPolishWorker(QObject):
     polish_ready = Signal(int, str, str)
     batch_finished = Signal()
     batch_error = Signal(str)
+    finished = Signal()
     created: list = []
 
     def __init__(self, corrector, items: list):
@@ -260,7 +262,7 @@ class TestPolishSessionGeneration:
         assert wf._polish_completed_batches == 4  # 当前代际 → +1
 
     def test_on_polish_finished_waits_then_clears(self, fake_workers):
-        """P1-2：_on_polish_finished 对仍在运行的 worker wait(100) 后再 clear。"""
+        """P1-2：_on_polish_finished 对仍在运行的 worker wait 后再清空活动列表。"""
         _, FakePolish = fake_workers
         wf = _make_wf()
         wf._start_polish([(0, "a", "a")])
@@ -273,7 +275,62 @@ class TestPolishSessionGeneration:
         worker.batch_finished.emit()  # → _on_polish_finished
         assert wait_called  # clear 前确实 wait 了
         assert wf._polish_workers == []  # clear 执行
+        assert wf._polish_draining == []  # 已退出 → 无需保引用
         assert wf._polish_in_progress is False
+
+    def test_on_polish_finished_keeps_reference_when_still_running(self, fake_workers):
+        """P1-2 强化：wait 超时仍未退出的 worker 必须移入 draining 保引用。
+
+        否则最后一个 Python 引用被丢弃，运行中的 QThread 会被 GC，Qt 抛
+        "QThread: Destroyed while thread is still running" 并 abort 进程。
+        """
+        _, FakePolish = fake_workers
+        wf = _make_wf()
+        wf._start_polish([(0, "a", "a")])
+        worker = FakePolish.created[0]
+
+        worker.isRunning = lambda: True
+        worker.wait = lambda *a: False  # 模拟等待上限内未退出
+        worker.batch_finished.emit()
+        assert wf._polish_workers == []
+        assert wf._polish_draining == [worker], "未退出线程必须保留引用"
+        assert wf._polish_in_progress is False
+
+        # 线程真正结束后经 finished 信号移除引用
+        worker.finished.emit()
+        assert wf._polish_draining == []
+
+    def test_stop_processing_reaches_draining_workers(self, fake_workers):
+        """draining 中的 worker 也必须能被 stop（否则停止操作漏掉在飞批次）。"""
+        _, FakePolish = fake_workers
+        wf = _make_wf()
+        wf._start_polish([(0, "a", "a")])
+        worker = FakePolish.created[0]
+        worker.isRunning = lambda: True
+        worker.wait = lambda *a: False
+        worker.batch_finished.emit()
+        assert wf._polish_draining == [worker]
+
+        stopped = []
+        worker.stop = lambda: stopped.append(True)
+        wf.stop_processing()
+        assert stopped, "stop_processing 必须覆盖 draining 列表"
+        assert wf._polish_draining == []
+
+    def test_cleanup_collects_draining_polish_workers(self, fake_workers):
+        """cleanup（关窗）也必须等待 draining 中的 worker。"""
+        _, FakePolish = fake_workers
+        wf = _make_wf()
+        wf._start_polish([(0, "a", "a")])
+        worker = FakePolish.created[0]
+        worker.isRunning = lambda: True
+        worker.wait = lambda *a: False
+        worker.batch_finished.emit()
+
+        # 让 cleanup 认为线程仍在运行，从而把它收进待停止集合
+        worker.isRunning = lambda: True
+        wf.cleanup()
+        assert wf._polish_draining == []
 
     def test_cleanup_collects_polish_workers(self, fake_workers):
         """P1-2：manager.cleanup() 必须收集润色 worker（此前遗漏 → 关窗崩溃隐患）。"""
@@ -290,6 +347,200 @@ class TestPolishSessionGeneration:
         # 收集后对 worker 发了 stop/quit（假 worker 不崩溃即验证路径可达）
         for w in running:
             assert w.isRunning() is False or True  # 无异常即通过
+
+
+class TestCleanupIsBoundedAndSynchronous:
+    """回归：关窗清理的线程与等待预算。
+
+    旧实现把 ``cleanup()`` 丢进裸 ``threading.Thread``「后台静默清理」，而
+    ``cleanup()`` 内部又派生第二个后台线程等待 terminate —— 主线程随后从
+    closeEvent 返回并拆除 QApplication，清理线程仍在访问主线程亲和的 QThread，
+    进程退出还会中途杀死它（关窗崩溃 / 子进程残留）。
+
+    另一处缺陷：等待阶段是"每线程 2s"，N 个 worker 串行最坏 N×2s，这正是当初
+    把清理挪到后台的动机。改为**全局**预算后可以安全地同步调用。
+    """
+
+    def test_cleanup_starts_no_background_thread(self, fake_workers, monkeypatch):
+        _, FakePolish = fake_workers
+        wf = _make_wf()
+        wf._start_polish([(0, "a", "a")])
+        for w in wf._polish_workers:
+            w.isRunning = lambda: True
+
+        started = []
+
+        class _NoThread:
+            def __init__(self, *a, **kw):
+                started.append(kw.get("target"))
+
+            def start(self):
+                started.append("started")
+
+        monkeypatch.setattr(manager_mod.threading, "Thread", _NoThread)
+        wf.cleanup()
+        assert started == [], f"cleanup 不得派生后台线程: {started}"
+
+    def test_wait_budget_is_global_not_per_worker(self, fake_workers, monkeypatch):
+        """核心不变量：第一阶段等待总量受**全局**预算约束，与 worker 数量无关。
+
+        旧实现"每线程 wait(2000)"在 N 个 worker 时为 N×2000ms。用假时钟模拟真实
+        等待耗时后，第一个 worker 就应吃掉整个预算，后续 worker 不再获得等待时间
+        （直接进入 terminate 阶段）。
+        """
+        _, FakePolish = fake_workers
+        wf = _make_wf()
+        wf._start_polish([(0, "a", "a"), (1, "b", "b"), (2, "c", "c")])
+        workers = list(wf._polish_workers)
+
+        clock = {"t": 0.0}
+        monkeypatch.setattr(manager_mod.time, "monotonic", lambda: clock["t"])
+
+        budget = manager_mod.DEFAULT_CLEANUP_WAIT_BUDGET_MS
+        requested: list[int] = []
+        for w in workers:
+            w.isRunning = lambda: True
+
+            def _wait(ms, _w=w):
+                requested.append(ms)
+                clock["t"] += ms / 1000.0  # 模拟真实等待消耗的时间
+                return False  # 永不自行退出 → 进入 terminate 阶段
+
+            w.wait = _wait
+
+        wf.cleanup()
+
+        wait_phase = [ms for ms in requested if ms != manager_mod.TERMINATE_REAP_MS]
+        assert wait_phase, "应当发生第一阶段等待"
+        assert sum(wait_phase) <= budget, f"第一阶段等待 {sum(wait_phase)}ms 超出全局预算 {budget}ms"
+
+    def test_worker_that_survives_terminate_is_retained(self, fake_workers, monkeypatch):
+        """terminate 后仍未退出的 QThread 必须保留引用，否则被 GC 销毁导致崩溃。"""
+        _, FakePolish = fake_workers
+        monkeypatch.setattr(manager_mod, "_ZOMBIE_WORKERS", [])
+        wf = _make_wf()
+        wf._start_polish([(0, "a", "a")])
+        workers = list(wf._polish_workers)
+        terminated = []
+        for w in workers:
+            w.isRunning = lambda: True
+            w.wait = lambda *a: False  # 永不退出
+            w.terminate = lambda _w=w: terminated.append(_w)
+        wf.cleanup()
+        assert terminated, "未退出的线程应被 terminate"
+        assert workers == manager_mod._ZOMBIE_WORKERS, "仍存活的线程必须被保留引用"
+
+    def test_exited_worker_is_not_retained(self, fake_workers, monkeypatch):
+        _, FakePolish = fake_workers
+        monkeypatch.setattr(manager_mod, "_ZOMBIE_WORKERS", [])
+        wf = _make_wf()
+        wf._start_polish([(0, "a", "a")])
+        for w in wf._polish_workers:
+            w.isRunning = lambda: True
+            w.wait = lambda *a: True  # 正常退出
+        wf.cleanup()
+        assert manager_mod._ZOMBIE_WORKERS == []
+
+    def test_close_event_calls_cleanup_synchronously(self):
+        """AST 守卫：closeEvent 必须直接调用 cleanup()，不得再用裸线程后台清理。"""
+        import ast
+        import inspect
+        import textwrap
+
+        from ui.main_window import MainWindow
+
+        src = textwrap.dedent(inspect.getsource(MainWindow.closeEvent))
+        tree = ast.parse(src)
+        calls = [
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        ]
+        assert "cleanup" in calls, "closeEvent 必须同步调用 self._workflow.cleanup()"
+        assert "Thread" not in calls, "closeEvent 不得再派生裸线程执行清理"
+
+
+class TestIdleButtonStates:
+    """回归：空闲态按钮状态此前在多个位置手工逐个 setEnabled。
+
+    ``ui/main_window._on_process_error`` 只恢复了 start/stop/pause/correction*，
+    **漏掉 polish/polish_all** —— 处理出错后润色按钮一直保持禁用，用户必须重新
+    开始一次处理才能再点亮。
+    """
+
+    BUTTONS = (
+        "_btn_start",
+        "_btn_stop",
+        "_btn_pause",
+        "_btn_correction",
+        "_btn_correction_all",
+        "_btn_polish",
+        "_btn_polish_all",
+    )
+
+    @staticmethod
+    def _view_with_stub_buttons():
+        from types import SimpleNamespace
+
+        from ui.views.bottom_bar import BottomBarView
+
+        class _Btn:
+            def __init__(self):
+                self.enabled = "untouched"
+
+            def setEnabled(self, value):
+                self.enabled = value
+
+        view = BottomBarView(SimpleNamespace())
+        for name in TestIdleButtonStates.BUTTONS:
+            setattr(view, name, _Btn())
+        return view
+
+    def test_idle_state_covers_every_button_key(self):
+        keys = set(IDLE_BUTTON_STATES)
+        assert {"start", "stop", "pause", "correction", "correction_all"} <= keys
+        assert {"polish", "polish_all"} <= keys, "空闲态必须包含润色按钮（历史遗漏）"
+
+    def test_idle_state_values_are_bools(self):
+        assert all(isinstance(v, bool) for v in IDLE_BUTTON_STATES.values())
+
+    def test_reset_workflow_buttons_enables_all_seven(self, qapp):
+        view = self._view_with_stub_buttons()
+        view.reset_workflow_buttons()
+        assert view._btn_start.enabled is True
+        assert view._btn_stop.enabled is False
+        assert view._btn_pause.enabled is False
+        assert view._btn_correction.enabled is True
+        assert view._btn_correction_all.enabled is True
+        assert view._btn_polish.enabled is True, "处理结束/出错后润色按钮必须恢复"
+        assert view._btn_polish_all.enabled is True
+
+    def test_set_correction_enabled_leaves_other_buttons_alone(self, qapp):
+        view = self._view_with_stub_buttons()
+        view.set_correction_enabled(False)
+        assert view._btn_correction.enabled is False
+        assert view._btn_correction_all.enabled is False
+        # 批量纠错可能在处理进行中完成，绝不能复位开始/停止/润色
+        assert view._btn_start.enabled == "untouched"
+        assert view._btn_stop.enabled == "untouched"
+        assert view._btn_polish.enabled == "untouched"
+
+    def test_process_error_uses_unified_reset(self):
+        """AST 守卫：_on_process_error 不得再逐个 setEnabled 按钮。"""
+        import ast
+        import inspect
+        import textwrap
+
+        from ui.main_window import MainWindow
+
+        src = textwrap.dedent(inspect.getsource(MainWindow._on_process_error))
+        set_enabled = [
+            node.lineno
+            for node in ast.walk(ast.parse(src))
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "setEnabled"
+        ]
+        assert set_enabled == [], f"_on_process_error 应走统一复位: 行 {set_enabled}"
+        assert "reset_workflow_buttons" in src
 
 
 # ══════════════════════════════════════════════════════════════════

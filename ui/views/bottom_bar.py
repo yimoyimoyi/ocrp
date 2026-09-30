@@ -14,7 +14,7 @@ class BottomBarView(_ViewBase):
     """底部操作栏构建器（处理控制/纠错/润色按钮）。"""
 
     def _on_workflow_buttons(self, states: dict):
-        """根据 WorkflowManager 信号更新按钮状态。"""
+        """根据 WorkflowManager 信号更新按钮状态（唯一入口）。"""
         if "start" in states:
             self._btn_start.setEnabled(states["start"])
         if "stop" in states:
@@ -30,8 +30,26 @@ class BottomBarView(_ViewBase):
         if "pause" in states:
             self._btn_pause.setEnabled(states["pause"])
 
+    def reset_workflow_buttons(self):
+        """把按钮恢复为空闲态（用 WorkflowManager.IDLE_BUTTON_STATES 单一来源）。"""
+        from core.workflow.manager import IDLE_BUTTON_STATES
+
+        self._on_workflow_buttons(dict(IDLE_BUTTON_STATES))
+
+    def set_correction_enabled(self, enabled: bool):
+        """仅切换纠错按钮组（不触碰开始/停止/暂停）。
+
+        批量纠错结束或出错时使用：此时视频/音频处理可能仍在进行，不能整体复位。
+        """
+        self._on_workflow_buttons({"correction": enabled, "correction_all": enabled})
+
     def build(self):
         """构建底部操作栏（原 build_ui 内联代码搬移）。"""
+        # 分隔线引用（main_window._apply_scaled_metrics 需要按缩放调整高度）。
+        # 此前用 findChildren(QFrame) + objectName 字符串比对查找，objectName
+        # 改名就静默失效（分隔线高度不再跟随字体/缩放）。
+        self._bar_separators: list[QFrame] = []
+
         # 底部操作栏
         bar = QFrame()
         bar.setObjectName("bottomBar")
@@ -67,6 +85,7 @@ class BottomBarView(_ViewBase):
         sep1.setFrameShape(QFrame.VLine)
         sep1.setFixedHeight(24)
         bbl.addWidget(sep1)
+        self._bar_separators.append(sep1)
 
         # ── AI 纠错组 ──
         self._btn_correction = QPushButton(_("✏ 纠错选中"))
@@ -86,6 +105,7 @@ class BottomBarView(_ViewBase):
         sep2.setFrameShape(QFrame.VLine)
         sep2.setFixedHeight(24)
         bbl.addWidget(sep2)
+        self._bar_separators.append(sep2)
 
         # ── 润色组 ──
         self._btn_polish = QPushButton(_("✨ 润色选中"))

@@ -5,15 +5,14 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
-    QMessageBox,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
 )
 
 from core.i18n import _
+from ui.services import MessageService
 
 
 class TemplateEditorDialog(QDialog):
@@ -23,8 +22,15 @@ class TemplateEditorDialog(QDialog):
     template_deleted = Signal(str)  # (name)
     prompt_changed = Signal(str)  # (prompt_text)
 
-    def __init__(self, names: list[str], contents: dict[str, str], parent=None):
+    def __init__(
+        self,
+        names: list[str],
+        contents: dict[str, str],
+        parent=None,
+        message_service: MessageService | None = None,
+    ):
         super().__init__(parent)
+        self._message_service = message_service or MessageService(self)
         self.setWindowTitle(_("📝 提示词模板编辑器"))
         self.setMinimumSize(700, 500)
         self._names = list(names)
@@ -61,7 +67,7 @@ class TemplateEditorDialog(QDialog):
             ("{环境信息}", "环境信息"),
         ]:
             b = QPushButton(ph_label)
-            b.setToolTip(f"在光标位置插入 {ph_text}")
+            b.setToolTip(_("在光标位置插入 {ph}").format(ph=ph_text))
             b.clicked.connect(lambda checked, t=ph_text: self._insert_at_cursor(t))
             ph_row.addWidget(b)
         btn_def = QPushButton(_("默认结构"))
@@ -114,7 +120,7 @@ class TemplateEditorDialog(QDialog):
         self._prompt_edit.setPlainText(default)
 
     def _on_new(self):
-        name, ok = QInputDialog.getText(self, _("新建模板"), _("模板名称:"))
+        name, ok = self._message_service.get_text(_("新建模板"), _("模板名称:"))
         if ok and name.strip():
             if name not in self._names:
                 self._names.append(name)
@@ -135,10 +141,10 @@ class TemplateEditorDialog(QDialog):
         old = self._combo.currentText()
         if not old:
             return
-        new, ok = QInputDialog.getText(self, _("重命名模板"), _("新名称:"), text=old)
+        new, ok = self._message_service.get_text(_("重命名模板"), _("新名称:"), old)
         if ok and new.strip() and new != old:
             if new in self._names:
-                QMessageBox.warning(self, _("重命名失败"), _("模板名称 '{}' 已存在。").format(new))
+                self._message_service.warning(_("重命名失败"), _("模板名称 '{}' 已存在。").format(new))
                 return
             idx = self._names.index(old)
             self._names[idx] = new
@@ -151,15 +157,9 @@ class TemplateEditorDialog(QDialog):
         name = self._combo.currentText()
         if not name:
             return
-        if (
-            QMessageBox.question(
-                self,
-                _("确认删除"),
-                _("确定要删除模板 '{}' 吗？").format(name),
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            == QMessageBox.Yes
+        if self._message_service.question(
+            _("确认删除"),
+            _("确定要删除模板 '{}' 吗？").format(name),
         ):
             idx = self._combo.currentIndex()
             self._combo.removeItem(idx)

@@ -8,6 +8,8 @@ import threading
 from pathlib import Path
 from typing import Any, Union
 
+from core.prompts import DEFAULT_CORRECTION_PROMPT, DEFAULT_POLISH_PROMPT
+
 _config_lock = threading.Lock()
 
 BASE_DIR = Path(os.path.dirname(os.path.abspath(__file__))).parent
@@ -124,7 +126,8 @@ MODE_PARAMS_DEFAULTS = {
     "frame_interval": 0.1,
     "process_mode": "OCR + ASR（完整流程）",
     "sentinel_enabled": True,
-    "subtitle_mode": "流式字幕（去重）",
+    # R22：规范 token（stream/regular）；旧中文标签在 ConfigPanel getter 归一
+    "subtitle_mode": "stream",
     "s_drop_ratio": 0.5,
     "s_buffer_size": 8,
     "s_sim_threshold": 0.85,
@@ -247,14 +250,13 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
     "ai_correction.json": {
         "enabled": False,
         "engine": "llamacpp",
-        "correction_prompt": "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。",
+        "correction_prompt": DEFAULT_CORRECTION_PROMPT,
         "retry_on_failure": 2,
         "api_key": "",
         "base_url": "http://127.0.0.1:8080",
         "model": "",
         "timeout": 30,
         "batch_size": 5,
-        "context_window": 4,
         "summary_prompt": "",
         "correction_system_prompt": "",
         "output_format": "",
@@ -265,7 +267,7 @@ _CONFIG_TEMPLATES: dict[str, dict] = {
         "extract_environment": False,
         "seg_time_gap": 3.0,
         "enable_polish": False,
-        "polish_prompt": "你是一个专业的字幕润色专家。请对翻译/纠错后的字幕进行润色...",
+        "polish_prompt": DEFAULT_POLISH_PROMPT,
     },
     "api_presets.json": {
         "presets": {},

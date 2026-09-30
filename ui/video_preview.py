@@ -35,8 +35,30 @@ from PySide6.QtWidgets import (
 
 from core.i18n import _
 from core.logger import get_logger
+from ui.theme_tokens import FONT_FAMILY
 
 logger = get_logger(__name__)
+
+# ── 覆盖层绘制常量（原为散落的字面量/重复颜色）──
+OVERLAY_FONT_LARGE = 14  # 区域名标签
+OVERLAY_FONT_SMALL = 10  # 区域计数/提示
+OVERLAY_FONT_TINY = 9  # 小区域标签
+OVERLAY_SUBTITLE_FONT_RATIO = 0.035  # 字幕字号 = min(宽,高) × 该比例
+OVERLAY_SUBTITLE_FONT_MIN = 12
+
+#: 区域缺省色（无 color 字段且调色板为空时使用）
+DEFAULT_REGION_COLOR = QColor(0, 200, 100)
+#: 缺省色的半透明填充（绘制选区）
+DEFAULT_REGION_FILL = QColor(0, 200, 100, 30)
+#: 调色板（按区域序轮转）
+REGION_COLOR_POOL: tuple[QColor, ...] = (
+    QColor(0, 200, 100),
+    QColor(200, 100, 0),
+    QColor(100, 100, 255),
+    QColor(255, 200, 0),
+    QColor(200, 0, 150),
+    QColor(0, 200, 200),
+)
 
 
 def label_text_color(bg_color: QColor) -> QColor:
@@ -148,7 +170,9 @@ class _PreviewLabel(QLabel):
             "拖放视频/图片文件到此处\n或 Ctrl+V 粘贴文件路径\n\nSpace 播放/暂停 · ← → 快进/退 5s · , . 逐帧 · [ ] 100ms · S 切换速度"
         )
 
-    def set_refs(self, pixmap_fn, regions_fn, selected_fn, color_pool_fn, drawing_fn, start_fn, end_fn, subtitle_fn=None):
+    def set_refs(
+        self, pixmap_fn, regions_fn, selected_fn, color_pool_fn, drawing_fn, start_fn, end_fn, subtitle_fn=None
+    ):
         """设置对 VideoPreviewWidget 状态的引用。"""
         self._pixmap_ref = pixmap_fn
         self._regions_ref = regions_fn
@@ -178,12 +202,12 @@ class _PreviewLabel(QLabel):
         if pix is None or pix.isNull():
             # 占位文字 — 主标题居中 + 副标题底部（防播放栏遮挡）
             painter.setPen(QColor(0x9A, 0xA0, 0xA6))
-            painter.setFont(QFont("Microsoft YaHei", 14))
+            painter.setFont(QFont(FONT_FAMILY, OVERLAY_FONT_LARGE))
             lines = self._placeholder_text.split("\n")
             main_text = "\n".join(lines[:2])
             painter.drawText(QRect(0, 0, lw, lh - 56), Qt.AlignCenter, main_text)
             if len(lines) > 2:
-                painter.setFont(QFont("Microsoft YaHei", 10))
+                painter.setFont(QFont(FONT_FAMILY, OVERLAY_FONT_SMALL))
                 painter.setPen(QColor(0x9A, 0xA0, 0xA6, 120))
                 hint_text = "\n".join(lines[2:])
                 painter.drawText(QRect(0, lh - 60, lw, 50), Qt.AlignCenter, hint_text)
@@ -217,7 +241,7 @@ class _PreviewLabel(QLabel):
             rw = int(fw * img_w / pw)
             rh = int(fh * img_h / ph)
 
-            color = r.get("color", color_pool[i % len(color_pool)] if color_pool else QColor(0, 200, 100))
+            color = r.get("color", color_pool[i % len(color_pool)] if color_pool else DEFAULT_REGION_COLOR)
 
             # 半透明填充
             fill = QColor(color)
@@ -271,7 +295,7 @@ class _PreviewLabel(QLabel):
             # 区域名标签（带背景）
             name = r.get("name", "")
             if name:
-                painter.setFont(QFont("Microsoft YaHei", 9, QFont.Bold))
+                painter.setFont(QFont(FONT_FAMILY, OVERLAY_FONT_TINY, QFont.Bold))
                 fm = painter.fontMetrics()
                 tw = fm.horizontalAdvance(name) + 10
                 th = fm.height() + 4
@@ -294,8 +318,8 @@ class _PreviewLabel(QLabel):
             painter.save()
             painter.setRenderHint(QPainter.Antialiasing)
             painter.setRenderHint(QPainter.TextAntialiasing)
-            font_size = max(12, int(min(lw, lh) * 0.035))
-            sub_font = QFont("Microsoft YaHei", font_size, QFont.Bold)
+            font_size = max(OVERLAY_SUBTITLE_FONT_MIN, int(min(lw, lh) * OVERLAY_SUBTITLE_FONT_RATIO))
+            sub_font = QFont(FONT_FAMILY, font_size, QFont.Bold)
             painter.setFont(sub_font)
             fm = painter.fontMetrics()
             tw = fm.horizontalAdvance(sub_text) + 24
@@ -325,8 +349,8 @@ class _PreviewLabel(QLabel):
             w = abs(ep.x() - sp.x())
             h = abs(ep.y() - sp.y())
             # 半透明预览填充
-            painter.fillRect(x, y, w, h, QColor(0, 200, 100, 30))
-            painter.setPen(QPen(QColor(0, 200, 100), 1.5, Qt.DashLine))
+            painter.fillRect(x, y, w, h, DEFAULT_REGION_FILL)
+            painter.setPen(QPen(DEFAULT_REGION_COLOR, 1.5, Qt.DashLine))
             painter.drawRect(x, y, w, h)
             # 尺寸提示
             if w > 20 and h > 10:
@@ -372,14 +396,7 @@ class VideoPreviewWidget(QWidget):
         self._time_end: float = 0.0
         self._resize_handle = ""
         self._drag_offset = QPoint()
-        self._color_pool = [
-            QColor(0, 200, 100),
-            QColor(200, 100, 0),
-            QColor(100, 100, 255),
-            QColor(255, 200, 0),
-            QColor(200, 0, 150),
-            QColor(0, 200, 200),
-        ]
+        self._color_pool = list(REGION_COLOR_POOL)
         self._init_ui()
 
     def _init_ui(self):
@@ -641,7 +658,7 @@ class VideoPreviewWidget(QWidget):
     def _on_video_load_error(self, msg):
         """视频加载失败（在主线程执行）。"""
         logger.error("视频加载失败: %s", msg)
-        self._label._placeholder_text = _(f"❌ 加载失败: {msg}\n拖放视频文件到此处")
+        self._label._placeholder_text = _("❌ 加载失败: {msg}\n拖放视频文件到此处").format(msg=msg)
         self._label.update()
         self._load_worker = None
 
@@ -722,7 +739,7 @@ class VideoPreviewWidget(QWidget):
     def _on_audio_load_error(self, msg: str):
         """音频加载失败（在主线程执行）。"""
         logger.error("音频加载失败: %s", msg)
-        self._label._placeholder_text = _(f"❌ 加载失败: {msg}\n拖放文件到此处")
+        self._label._placeholder_text = _("❌ 加载失败: {msg}\n拖放文件到此处").format(msg=msg)
         self._label.update()
 
     def capture_test_frame(self, image: np.ndarray = None):
@@ -906,18 +923,30 @@ class VideoPreviewWidget(QWidget):
             return  # 无音频流（静音播放）
         self._play_audio_source(QUrl.fromLocalFile(self._audio_temp))
 
-    def _on_stop_playback(self):
-        """停止播放并回到起点。"""
+    def stop_playback(self, reset_position: bool = True):
+        """停止播放。
+
+        ``reset_position=False`` 用于"先停止、再跳到指定时间"的场景（点击/编辑结果
+        行跳转）。此时**不能**回到起点：``reset_position=True`` 分支里的
+        ``seek_to(0.0)`` 会 emit ``position_changed(0.0)``，结果表据此
+        ``sync_play_position`` 先高亮/滚动到覆盖 0 秒的首行 —— 用户看到的就是
+        "跳转到结果列表初始行"（若调用方随后忘记再 emit 目标时间，就会永久停在首行）。
+        """
         if self._player:
             self._player.stop()
         if self._audio_player:
             self._audio_player.stop()
         self._is_playing = False
         self._btn_play.setText("▶")
-        self._current_position = 0.0
-        self._update_preview_label()
-        self._set_slider(0.0)
-        self.seek_to(0.0)
+        if reset_position:
+            self._current_position = 0.0
+            self._update_preview_label()
+            self._set_slider(0.0)
+            self.seek_to(0.0)
+
+    def _on_stop_playback(self):
+        """停止播放并回到起点（停止按钮语义）。"""
+        self.stop_playback(reset_position=True)
 
     def _skip(self, delta_sec: float):
         """前进/后退指定秒数。"""
@@ -1076,7 +1105,7 @@ class VideoPreviewWidget(QWidget):
     def add_region(self, x: int, y: int, w: int, h: int, name: str = "") -> dict:
         if not name:
             self._region_counter += 1
-            name = f"{_('区域')}{self._region_counter}"
+            name = _("区域{idx}").format(idx=self._region_counter)
         color = self._color_pool[len(self._regions) % len(self._color_pool)]
         r = {
             "name": name,

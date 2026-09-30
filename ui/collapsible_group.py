@@ -37,6 +37,10 @@ class CollapsibleGroup(QWidget):
         self._content_layout: QVBoxLayout = None  # type: ignore
         self._toggle_btn: QToolButton = None  # type: ignore
         self._title_label: QLabel = None  # type: ignore
+        # 直接持有子控件引用：此前用 findChild(..., "objectName") 字符串反射查找，
+        # 每次折叠都做一次递归子树搜索，且嵌套分组时依赖遍历顺序才不取错控件。
+        self._header: QWidget = None  # type: ignore
+        self._content: QWidget = None  # type: ignore
         self._build(title)
 
     @property
@@ -77,6 +81,7 @@ class CollapsibleGroup(QWidget):
 
         # ── 标题栏 ──
         header = QWidget()
+        self._header = header
         header.setObjectName("collapsibleHeader")
         header.setCursor(Qt.PointingHandCursor)  # type: ignore[attr-defined]
         header.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -100,6 +105,7 @@ class CollapsibleGroup(QWidget):
 
         # ── 内容区域 ──
         content = QWidget()
+        self._content = content
         content.setObjectName("collapsibleContent")
         content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._content_layout = QVBoxLayout(content)
@@ -115,8 +121,8 @@ class CollapsibleGroup(QWidget):
     def _update_border_radius(self, collapsed: bool):
         """动态调整整体和标题栏的折叠属性供 QSS 样式渲染，避免 setStyleSheet 抹除全局样式。"""
         self.setProperty("collapsed", "true" if collapsed else "false")
-        header = self.findChild(QWidget, "collapsibleHeader")
-        if header:
+        header = self._header
+        if header is not None:
             header.setProperty("collapsed", "true" if collapsed else "false")
             header.style().unpolish(header)
             header.style().polish(header)
@@ -128,8 +134,8 @@ class CollapsibleGroup(QWidget):
             return
         self._collapsed = coll
         # 内容区域
-        content = self.findChild(QWidget, "collapsibleContent")
-        if content:
+        content = self._content
+        if content is not None:
             content.setVisible(not coll)
         # 箭头切换
         self._toggle_btn.setArrowType(Qt.RightArrow if coll else Qt.DownArrow)  # type: ignore[attr-defined]

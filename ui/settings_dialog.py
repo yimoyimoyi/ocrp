@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
-    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -40,8 +39,16 @@ from PySide6.QtWidgets import (
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.i18n import _
-from core.utils import fetch_models_from_url, populate_model_combo
+from core.utils import (
+    SUBTITLE_MODE_REGULAR,
+    SUBTITLE_MODE_STREAM,
+    fetch_models_from_url,
+    normalize_subtitle_mode,
+    populate_model_combo,
+)
 from ui.collapsible_group import CollapsibleGroup
+from ui.services import MessageService
+from ui.theme_tokens import muted_text_style
 
 # ══════════════════════════════════════════════════════════════════
 # 字段描述表
@@ -66,11 +73,15 @@ from ui.collapsible_group import CollapsibleGroup
 
 
 def _map_subtitle_mode(value) -> str:
-    """字幕模式加载：兼容内部标识（stream/regular，4c.3）与历史翻译文本。"""
-    v = str(value)
-    if v == "regular" or "常规" in v:
+    """字幕模式加载：把规范 token / 历史翻译文本统一映射为显示标签。"""
+    if normalize_subtitle_mode(value) == SUBTITLE_MODE_REGULAR:
         return _("常规字幕（固定间隔）")
-    return _("流式字幕（去重）")  # stream / 旧流式文本
+    return _("流式字幕（去重）")
+
+
+def _unmap_subtitle_mode(label: str) -> str:
+    """字幕模式保存：把显示标签（含历史翻译文本）归一为规范 token。"""
+    return normalize_subtitle_mode(label)
 
 
 def _clean_summary_load(value) -> str:
@@ -163,6 +174,7 @@ _FIELDS: list[dict] = [
         tooltip="流式：哨兵去重实时输出\n常规：固定间隔采样",
         tr_tooltip=True,
         load_map=_map_subtitle_mode,
+        sync_get=lambda w: _unmap_subtitle_mode(w.currentData() or w.currentText()),
         on_load="_on_subtitle_mode_changed",
         on_change="_on_subtitle_mode_changed",
         hint="toolbar",
@@ -743,6 +755,26 @@ _FIELDS: list[dict] = [
         domain="corr",
     ),
     dict(
+        # 回归修复：enable_polish 有开关但 polish_prompt 此前**无界面**，
+        # 用户无法自定义润色提示词（纠错/系统/摘要提示词都可编辑）。
+        # 该提示词必须保留 {待校对文本} 占位符，否则提示词里没有正文。
+        key="polish_prompt",
+        tab="correction",
+        group="提示词配置",
+        attr="_corr_polish_prompt",
+        widget="text",
+        label="润色提示词:",
+        tr_label=True,
+        min_height=60,
+        max_height=120,
+        placeholder="润色提示词（必须包含 {待校对文本} 占位符）",
+        tr_placeholder=True,
+        default="",
+        domain="corr",
+        tooltip="润色必须包含 {待校对文本} 占位符；缺少占位符时会自动回落内置默认提示词",
+        tr_tooltip=True,
+    ),
+    dict(
         # R12（P1-4）：模板编辑器入口并入设置页（模板仍按区域独立选择）
         tab="correction",
         group="提示词配置",
@@ -821,23 +853,6 @@ _FIELDS: list[dict] = [
         suffix=" RPM",
         tr_suffix=True,
         tooltip="每分钟最大请求数，0 表示不限制",
-        tr_tooltip=True,
-    ),
-    dict(
-        key="seg_time_gap",
-        tab="correction",
-        group="批量参数",
-        attr="_seg_time_gap",
-        widget="double_spin",
-        label="上下文时间间隔:",
-        tr_label=True,
-        min=0.0,
-        max=60.0,
-        default=3.0,
-        suffix=" 秒",
-        tr_suffix=True,
-        domain="corr",
-        tooltip="上下文窗口中，跳过时间间隔超过此值的行",
         tr_tooltip=True,
     ),
     dict(
@@ -1084,8 +1099,10 @@ class SettingsDialog(QDialog):
         filter_keywords: list[str] | None = None,
         engine_manager=None,
         current_engine: str = "",
+        message_service: MessageService | None = None,
     ):
         super().__init__(parent)
+        self._message_service = message_service or MessageService(self)
         self.setWindowTitle(_("⚙ 参数设置"))
         self.setMinimumSize(800, 640)
         self.resize(860, 700)
@@ -1114,7 +1131,7 @@ class SettingsDialog(QDialog):
         search_box.addWidget(self._search_input, 1)
 
         self._search_match_label = QLabel("")
-        self._search_match_label.setStyleSheet("color: #78909c; font-size: 12px;")
+        self._search_match_label.setStyleSheet(muted_text_style(self))
         search_box.addWidget(self._search_match_label)
         layout.addLayout(search_box)
 
@@ -1175,7 +1192,7 @@ class SettingsDialog(QDialog):
                 self._tabs.setTabText(i, title)
 
         if total_matches > 0:
-            self._search_match_label.setText(_(f"找到 {total_matches} 个匹配项"))
+            self._search_match_label.setText(_("找到 {count} 个匹配项").format(count=total_matches))
             if first_match_tab_idx >= 0:
                 self._tabs.setCurrentIndex(first_match_tab_idx)
         else:
@@ -1222,14 +1239,10 @@ class SettingsDialog(QDialog):
         """恢复出厂：重置全部字段为域默认值（二次确认；OK 时落盘，取消不生效）。"""
         if self._registry is None:
             return
-        ret = QMessageBox.question(
-            self,
+        if not self._message_service.question(
             _("恢复出厂设置"),
             _("确定将所有参数恢复为默认值吗？\n（API Key 等连接配置也将被清空，点击「确定」后生效）"),
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if ret != QMessageBox.Yes:
+        ):
             return
         # 业务字段（asr/corr）→ 域 DEFAULTS；UI 字段 → spec default
         for spec in _FIELDS:
@@ -1271,14 +1284,10 @@ class SettingsDialog(QDialog):
     def reject(self):
         """取消/关闭时若有未保存更改，先确认再放弃。"""
         if self._dirty:
-            ret = QMessageBox.question(
-                self,
+            if not self._message_service.question(
                 _("未保存的更改"),
                 _("有参数尚未保存，确定放弃更改吗？"),
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if ret != QMessageBox.Yes:
+            ):
                 return
         super().reject()
 
@@ -1316,6 +1325,10 @@ class SettingsDialog(QDialog):
         if wtype == "check":
             return widget.isChecked()
         if wtype == "combo":
+            # 优先取 item data（原始未翻译选项），保证保存值不受当前语言影响
+            data = widget.currentData()
+            if data is not None:
+                return self._rev_map(str(data), *spec["options"])
             return self._rev_map(widget.currentText(), *spec["options"])
         if wtype == "combo_data":
             return widget.currentData() or ""
@@ -1468,7 +1481,7 @@ class SettingsDialog(QDialog):
         """构建一个 CollapsibleGroup：form 布局（带标签行）或 vbox 布局。"""
         # R12（P1-3）：折叠组标题标注「·高级」，帮助普通用户识别低频调优项
         if item.get("collapsed"):
-            title = f"{title} ·高级"
+            title = _("{title} ·高级").format(title=title)
         group = CollapsibleGroup(title, collapsed=bool(item.get("collapsed")))
         spacing = item.get("spacing", 8)
         if item["kind"] == "vbox":
@@ -1491,6 +1504,9 @@ class SettingsDialog(QDialog):
             w = QComboBox()
             if spec.get("tr_options"):
                 w.addItems([_(o) for o in spec["options"]])
+                # 同步写入原始（未翻译）选项，保存路径据此还原，避免语言相关值入库
+                for _idx, _opt in enumerate(spec["options"]):
+                    w.setItemData(_idx, _opt)
             else:
                 w.addItems(list(spec["options"]))
             if spec.get("init_text"):
@@ -1728,7 +1744,7 @@ class SettingsDialog(QDialog):
         bridge.done.connect(self._on_eng_models_done)
 
         def _on_eng_err(m: str):
-            self._eng_model_status.setText(f"❌ {m[:40]}")
+            self._eng_model_status.setText(_("❌ {msg}").format(msg=m[:40]))
             self._eng_model_status.setToolTip(m)
 
         bridge.err.connect(_on_eng_err)
@@ -1746,7 +1762,7 @@ class SettingsDialog(QDialog):
     def _on_eng_models_done(self, models):
         if models:
             populate_model_combo(self._eng_model, models)
-            self._eng_model_status.setText(f"✅ {len(models)} 个")
+            self._eng_model_status.setText(_("✅ {n} 个").format(n=len(models)))
         else:
             self._eng_model_status.setText(_("⚠ 未获取到"))
 
@@ -1772,14 +1788,10 @@ class SettingsDialog(QDialog):
         mgr = APIPresetManager()
         name = f"{self._engine_combo.currentText()} 预设"
         if name in mgr.get_names():
-            ret = QMessageBox.question(
-                self,
+            if not self._message_service.question(
                 _("覆盖预设"),
                 _("预设「%s」已存在，确定用当前配置覆盖吗？") % name,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if ret != QMessageBox.Yes:
+            ):
                 return
         mgr.add_preset(
             name,
@@ -1790,7 +1802,7 @@ class SettingsDialog(QDialog):
                 "timeout": self._eng_timeout.value(),
             },
         )
-        self._eng_model_status.setText(f"✅ 已保存: {name}")
+        self._eng_model_status.setText(_("✅ 已保存: {name}").format(name=name))
 
     def get_engine_config(self) -> tuple[str, dict]:
         """返回 (engine_name, config_dict) 供主窗口保存。"""
@@ -1804,7 +1816,9 @@ class SettingsDialog(QDialog):
 
     # ── Tab 2: 字幕模式联动 ──
     def _on_subtitle_mode_changed(self, mode: str):
-        is_streaming = mode == _("流式字幕（去重）") or "流式" in mode
+        # 优先使用 item data（原始未翻译值），回落到显示文本后归一为规范 token
+        data = self._subtitle_mode.currentData()
+        is_streaming = normalize_subtitle_mode(data or mode) == SUBTITLE_MODE_STREAM
         self._s_group.setVisible(is_streaming)
         self._r_group.setVisible(not is_streaming)
 
@@ -1892,12 +1906,7 @@ class SettingsDialog(QDialog):
             self._filter_list.takeItem(row)
 
     def _on_clear_filters(self):
-        if (
-            QMessageBox.question(
-                self, "确认清空", "确定要清空所有过滤关键词吗？", QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-            )
-            == QMessageBox.Yes
-        ):
+        if self._message_service.question("确认清空", "确定要清空所有过滤关键词吗？"):
             self._filter_items.clear()
             self._filter_list.clear()
 
@@ -1951,6 +1960,13 @@ class SettingsDialog(QDialog):
         row_layout.addWidget(btn_x)
         row_layout.addStretch()
 
+        # 直接持有子控件引用：此前 _get_sort_row_info 用
+        # findChild(QLineEdit, "sortPrefix") 字符串反射查找，objectName 一旦
+        # 改名就静默返回 None → 前缀/后缀被读成空串（数据悄悄丢失）。
+        row._sort_prefix_edit = prefix_edit  # type: ignore[attr-defined]
+        row._sort_chip = chip  # type: ignore[attr-defined]
+        row._sort_suffix_edit = suffix_edit  # type: ignore[attr-defined]
+
         item = QListWidgetItem()
         item.setSizeHint(row.sizeHint())
         self._sort_list.addItem(item)
@@ -1966,10 +1982,10 @@ class SettingsDialog(QDialog):
                 break
 
     def _get_sort_row_info(self, row: QWidget):
-        prefix_edit = row.findChild(QLineEdit, "sortPrefix")
-        suffix_edit = row.findChild(QLineEdit, "sortSuffix")
-        chip = row.findChild(QLabel, "regionChip")
-        if chip:
+        prefix_edit = getattr(row, "_sort_prefix_edit", None)
+        suffix_edit = getattr(row, "_sort_suffix_edit", None)
+        chip = getattr(row, "_sort_chip", None)
+        if chip is not None:
             prefix = prefix_edit.text().strip() if prefix_edit else ""
             name = chip.text()
             suffix = suffix_edit.text().strip() if suffix_edit else ""
@@ -2029,6 +2045,9 @@ class SettingsDialog(QDialog):
         # corr_prompt 空值不覆盖文件默认提示词（truthy 语义，R12 修复保留）
         if not corr_patch.get("correction_prompt"):
             corr_patch.pop("correction_prompt", None)
+        # polish_prompt 同理：空值不覆盖（AICorrector 侧对无占位符/空值统一回落内置默认）
+        if not str(corr_patch.get("polish_prompt") or "").strip():
+            corr_patch.pop("polish_prompt", None)
         # asr_model_path（UI 选择状态）→ 推导 model_size/model_dir（域对象单侧逻辑）
         path_spec = next((s for s in _FIELDS if s.get("key") == "asr_model_path"), None)
         if path_spec:
@@ -2051,7 +2070,7 @@ class SettingsDialog(QDialog):
 
         base_url = self._corr_api_url.text().strip()
         if not base_url:
-            QMessageBox.warning(self, _("测试连接"), _("请先填写 Base URL"))
+            self._message_service.warning(_("测试连接"), _("请先填写 Base URL"))
             return
         api_key = self._corr_api_key.text()
         model = self._corr_api_model.currentText().strip()
@@ -2072,11 +2091,11 @@ class SettingsDialog(QDialog):
         self._corr_model_status.setText("⏳ 测试连接中...")
 
     def _on_test_conn_result(self, ok: bool, msg: str):
-        self._corr_model_status.setText(f"{'✅' if ok else '❌'} {msg}")
+        self._corr_model_status.setText((_("✅ {msg}") if ok else _("❌ {msg}")).format(msg=msg))
         if ok:
-            QMessageBox.information(self, _("测试连接"), f"✅ {msg}")
+            self._message_service.info(_("测试连接"), _("✅ {msg}").format(msg=msg))
         else:
-            QMessageBox.warning(self, _("测试连接失败"), f"❌ {msg}")
+            self._message_service.warning(_("测试连接失败"), _("❌ {msg}").format(msg=msg))
 
     def _on_open_template_editor(self):
         """打开模板编辑器（R12 P1-4：入口并入设置页提示词配置组）。"""
@@ -2100,7 +2119,7 @@ class SettingsDialog(QDialog):
         bridge.done.connect(self._on_corr_fetch_done)
 
         def _on_corr_err(msg: str):
-            self._corr_model_status.setText(f"❌ {msg[:40]}")
+            self._corr_model_status.setText(_("❌ {msg}").format(msg=msg[:40]))
             self._corr_model_status.setToolTip(msg)
 
         bridge.err.connect(_on_corr_err)
@@ -2118,7 +2137,7 @@ class SettingsDialog(QDialog):
     def _on_corr_fetch_done(self, models):
         if models:
             self._set_corr_model_list(models)
-            self._corr_model_status.setText(f"✅ {len(models)} 个")
+            self._corr_model_status.setText(_("✅ {n} 个").format(n=len(models)))
         else:
             self._corr_model_status.setText("⚠ 未获取到模型")
 
@@ -2136,8 +2155,7 @@ class SettingsDialog(QDialog):
         # 模型非空校验（R11 条件化）：仅当启用 AI 纠错/润色时才强制——
         # 纯 OCR 用户此前也被拦在"模型名称未设置"弹窗后无法保存任何设置。
         if self._corr_enabled.isChecked() and not self._corr_api_model.currentText().strip():
-            QMessageBox.warning(
-                self,
+            self._message_service.warning(
                 _("模型名称未设置"),
                 _("请先填写 API 模型名称（如 deepseek-chat / gpt-4o），\n或选择包含模型的 API 预设。"),
             )

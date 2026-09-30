@@ -1,6 +1,5 @@
 """ui 包初始化。"""
 
-from core.workers import AICorrectionWorker as AICorrectionWorker
 from core.workers import OCRWorker as OCRWorker
 from core.workers import VideoProcessWorker as VideoProcessWorker
 from core.workers import WorkerSignals as WorkerSignals

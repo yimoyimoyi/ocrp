@@ -482,6 +482,18 @@ msgstr "确认删除"
 msgid "请输入预设名称。"
 msgstr "请输入预设名称。"
 
+msgid "确定要删除预设「{name}」吗？"
+msgstr "确定要删除预设「{name}」吗？"
+
+msgid "找到 {count} 个匹配项"
+msgstr "找到 {count} 个匹配项"
+
+msgid "❌ 加载失败: {msg}\n拖放视频文件到此处"
+msgstr "❌ 加载失败: {msg}\n拖放视频文件到此处"
+
+msgid "❌ 加载失败: {msg}\n拖放文件到此处"
+msgstr "❌ 加载失败: {msg}\n拖放文件到此处"
+
 msgid "https://api.openai.com/v1"
 msgstr "https://api.openai.com/v1"
 
@@ -866,8 +878,6 @@ msgstr "重试次数:"
 msgid "处理模式:"
 msgstr "处理模式:"
 
-msgid "帧间隔:"
-msgstr "帧间隔:"
 
 msgid "Beam Size:"
 msgstr "Beam Size:"
@@ -1057,3 +1067,108 @@ msgstr "排序规则（可拖动调整顺序，编辑前缀/后缀，点✕删�
 
 msgid "原版"
 msgstr "原版"
+
+msgid "模板: {name} — {desc}"
+msgstr "模板: {name} — {desc}"
+
+msgid "✅ 模板 [{name}] 已保存"
+msgstr "✅ 模板 [{name}] 已保存"
+
+msgid "🗑 模板 [{name}] 已删除"
+msgstr "🗑 模板 [{name}] 已删除"
+
+msgid "✅ 已添加过滤器: {keyword}"
+msgstr "✅ 已添加过滤器: {keyword}"
+
+msgid "🗑 已移除过滤器: {keyword}"
+msgstr "🗑 已移除过滤器: {keyword}"
+
+msgid "⚠ 移除失败: 关键词 '{keyword}' 不存在"
+msgstr "⚠ 移除失败: 关键词 '{keyword}' 不存在"
+
+msgid "已加载: {name}"
+msgstr "已加载: {name}"
+
+msgid "已加载音频: {name}（仅支持 ASR 和纠错）"
+msgstr "已加载音频: {name}（仅支持 ASR 和纠错）"
+
+msgid "⚠ 环境提取失败: {err}"
+msgstr "⚠ 环境提取失败: {err}"
+
+msgid "🗑 已删除 {deleted} 条包含关键词的结果"
+msgstr "🗑 已删除 {deleted} 条包含关键词的结果"
+
+msgid "已跳转到 {time}"
+msgstr "已跳转到 {time}"
+
+msgid "✅ 已导入 {count} 个模板"
+msgstr "✅ 已导入 {count} 个模板"
+
+msgid "✅ 已导出模板到: {name}"
+msgstr "✅ 已导出模板到: {name}"
+
+msgid "处理中... {cur}s / {total}s | 哨兵: {sentinel}"
+msgstr "处理中... {cur}s / {total}s | 哨兵: {sentinel}"
+
+msgid "✅ 完成: {n} 条结果 | 批量纠错完成"
+msgstr "✅ 完成: {n} 条结果 | 批量纠错完成"
+
+msgid "⚠ 批量纠错出错: {err}"
+msgstr "⚠ 批量纠错出错: {err}"
+
+msgid "❌ 处理失败: {err}"
+msgstr "❌ 处理失败: {err}"
+
+msgid "✅ 已导出: {name}"
+msgstr "✅ 已导出: {name}"
+
+msgid "共 {total} 行，未选中任何行"
+msgstr "共 {total} 行，未选中任何行"
+
+msgid "已选中 {count} / {total} 行"
+msgstr "已选中 {count} / {total} 行"
+
+msgid "({count} 条)"
+msgstr "({count} 条)"
+
+msgid "{count}/{total} 个文件"
+msgstr "{count}/{total} 个文件"
+
+msgid "{count} 个文件"
+msgstr "{count} 个文件"
+
+msgid "导出为 {fmt}"
+msgstr "导出为 {fmt}"
+
+msgid "❌ {msg}"
+msgstr "❌ {msg}"
+
+msgid "✅ {msg}"
+msgstr "✅ {msg}"
+
+msgid "✅ 已保存: {name}"
+msgstr "✅ 已保存: {name}"
+
+msgid "{title} ·高级"
+msgstr "{title} ·高级"
+
+msgid "在光标位置插入 {ph}"
+msgstr "在光标位置插入 {ph}"
+
+msgid "区域{idx}"
+msgstr "区域{idx}"
+
+msgid "模板导入失败:\n{err}"
+msgstr "模板导入失败:\n{err}"
+
+msgid "模板导出失败:\n{err}"
+msgstr "模板导出失败:\n{err}"
+
+msgid "润色提示词:"
+msgstr "润色提示词:"
+
+msgid "润色提示词（必须包含 {待校对文本} 占位符）"
+msgstr "润色提示词（必须包含 {待校对文本} 占位符）"
+
+msgid "润色必须包含 {待校对文本} 占位符；缺少占位符时会自动回落内置默认提示词"
+msgstr "润色必须包含 {待校对文本} 占位符；缺少占位符时会自动回落内置默认提示词"

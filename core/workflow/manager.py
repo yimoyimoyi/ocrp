@@ -5,6 +5,7 @@
 """
 
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
@@ -17,7 +18,6 @@ from core.i18n import _
 from core.logger import get_logger
 from core.utils import MODE_ASR_ONLY, MODE_OCR_ASR_FULL, MODE_OCR_ONLY
 from core.workers import (
-    AICorrectionWorker,
     AudioProcessWorker,
     BatchCorrectionWorker,
     BatchPolishWorker,
@@ -31,6 +31,29 @@ from core.workflow.correction_flow import CorrectionFlow
 from core.workflow.ocr_flow import OCRFlow
 
 logger = get_logger(__name__)
+
+#: terminate() 后仍未退出的线程引用 —— 见 WorkflowManager.cleanup()
+_ZOMBIE_WORKERS: list = []
+
+#: terminate() 之后回收线程的上限（毫秒）。terminate 是异步的，这里只做有界回收，
+#: 仍不退出则保留引用到进程结束（见 _ZOMBIE_WORKERS）。
+TERMINATE_REAP_MS = 500
+
+#: cleanup() 第一阶段（等待线程自行退出）的默认**全局**预算（毫秒）
+DEFAULT_CLEANUP_WAIT_BUDGET_MS = 3000
+
+#: 空闲态按钮状态（单一来源）。
+#: 处理结束/出错后应恢复到此状态；此前 ui/main_window._on_process_error 手工逐个
+#: setEnabled，漏掉了 polish/polish_all —— 处理出错后润色按钮会一直保持禁用。
+IDLE_BUTTON_STATES: dict[str, bool] = {
+    "start": True,
+    "stop": False,
+    "pause": False,
+    "correction": True,
+    "correction_all": True,
+    "polish": True,
+    "polish_all": True,
+}
 
 
 class WorkflowManager(QObject):
@@ -71,8 +94,6 @@ class WorkflowManager(QObject):
         self._image_worker: ImageProcessWorker | None = None
         self._batch_worker: BatchProcessWorker | None = None
         self._frame_processor: FrameProcessor | None = None
-        self._correction_workers: list[AICorrectionWorker] = []
-        self._correction_workers_lock = threading.Lock()
         self._batch_correction_workers: list[BatchCorrectionWorker] = []
         self._batch_correction_workers_lock = threading.Lock()
         self._batch_completed_count: int = 0
@@ -101,6 +122,10 @@ class WorkflowManager(QObject):
         self._polish_completed_batches: int = 0
         self._polish_pending_batches: deque = deque()
         self._polish_workers: list[BatchPolishWorker] = []
+        # 已完成会话但线程尚未真正退出的润色 worker（见 _on_polish_finished）：
+        # 必须保留 Python 引用直到 QThread 结束，否则会被 GC 掉并触发
+        # "QThread: Destroyed while thread is still running" 崩溃。
+        self._polish_draining: list[BatchPolishWorker] = []
         self._polish_workers_lock = threading.Lock()
 
         # ── 批量状态（P1-6：删除假源 _batch_files——批量队列统一由
@@ -339,7 +364,7 @@ class WorkflowManager(QObject):
         # "QThread: Destroyed while thread is still running" GC 崩溃）
         self._polish_session_generation += 1
         with self._polish_workers_lock:
-            alive_polish = [w for w in self._polish_workers if w.isRunning()]
+            alive_polish = [w for w in (*self._polish_workers, *self._polish_draining) if w.isRunning()]
             for w in alive_polish:
                 w.stop()
         for w in alive_polish:  # 锁外 wait，避免阻塞 append
@@ -348,6 +373,7 @@ class WorkflowManager(QObject):
                 w.wait(1000)
         with self._polish_workers_lock:
             self._polish_workers.clear()
+            self._polish_draining.clear()
         self._polish_pending_batches.clear()
 
         # 批量纠错（并行 worker 列表；P1-1：代际作废 + 三段式）
@@ -367,22 +393,14 @@ class WorkflowManager(QObject):
         with self._batch_correction_workers_lock:
             self._batch_correction_workers.clear()
 
-        # 单个 AI 纠错线程
-        with self._correction_workers_lock:
-            for w in self._correction_workers:
-                if w.isRunning():
-                    if hasattr(w, "stop"):
-                        w.stop()
-                    else:
-                        w.quit()
-
         # 🔥 重要：释放 ASR 引擎（停止时若 _stream_proc 仍在运行，
         # 不释放会导致 GPU 显存泄漏，影响后续 OCR/ASR 使用）
         if self._asr_mgr:
             self._asr_mgr.release_all_engines()
 
         self.status_msg.emit(_("已停止"))
-        self._set_buttons(start=True, stop=False, correction=True, correction_all=True, polish=True, polish_all=True)
+        self._set_buttons(**IDLE_BUTTON_STATES)
+        self.progress_val.emit(0)
         self.progress_val.emit(0)
 
     def pause_processing(self):
@@ -433,8 +451,19 @@ class WorkflowManager(QObject):
         else:
             self.status_msg.emit("当前无暂停的任务")
 
-    def cleanup(self):
-        """快速清理所有线程 —— 立即 terminate，不阻塞 UI 关闭。"""
+    def cleanup(self, total_wait_budget_ms: int = DEFAULT_CLEANUP_WAIT_BUDGET_MS):
+        """清理所有线程 —— 有界同步清理，供关窗时调用。
+
+        与旧实现的区别（关窗崩溃/挂死隐患）：
+        - 等待阶段使用**全局**预算而非"每线程 2s"。旧写法在 N 个 worker 串行等待时
+          最坏为 N×2s，作者因此把 ``cleanup()`` 丢进裸 ``threading.Thread`` 后台执行；
+          但那样 Qt 对象会在主线程拆除 QApplication 的同时被外部线程访问，且进程退出
+          会中途杀掉清理线程，反而更危险。
+        - 不再派生内部"后台等待"线程：它会在 ``QApplication`` 拆除后继续对可能已销毁的
+          QThread 调用 ``wait()``。
+        - terminate 后仍未退出的线程进入 ``_ZOMBIE_WORKERS`` 保留引用，避免 Python GC
+          在 QThread 仍在运行时销毁它（"QThread: Destroyed while thread is still running"）。
+        """
         try:
             logger.info("开始快速清理...")
         except UnicodeEncodeError:
@@ -452,12 +481,11 @@ class WorkflowManager(QObject):
         with self._batch_correction_workers_lock:
             workers.extend([w for w in self._batch_correction_workers if w.isRunning()])
             self._batch_correction_workers.clear()
-        with self._correction_workers_lock:
-            workers.extend([w for w in self._correction_workers if w.isRunning()])
-            self._correction_workers.clear()
         with self._polish_workers_lock:  # P1-2：cleanup 此前遗漏润色 worker（关窗崩溃隐患）
             workers.extend([w for w in self._polish_workers if w.isRunning()])
+            workers.extend([w for w in self._polish_draining if w.isRunning()])
             self._polish_workers.clear()
+            self._polish_draining.clear()
         if self._video_worker and self._video_worker.isRunning():
             workers.append(self._video_worker)
         if self._audio_worker and self._audio_worker.isRunning():
@@ -478,19 +506,28 @@ class WorkflowManager(QObject):
                     w.quit()
             except Exception as e:
                 logger.warning("工作线程清理异常: %s", e)
-        # 等待 2 秒让线程自行退出
+
+        # ── 第二步：全局预算内等待线程自行退出 ──
+        deadline = time.monotonic() + max(0, total_wait_budget_ms) / 1000.0
         for w in workers:
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                break
             try:
-                w.wait(2000)
+                w.wait(remaining_ms)
             except Exception as e:
                 logger.warning("工作线程清理异常: %s", e)
-        # 仅对仍未退出的线程使用 terminate（最后手段）
+
+        # ── 第三步：仅对仍未退出的线程使用 terminate（最后手段） ──
         for w in workers:
             try:
-                if w.isRunning():
-                    logger.warning("线程未响应 quit，强制终止: %s", w.__class__.__name__)
-                    w.terminate()
-                    w.wait(1000)
+                if not w.isRunning():
+                    continue
+                logger.warning("线程未响应 quit，强制终止: %s", w.__class__.__name__)
+                w.terminate()
+                if not w.wait(TERMINATE_REAP_MS):
+                    # terminate 是异步的；仍存活则保留引用防 GC 销毁运行中的 QThread
+                    _ZOMBIE_WORKERS.append(w)
             except Exception as e:
                 logger.warning("工作线程清理异常: %s", e)
 
@@ -503,19 +540,7 @@ class WorkflowManager(QObject):
             except Exception as e:
                 logger.warning("ASR 引擎关闭异常: %s", e)
 
-        # ── 后台线程静默等待 terminate 完成 ──
-        def _wait_workers():
-            for w in workers:
-                try:
-                    w.wait(5000)  # 最长等 5 秒（后台，不影响 UI）
-                except Exception as e:
-                    logger.debug("工作线程等待超时: %s", e)
-            logger.info("后台清理完成")
-
-        if workers:
-            threading.Thread(target=_wait_workers, daemon=True).start()
-
-        logger.info("清理信号已发出")
+        logger.info("清理完成（workers=%d）", len(workers))
 
     # ═══════════════════════════════════════════════════════════════
     # 子域委托

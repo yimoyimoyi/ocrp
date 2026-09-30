@@ -15,6 +15,7 @@ import json
 import os
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -66,9 +67,48 @@ def _get_cache_key(
 # ── 缓存 TTL（秒） ──
 CACHE_TTL_SECONDS = 7 * 24 * 3600  # 7 天
 
+#: 网关默认输出预算。纠错/润色调用方会按内容长度显式给足（见 AICorrector）。
+DEFAULT_MAX_TOKENS = 2048
+#: 截断自愈重试的预算上限（不超过主流模型的输出上限）
+TRUNCATION_ESCALATION_CEILING = 8192
+
 # ── 进程内内存缓存（一级缓存，避免重复文件 I/O）──
-_memory_cache: dict[str, Any] = {}
+# 值为 (response, cached_at)：此前只存 response，内存缓存既无 TTL 也无容量上限，
+# 长时间运行（批量纠错成千上万行）会无界增长，且会永久返回过期响应 —— 文件缓存
+# 的 7 天 TTL 被内存层完全绕过。使用 OrderedDict 以便 LRU 淘汰。
+MEMORY_CACHE_MAX_ENTRIES = 512
+_memory_cache: OrderedDict[str, tuple[Any, float]] = OrderedDict()
 _memory_cache_lock = threading.Lock()
+
+
+def _memory_cache_get(cache_key: str) -> Any:
+    """读取内存缓存（遵守 TTL + LRU 续期）。未命中/已过期返回 None。"""
+    now = time.time()
+    with _memory_cache_lock:
+        entry = _memory_cache.get(cache_key)
+        if entry is None:
+            return None
+        value, cached_at = entry
+        if (now - cached_at) > CACHE_TTL_SECONDS:
+            del _memory_cache[cache_key]
+            return None
+        _memory_cache.move_to_end(cache_key)
+        return value
+
+
+def _memory_cache_put(cache_key: str, value: Any) -> None:
+    """写入内存缓存并按 LRU 淘汰超出容量的条目。"""
+    with _memory_cache_lock:
+        _memory_cache[cache_key] = (value, time.time())
+        _memory_cache.move_to_end(cache_key)
+        while len(_memory_cache) > MEMORY_CACHE_MAX_ENTRIES:
+            _memory_cache.popitem(last=False)
+
+
+def clear_memory_cache() -> None:
+    """清空内存缓存（测试与「重新加载配置」后强制重取时使用）。"""
+    with _memory_cache_lock:
+        _memory_cache.clear()
 
 
 def _is_meta_response(resp) -> bool:
@@ -106,7 +146,8 @@ def _load_cache_from_file(cache_key: str, log_title: str):
                         continue  # 防御混合损坏条目
                     if entry.get("cache_key") == cache_key:
                         resp = entry.get("response")
-                        if isinstance(resp, str) and not resp.strip():
+                        # 非字符串/空响应不可用（同时把 resp 收窄为 str 供后续切片）
+                        if not isinstance(resp, str) or not resp.strip():
                             continue
                         if _is_meta_response(resp):
                             logger.debug("跳过 meta-response 缓存 [%s]: %s", log_title, resp[:40])
@@ -124,16 +165,15 @@ def _load_cache_from_file(cache_key: str, log_title: str):
 
 def _load_cache(cache_key: str, log_title: str):
     """读取缓存（一级内存缓存 → 二级文件缓存）。"""
-    # 一级缓存：内存查找（~0.01ms）
-    with _memory_cache_lock:
-        if cache_key in _memory_cache:
-            logger.debug("命中内存缓存 [%s]: %s", log_title, cache_key[:12])
-            return _memory_cache[cache_key]
+    # 一级缓存：内存查找（~0.01ms，遵守 TTL）
+    cached = _memory_cache_get(cache_key)
+    if cached is not None:
+        logger.debug("命中内存缓存 [%s]: %s", log_title, cache_key[:12])
+        return cached
     # 二级缓存：文件查找（~5ms）
     result = _load_cache_from_file(cache_key, log_title)
     if result is not None:
-        with _memory_cache_lock:
-            _memory_cache[cache_key] = result
+        _memory_cache_put(cache_key, result)
     return result
 
 
@@ -179,8 +219,7 @@ def _save_cache(cache_key: str, response, log_title: str):
         # 每次保存时检查全局文件数量
         _cleanup_cache_files()
     # 同步写入内存缓存
-    with _memory_cache_lock:
-        _memory_cache[cache_key] = response
+    _memory_cache_put(cache_key, response)
 
 
 # ── 速率限制 ──────────────────────────────────────────────────────
@@ -293,10 +332,13 @@ def ask_llm(
     base_url: str = "",
     model: str = "",
     timeout: int = 120,
-    max_tokens: int = 2048,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     image: Any = None,
     no_cache: bool = False,
     use_rate_limiter: bool = True,
+    cancel_event: threading.Event | None = None,
+    escalate_on_truncation: bool = True,
+    truncated_out: list[bool] | None = None,
 ) -> str | dict | None:
     """通过 OpenAI 兼容 API 调用 LLM。
 
@@ -328,12 +370,25 @@ def ask_llm(
         use_rate_limiter: 是否经过全局速率限制器。
                           OCR 视觉引擎调用应设为 False（高频帧处理），
                           纠错调用保持默认 True（批量操作需限速）。
+        cancel_event: 协作式取消信号。已置位时立即返回 None（不发起请求）。
+                      流式模式下每个 chunk 检查一次，可**真正中断**在飞请求；
+                      非流式模式只能在发起前检查（HTTP 请求本身无法中途打断），
+                      因此取消生效最迟在本次请求返回后。
+        escalate_on_truncation: 输出因 max_tokens 截断时，是否把预算翻倍重试一次
+                      （上限 ``TRUNCATION_ESCALATION_CEILING``）。
+        truncated_out: 可选出参。追加一个 bool 表示**最终**结果是否被截断 —— 调用方
+                      据此回退，避免把半截内容当作正常结果（如润色把 480 字变成 43 字）。
 
     Returns:
         非流式：str（resp_type=None）或 dict（resp_type="json"）
         流式：str（拼接后的完整内容）
         API 失败且所有重试耗尽：None
+        已取消：None
     """
+    if cancel_event is not None and cancel_event.is_set():
+        logger.info("LLM 调用已取消（发起前检查）[%s]", log_title)
+        return None
+
     # 空 key 处理（P0-T7 修复）：本地服务（llama.cpp/Ollama）无鉴权，放行；
     # 云端服务空 key 保持明确报错（与 vision 引擎 _check_v1_availability 先例一致）
     if not api_key:
@@ -350,8 +405,13 @@ def ask_llm(
             return None
 
     # ── 缓存检查（流式模式、vision 模式、no_cache 不缓存） ──
-    if not stream and image is None and not no_cache:
-        cache_key = _get_cache_key(model, temperature, prompt, system_prompt, max_tokens, resp_type, base_url)
+    cacheable = not stream and image is None and not no_cache
+
+    def _key_for(budget: int) -> str:
+        return _get_cache_key(model, temperature, prompt, system_prompt, budget, resp_type, base_url)
+
+    if cacheable:
+        cache_key = _key_for(max_tokens)
         cached = _load_cache(cache_key, log_title)
         if cached is not None:
             return cached
@@ -396,7 +456,6 @@ def ask_llm(
         timeout=timeout,
         max_tokens=max_tokens,
     )
-
     # DeepSeek 默认启用 thinking mode，消耗 max_tokens 预算导致空返回
     if "deepseek" in model.lower():
         params["extra_body"] = {"thinking": {"type": "disabled"}}
@@ -404,29 +463,67 @@ def ask_llm(
     # ── JSON 模式：不使用 response_format（DeepSeek 已知 bug：JSON 模式下概率空返回） ──
     # 依赖 prompt 中的 "JSON" 字样 + json_repair 解析即可
 
-    # ── 流式调用 ──
-    if stream:
-        return _call_stream(client, params, stream_callback, log_title, logger)
+    # ── 调用（截断时以更大预算自愈式重试一次） ──
+    # 截断（finish_reason == "length"）此前只记日志：调用方拿到半截内容并当作
+    # 正常结果 —— 润色会把 480 字输入变成 43 字输出，批量纠错会把半句写进表格行。
+    # 这里先按内容长度给足预算（见 AICorrector），若仍被截断再把预算翻倍重试一次；
+    # 到顶后由 truncated_out 告知调用方，由其回退（绝不静默采用半截内容）。
+    budgets = [max_tokens]
+    if escalate_on_truncation and max_tokens < TRUNCATION_ESCALATION_CEILING:
+        budgets.append(min(TRUNCATION_ESCALATION_CEILING, max_tokens * 2))
 
-    # ── 非流式调用 ──
-    return _call_normal(client, params, resp_type, valid_def, cache_key, log_title, logger)
+    result: str | dict | None = None
+    for idx, budget in enumerate(budgets):
+        params["max_tokens"] = budget
+        flag: list[bool] = []
+        if cacheable:
+            cache_key = _key_for(budget)
+        if stream:
+            result = _call_stream(client, params, stream_callback, log_title, logger, cancel_event, flag)
+        else:
+            result = _call_normal(
+                client, params, resp_type, valid_def, cache_key, log_title, logger, cancel_event, flag
+            )
+        truncated = bool(flag and flag[0])
+        if not truncated or idx + 1 == len(budgets):
+            break
+        logger.warning(
+            "输出被 max_tokens(%d) 截断 [%s]，以 %d 预算重试",
+            budget,
+            log_title,
+            budgets[idx + 1],
+        )
+
+    if truncated_out is not None:
+        truncated_out.append(truncated)
+    return result
 
 
-def _call_stream(client, params, stream_callback, log_title, log):
+def _call_stream(client, params, stream_callback, log_title, log, cancel_event=None, truncated_out=None):
     """流式调用 LLM —— 拼接所有 chunk 并返回完整文本。
 
     注意：连接中途中断时捕获异常并返回已接收的部分内容，
     避免 @except_handler 触发重试（重试会丢失已接收内容）。
+
+    ``cancel_event`` 已置位时跳出 chunk 循环并返回已接收内容 —— 这是唯一能
+    **真正中断在飞请求**的路径（非流式调用只能在发起前检查）。
     """
     params["stream"] = True
     full_content = ""
     chunk_count = 0
+    truncated = False
+    cancelled = False
     try:
         stream_resp = client.chat.completions.create(**params)
         for chunk in stream_resp:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
             choices = getattr(chunk, "choices", None)
             if not choices:
                 continue
+            if getattr(choices[0], "finish_reason", None) == "length":
+                truncated = True
             delta = getattr(choices[0], "delta", None)
             if delta is None:
                 continue
@@ -439,27 +536,75 @@ def _call_stream(client, params, stream_callback, log_title, log):
     except Exception as e:
         log.warning("流式传输中断 [%s]: %s，返回已接收部分 (%d chars)", log_title, e, len(full_content))
     else:
-        log.info("流式接收完成 [%s]: %d chunks, %d chars", log_title, chunk_count, len(full_content))
+        if cancelled:
+            log.info("流式调用已取消 [%s]: 已接收 %d chunks, %d chars", log_title, chunk_count, len(full_content))
+        elif truncated:
+            log.warning(
+                "流式输出被 max_tokens 截断 [%s]: %d chunks, %d chars", log_title, chunk_count, len(full_content)
+            )
+        else:
+            log.info("流式接收完成 [%s]: %d chunks, %d chars", log_title, chunk_count, len(full_content))
+    if truncated_out is not None:
+        truncated_out.append(truncated)
     return full_content.strip()
 
 
-def _call_normal(client, params, resp_type, valid_def, cache_key, log_title, log):
-    """非流式调用 LLM —— 解析响应并缓存。"""
+def _call_normal(
+    client, params, resp_type, valid_def, cache_key, log_title, log, cancel_event=None, truncated_out=None
+):
+    """非流式调用 LLM —— 解析响应并按需缓存。
+
+    截断响应（finish_reason == "length"）**不写入缓存**：否则一次 max_tokens
+    不足的结果会在缓存中存活 7 天，之后每次请求都拿到同一份残缺内容。
+
+    ``cancel_event`` 已置位时在发起请求前返回 None —— 非流式 HTTP 请求无法
+    中途打断，因此取消最迟在本次请求返回后生效（流式路径见 ``_call_stream``）。
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        log.info("LLM 调用已取消（请求发起前）[%s]", log_title)
+        return None
     resp_raw = client.chat.completions.create(**params)
-    content = resp_raw.choices[0].message.content or ""
+    choice = resp_raw.choices[0]
+    content = choice.message.content or ""
+    finish_reason = getattr(choice, "finish_reason", None)
 
     # ── 空响应直接返回 None（避免缓存和后续解析问题） ──
     if not content.strip():
         log.warning("LLM 返回空内容 [%s]", log_title)
         return None
 
+    if finish_reason == "length":
+        # 输出被 max_tokens 截断：内容不完整，除不缓存外还必须告知调用方
+        # （由 ask_llm 决定放大预算重试，或由消费方回退到原文）。
+        log.warning("LLM 输出被 max_tokens 截断 [%s]，本次结果不写入缓存", log_title)
+        if truncated_out is not None:
+            truncated_out.append(True)
+
+    # ── meta-response 拦截 ──
+    # 这类响应说明模型没有执行任务而是要求补充输入。此前只在**缓存读取**时过滤，
+    # 线上响应本身照常返回 —— 会被当作纠错/润色结果写回字幕行（静默污染）。
+    if _is_meta_response(content):
+        log.warning("LLM 返回 meta-response（未执行任务）[%s]: %s", log_title, content.strip()[:60])
+        return None
+
     # ── JSON 容错解析 ──
     if resp_type == "json":
+        parsed: Any
         try:
             parsed = json_repair.loads(content)
         except (json.JSONDecodeError, ValueError) as e:
-            log.warning("JSON 解析失败 [%s]，返回原始文本: %s", log_title, e)
-            return {"raw": content} if content.strip() else None
+            log.warning("JSON 解析失败 [%s]，按纯文本返回: %s", log_title, e)
+            return content.strip()
+        # json_repair 对非 JSON 输入**不抛异常**，而是静默返回异类值：
+        #   "这不是 JSON {{{"            → []
+        #   "[ID:0] a\n[ID:1] b"         → ['ID:1']
+        #   纯文本散文                    → ''
+        # 把它们当合法 JSON 结果会让调用方把 "[]" 当作纠错文本写回，或误判为
+        # 解析成功而放弃 [ID:n] 文本回退。非 dict 一律按纯文本返回，交给调用方
+        # 已有的文本回退链（与流式模式行为一致）。
+        if not isinstance(parsed, dict):
+            log.warning("JSON 响应非对象 [%s]（得到 %s），按纯文本返回", log_title, type(parsed).__name__)
+            return content.strip()
     else:
         parsed = content
 
@@ -469,8 +614,8 @@ def _call_normal(client, params, resp_type, valid_def, cache_key, log_title, log
         if result.get("status") != "success":
             raise ValueError(f"响应校验失败 [{log_title}]: {result.get('message', 'unknown')}")
 
-    # ── 缓存 ──
-    if cache_key:
+    # ── 缓存（截断结果不入缓存） ──
+    if cache_key and finish_reason != "length":
         _save_cache(cache_key, parsed, log_title)
 
     return parsed

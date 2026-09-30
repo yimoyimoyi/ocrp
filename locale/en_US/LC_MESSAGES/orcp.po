@@ -407,6 +407,18 @@ msgstr "Confirm Delete"
 msgid "请输入预设名称。"
 msgstr "Please enter a preset name."
 
+msgid "确定要删除预设「{name}」吗？"
+msgstr "Delete preset \"{name}\"?"
+
+msgid "找到 {count} 个匹配项"
+msgstr "{count} match(es) found"
+
+msgid "❌ 加载失败: {msg}\n拖放视频文件到此处"
+msgstr "❌ Load failed: {msg}\nDrag a video file here"
+
+msgid "❌ 加载失败: {msg}\n拖放文件到此处"
+msgstr "❌ Load failed: {msg}\nDrag a file here"
+
 msgid "https://api.openai.com/v1"
 msgstr "https://api.openai.com/v1"
 
@@ -435,8 +447,6 @@ msgstr "Clear"
 msgid "在预览图上拖拽绘制矩形区域"
 msgstr "Drag on the preview to draw a rectangular region"
 
-msgid "引擎:"
-msgstr "Engine:"
 
 msgid "模板:"
 msgstr "Template:"
@@ -496,8 +506,6 @@ msgstr "- Delete Region"
 msgid "📝 提示词模板编辑器"
 msgstr "📝 Prompt Template Editor"
 
-msgid "模板:"
-msgstr "Template:"
 
 msgid "提示词内容（点击下方按钮插入占位符）:"
 msgstr "Prompt Content (click buttons to insert placeholders):"
@@ -737,11 +745,7 @@ msgstr "Drop Ratio:"
 msgid "连续缓冲区:"
 msgstr "Buffer Size:"
 
-msgid "相似度阈值:"
-msgstr "Similarity Threshold:"
 
-msgid "最小文字长度:"
-msgstr "Min Text Length:"
 
 msgid "输出间隔:"
 msgstr "Output Interval:"
@@ -749,8 +753,6 @@ msgstr "Output Interval:"
 msgid "去重相似度阈值:"
 msgstr "Dedup Similarity Threshold:"
 
-msgid "置信度阈值:"
-msgstr "Confidence Threshold:"
 
 msgid "无语音阈值:"
 msgstr "No-Speech Threshold:"
@@ -815,8 +817,6 @@ msgstr "Retry Count:"
 msgid "处理模式:"
 msgstr "Process Mode:"
 
-msgid "帧间隔:"
-msgstr "Frame Interval:"
 
 msgid "Beam Size:"
 msgstr "Beam Size:"
@@ -1088,3 +1088,105 @@ msgstr "Sort rules (drag to reorder, edit prefix/suffix, click ✕ to delete):"
 
 msgid "原版"
 msgstr "Original"
+
+msgid "模板: {name} — {desc}"
+msgstr "Template: {name} — {desc}"
+
+msgid "✅ 模板 [{name}] 已保存"
+msgstr "✅ Template [{name}] saved"
+
+msgid "🗑 模板 [{name}] 已删除"
+msgstr "🗑 Template [{name}] deleted"
+
+msgid "✅ 已添加过滤器: {keyword}"
+msgstr "✅ Filter added: {keyword}"
+
+msgid "🗑 已移除过滤器: {keyword}"
+msgstr "🗑 Filter removed: {keyword}"
+
+msgid "⚠ 移除失败: 关键词 '{keyword}' 不存在"
+msgstr "⚠ Remove failed: keyword '{keyword}' not found"
+
+msgid "已加载: {name}"
+msgstr "Loaded: {name}"
+
+msgid "已加载音频: {name}（仅支持 ASR 和纠错）"
+msgstr "Loaded audio: {name} (ASR and correction only)"
+
+msgid "⚠ 环境提取失败: {err}"
+msgstr "⚠ Context extraction failed: {err}"
+
+msgid "🗑 已删除 {deleted} 条包含关键词的结果"
+msgstr "🗑 Deleted {deleted} results containing keywords"
+
+msgid "已跳转到 {time}"
+msgstr "Jumped to {time}"
+
+msgid "✅ 已导入 {count} 个模板"
+msgstr "✅ Imported {count} templates"
+
+msgid "✅ 已导出模板到: {name}"
+msgstr "✅ Exported template to: {name}"
+
+msgid "处理中... {cur}s / {total}s | 哨兵: {sentinel}"
+msgstr "Processing... {cur}s / {total}s | Sentinel: {sentinel}"
+
+msgid "✅ 完成: {n} 条结果 | 批量纠错完成"
+msgstr "✅ Done: {n} results | Batch correction complete"
+
+msgid "⚠ 批量纠错出错: {err}"
+msgstr "⚠ Batch correction error: {err}"
+
+msgid "✅ 已导出: {name}"
+msgstr "✅ Exported: {name}"
+
+msgid "共 {total} 行，未选中任何行"
+msgstr "{total} rows in total, none selected"
+
+msgid "已选中 {count} / {total} 行"
+msgstr "{count} / {total} rows selected"
+
+msgid "({count} 条)"
+msgstr "({count} items)"
+
+msgid "{count}/{total} 个文件"
+msgstr "{count}/{total} files"
+
+msgid "{count} 个文件"
+msgstr "{count} files"
+
+msgid "导出为 {fmt}"
+msgstr "Export as {fmt}"
+
+msgid "❌ {msg}"
+msgstr "❌ {msg}"
+
+msgid "✅ {msg}"
+msgstr "✅ {msg}"
+
+msgid "✅ 已保存: {name}"
+msgstr "✅ Saved: {name}"
+
+msgid "{title} ·高级"
+msgstr "{title} ·Advanced"
+
+msgid "在光标位置插入 {ph}"
+msgstr "Insert {ph} at cursor"
+
+msgid "区域{idx}"
+msgstr "Region{idx}"
+
+msgid "模板导入失败:\n{err}"
+msgstr "Template import failed:\n{err}"
+
+msgid "模板导出失败:\n{err}"
+msgstr "Template export failed:\n{err}"
+
+msgid "润色提示词:"
+msgstr "Polish Prompt:"
+
+msgid "润色提示词（必须包含 {待校对文本} 占位符）"
+msgstr "Polish prompt (must contain the {待校对文本} placeholder)"
+
+msgid "润色必须包含 {待校对文本} 占位符；缺少占位符时会自动回落内置默认提示词"
+msgstr "The polish prompt must contain the {待校对文本} placeholder; the built-in default is used when it is missing."

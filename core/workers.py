@@ -66,72 +66,6 @@ class OCRWorker(QThread):
             self.ocr_error.emit(self._timestamp, str(e))
 
 
-class AICorrectionWorker(QThread):
-    """AI 纠错线程 —— 支持 API 文本纠错和本地引擎图像重识别。"""
-
-    correction_ready = Signal(int, str, str)
-    correction_failed = Signal(int, str)
-    correction_stream = Signal(int, str)  # row, partial_text (流式增量更新)
-
-    def __init__(
-        self,
-        corrector,
-        result_index: int,
-        raw_text: str,
-        context_texts: list | None = None,
-        image: np.ndarray | None = None,
-        region_correction_prompt: str = "",
-    ):
-        super().__init__()
-        self._corrector = corrector
-        self._result_index = result_index
-        self._raw_text = raw_text
-        self._context_texts = context_texts or []
-        self._image = image
-        self._region_correction_prompt = region_correction_prompt
-        self._stop_flag = threading.Event()
-
-    def stop(self):
-        self._stop_flag.set()
-        if hasattr(self._corrector, "stop") and callable(self._corrector.stop):
-            self._corrector.stop()
-
-    def run(self):
-        if self._stop_flag.is_set():
-            return
-        try:
-            # 构建流式回调（逐字发射信号更新表格）
-            stream_mode = getattr(self._corrector, "stream_mode", False)
-            stream_cb = None
-            accumulated = ""
-            if stream_mode:
-
-                def on_stream(chunk: str):
-                    nonlocal accumulated
-                    accumulated += chunk
-                    self.correction_stream.emit(self._result_index, accumulated)
-
-                stream_cb = on_stream
-
-            corrected = self._corrector.correct(
-                self._raw_text,
-                self._context_texts,
-                image=self._image,
-                stream_callback=stream_cb,
-                prompt_override=self._region_correction_prompt,
-            )
-
-            if corrected and corrected != self._raw_text:
-                self.correction_ready.emit(self._result_index, self._raw_text, corrected)
-            elif corrected is None:
-                logger.error("纠错 API 调用失败 (row %d): %s", self._result_index, self._raw_text[:40])
-                self.correction_failed.emit(self._result_index, "API 调用失败")
-            else:
-                self.correction_failed.emit(self._result_index, "无变化")
-        except Exception as e:
-            self.correction_failed.emit(self._result_index, str(e))
-
-
 class BatchCorrectionWorker(QThread):
     """批量 AI 纠错线程 —— 使用 correct_batch() 一次提交多条，保证顺序与完整性。"""
 
@@ -167,11 +101,13 @@ class BatchCorrectionWorker(QThread):
 
             stream_cb = None  # 批量流式暂不输出到表格
 
-            # 调用批量纠错
+            # 调用批量纠错（stop_flag 作为协作式取消信号：
+            # stop() 后无需等在飞请求/重试全部走完）
             corrected_map = self._corrector.correct_batch(
                 self._texts,
                 max_retries=self._max_retries,
                 stream_callback=stream_cb,
+                cancel_event=self._stop_flag,
             )
 
             if self._stop_flag.is_set():
@@ -231,7 +167,7 @@ class BatchPolishWorker(QThread):
             for row_idx, original, text_to_polish in self._items:
                 if self._stop_flag.is_set():
                     break
-                polished = self._corrector.polish(original, text_to_polish)
+                polished = self._corrector.polish(original, text_to_polish, cancel_event=self._stop_flag)
                 self.polish_ready.emit(row_idx, original, polished or text_to_polish)
 
             self.batch_finished.emit()
@@ -578,7 +514,7 @@ class BatchProcessWorker(QThread):
         from pathlib import Path
 
         from core.frame_processor import FrameProcessor
-        from core.utils import format_time
+        from core.utils import SUBTITLE_MODE_STREAM, format_time, normalize_subtitle_mode
 
         ext = Path(file_path).suffix.lower()
         results = []
@@ -590,7 +526,7 @@ class BatchProcessWorker(QThread):
             if mp:
                 # 与 ocr_flow._do_ocr_pass 同步的参数集（设置同步 R6 修复：
                 # 此前缺 _subtitle_mode/_r_* 导致批量始终走默认流式）
-                fp._subtitle_mode = mp.get("subtitle_mode", "stream")
+                fp._subtitle_mode = normalize_subtitle_mode(mp.get("subtitle_mode", SUBTITLE_MODE_STREAM))
                 fp._sentinel_enabled = mp.get("sentinel_enabled", True)
                 fp._s_drop_ratio = mp.get("s_drop_ratio", 0.5)
                 fp._s_min_text_len = mp.get("s_min_text_len", 2)

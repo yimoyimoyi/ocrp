@@ -4,62 +4,61 @@
 通过 _ViewBase 与 MainWindow 双向委托共享状态。
 """
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
+from PySide6.QtCore import QEasingCurve, QEvent, QPropertyAnimation, Qt
 from PySide6.QtWidgets import QLabel, QProgressBar, QSizePolicy, QStatusBar
 
 from core.i18n import _
+from ui.theme_tokens import status_color
 from ui.views.base import _ViewBase
-
-# ── 状态栏颜色映射 ──
-_STATUS_COLORS: dict[str, str] = {
-    "✅": "#4caf50",  # 绿
-    "❌": "#f44336",  # 红
-    "⚠": "#ff9800",  # 橙
-    "⏳": "#2196f3",  # 蓝
-    "🔲": "#78909c",  # 灰
-    "🗑": "#78909c",  # 灰
-    "▸": "#ffffff",  # 白
-    "默认": "#b0bec5",  # 淡灰
-}
-
-
-def _detect_status_color(text: str) -> str:
-    """根据消息前缀返回对应颜色。"""
-    for prefix, color in _STATUS_COLORS.items():
-        if text.startswith(prefix):
-            return color
-    return "#b0bec5"
 
 
 class ColoredStatusLabel(QLabel):
-    """自动根据消息前缀着色的状态标签，超长文本自动省略。"""
+    """自动根据消息前缀着色的状态标签，超长文本自动省略。
+
+    颜色在**每次渲染时**按当前主题求解（见 ``ui.theme_tokens.status_color``）：
+    此前颜色写死在类常量里，切换浅色主题后 ``▸``/默认色仍是白色/淡灰，在浅底上
+    几乎不可见。
+    """
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
         self._plain = text
-        self._color = "#b0bec5"
+        self._applying = False
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.setMinimumWidth(60)
+        self._apply_text()
 
     def setText(self, text: str):  # type: ignore[override]
         self._plain = text
-        self._color = _detect_status_color(text)
         self._apply_text()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        # 主题切换会下发 PaletteChange/StyleChange，需要重新求解颜色
+        if event.type() in (QEvent.PaletteChange, QEvent.StyleChange) and not self._applying:
+            self._apply_text()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._apply_text()
 
     def _apply_text(self):
-        w = self.width()
-        if w < 20:
-            # 宽度未确定，先显示纯文本，等 resize 时再省略
-            super().setText(f'<span style="color:{self._color}">{self._plain}</span>')
+        if self._applying:  # 防止 super().setText 触发的样式事件递归
             return
-        fm = self.fontMetrics()
-        elided = fm.elidedText(self._plain, Qt.ElideRight, w - 8)
-        safe = elided.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        super().setText(f'<span style="color:{self._color}">{safe}</span>')
+        self._applying = True
+        try:
+            color = status_color(self._plain, self)
+            w = self.width()
+            if w < 20:
+                # 宽度未确定，先显示纯文本，等 resize 时再省略
+                super().setText(f'<span style="color:{color}">{self._plain}</span>')
+                return
+            fm = self.fontMetrics()
+            elided = fm.elidedText(self._plain, Qt.ElideRight, w - 8)
+            safe = elided.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            super().setText(f'<span style="color:{color}">{safe}</span>')
+        finally:
+            self._applying = False
 
 
 class StatusBarView(_ViewBase):

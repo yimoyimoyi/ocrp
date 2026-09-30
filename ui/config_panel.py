@@ -11,6 +11,7 @@ SettingsDialog 是唯一的设置 UI 入口；ConfigPanel 负责：
 from PySide6.QtCore import QObject, Signal
 
 from core.config_manager import MODE_PARAMS_DEFAULTS
+from core.utils import SUBTITLE_MODE_STREAM, normalize_subtitle_mode
 
 
 class ConfigPanel(QObject):
@@ -115,22 +116,13 @@ class ConfigPanel(QObject):
 
     @property
     def subtitle_mode(self) -> str:
-        """字幕模式（内部标识 stream/regular，兼容旧配置中的翻译文本，P21 解耦）。"""
-        v = str(self._params.get("subtitle_mode", "stream"))
-        if "流式" in v:
-            return "stream"
-        if "常规" in v:
-            return "regular"
-        return v
+        """字幕模式（唯一规范 token：stream / regular，P21 解耦）。"""
+        return normalize_subtitle_mode(self._params.get("subtitle_mode", SUBTITLE_MODE_STREAM))
 
     @subtitle_mode.setter
     def subtitle_mode(self, val: str):
-        # 统一存储内部标识，避免配置值与 UI 语言绑定（P21）
-        if "流式" in val:
-            val = "stream"
-        elif "常规" in val:
-            val = "regular"
-        self._params["subtitle_mode"] = val
+        # 统一存储规范 token，避免配置值与 UI 语言绑定（P21）
+        self._params["subtitle_mode"] = normalize_subtitle_mode(val)
 
     @property
     def process_mode(self) -> str:

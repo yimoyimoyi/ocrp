@@ -1320,6 +1320,17 @@ def _apply_dark_palette(app: QApplication):
     app.setPalette(p)
 
 
+def _apply_light_palette(app: QApplication):
+    """为浅色主题设置浅色 QPalette（与 ``_apply_dark_palette`` 对称）。
+
+    qt-material 只注入 QSS，**不改 QPalette**；而"按主题取色"的逻辑（如
+    ``ui/theme_tokens`` 的明暗判定，以及未被 QSS 覆盖的标准控件）依赖 QPalette。
+    此前只有 ``default``/``default_dark`` 会设置调色板，material 浅色主题下
+    palette 仍停留在 Fusion 默认值，导致基于调色板的明暗判定失效。
+    """
+    app.setPalette(app.style().standardPalette())
+
+
 def apply_theme(
     app: QApplication, theme_name: str = "dark_teal", font_family: str = "Microsoft YaHei UI", density_scale: str = "0"
 ):
@@ -1333,15 +1344,23 @@ def apply_theme(
     """
     theme_name = _migrate_theme_name(theme_name)
 
+    # 登记当前主题：qt-material 只注入 QSS，控件物化后的 QPalette 不会随主题刷新，
+    # 因此 ui/theme_tokens 的明暗判定必须依赖主题名而不是调色板。
+    from ui.theme_tokens import set_current_theme
+
+    set_current_theme(theme_name)
+
     # 设置 Fusion 风格
     app.setStyle("Fusion")
 
+    # QPalette 必须与主题明暗一致（见 _apply_light_palette 的说明）
+    if is_dark_theme(theme_name):
+        _apply_dark_palette(app)
+    else:
+        _apply_light_palette(app)
+
     # 经典主题：仅使用 Fusion + 自定义 CSS，不加载 qt-material
     if theme_name in ("default", "default_dark"):
-        if theme_name == "default_dark":
-            _apply_dark_palette(app)
-        else:
-            app.setPalette(app.style().standardPalette())
         custom_css = get_custom_css(theme_name)
         app.setStyleSheet(custom_css)
         return

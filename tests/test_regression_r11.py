@@ -164,7 +164,7 @@ class TestAcceptValidationConditional:
         dialog._corr_enabled.setChecked(False)
         dialog._corr_api_model.setEditText("")
         with (
-            mock.patch.object(ui_sd().QMessageBox, "warning") as warn,
+            mock.patch.object(QMessageBox, "warning") as warn,
             mock.patch.object(SettingsDialog, "accept") as accept,
         ):
             dialog._on_accept()
@@ -176,7 +176,7 @@ class TestAcceptValidationConditional:
         dialog._corr_enabled.setChecked(True)
         dialog._corr_api_model.setEditText("")
         with (
-            mock.patch.object(ui_sd().QMessageBox, "warning") as warn,
+            mock.patch.object(QMessageBox, "warning") as warn,
             mock.patch.object(SettingsDialog, "accept") as accept,
         ):
             dialog._on_accept()
@@ -188,19 +188,12 @@ class TestAcceptValidationConditional:
         dialog._corr_enabled.setChecked(True)
         dialog._corr_api_model.setEditText("deepseek-chat")
         with (
-            mock.patch.object(ui_sd().QMessageBox, "warning") as warn,
+            mock.patch.object(QMessageBox, "warning") as warn,
             mock.patch.object(SettingsDialog, "accept") as accept,
         ):
             dialog._on_accept()
             warn.assert_not_called()
             accept.assert_called_once()
-
-
-def ui_sd():
-    """惰性引用 ui.settings_dialog 模块（避免与局部 import 命名冲突）。"""
-    import ui.settings_dialog as sd
-
-    return sd
 
 
 class TestModelFieldLoad:
@@ -491,7 +484,7 @@ class TestDirtyTrackingReject:
         """确定按钮走 _on_accept → accept()，不受 reject 确认逻辑影响。"""
         dialog._corr_enabled.setChecked(False)
         with (
-            mock.patch.object(ui_sd().QMessageBox, "warning"),
+            mock.patch.object(QMessageBox, "warning"),
             mock.patch.object(SettingsDialog, "accept") as accept,
             mock.patch.object(QMessageBox, "question") as question,
         ):

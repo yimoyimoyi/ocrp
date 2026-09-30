@@ -7,6 +7,7 @@
 from core.frame_processor import FrameProcessor
 from core.i18n import _
 from core.logger import get_logger
+from core.utils import SUBTITLE_MODE_STREAM, normalize_subtitle_mode
 from core.workers import ImageProcessWorker, VideoProcessWorker
 
 logger = get_logger(__name__)
@@ -115,7 +116,7 @@ class OCRFlow(_FlowBase):
 
         if mp:
             fp = self._frame_processor
-            fp._subtitle_mode = mp.get("subtitle_mode", "stream")
+            fp._subtitle_mode = normalize_subtitle_mode(mp.get("subtitle_mode", SUBTITLE_MODE_STREAM))
             fp._sentinel_enabled = mp.get("sentinel_enabled", True)
             fp._s_drop_ratio = mp.get("s_drop_ratio", 0.5)
             fp._s_buffer_size = mp.get("s_buffer_size", 8)

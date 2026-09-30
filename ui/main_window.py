@@ -12,8 +12,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
-    QFileDialog,
-    QFrame,
     QHBoxLayout,
     QMainWindow,
     QPushButton,
@@ -52,10 +50,39 @@ from ui.style_loader import (
     apply_theme,
     is_dark_theme,
 )
+from ui.theme_tokens import FONT_FAMILY
 from ui.video_preview import VideoPreviewWidget
 from ui.views import BottomBarView, MenuBarView, QuickToolbar, RightPanelView, StatusBarView
 
 WIN_TITLE = _("ORCP - OCR 处理工具")
+
+# 字号基准：所有固定尺寸按 (font_size - 基准) 线性补偿
+BASE_FONT_SIZE = 13
+
+# density_scale 档位阈值（降序判定：先判最大档，否则高档位被低档位抢先匹配而永不生效）
+DENSITY_STEPS: tuple[tuple[float, str], ...] = (
+    (1.2, "2"),
+    (1.1, "1"),
+)
+DENSITY_SMALL_STEPS: tuple[tuple[float, str], ...] = (
+    (0.9, "-2"),  # scale < 0.9
+    (1.0, "-1"),  # scale < 1.0
+)
+
+
+def _density_for_scale(scale: float) -> str:
+    """把 UI 缩放比例映射为 qt-material 的 density_scale 档位。
+
+    回归：原实现按升序写成 ``if scale < 0.9 … elif scale > 1.1 … elif scale > 1.2``，
+    ``scale > 1.1`` 会先匹配所有 >1.2 的值，导致 ``"2"`` 档**永不生效**。
+    """
+    for threshold, density in DENSITY_SMALL_STEPS:
+        if scale < threshold:
+            return density
+    for threshold, density in DENSITY_STEPS:
+        if scale > threshold:
+            return density
+    return "0"
 
 
 class MainWindow(QMainWindow):
@@ -453,19 +480,9 @@ class MainWindow(QMainWindow):
         if app:
             scale = self._config_mgr.get_scale()
             font_size = self._config_mgr.get_font_size()
-            font_family = "Microsoft YaHei UI"
-            density = "0"
-            if scale < 0.9:
-                density = "-2"
-            elif scale < 1.0:
-                density = "-1"
-            elif scale > 1.1:
-                density = "1"
-            elif scale > 1.2:
-                density = "2"
-            apply_theme(app, self._theme, font_family=font_family, density_scale=density)
+            apply_theme(app, self._theme, font_family=FONT_FAMILY, density_scale=_density_for_scale(scale))
             # 追加字体大小覆盖（!important 确保覆盖 qt-material 的选择器）
-            if font_size != 13:
+            if font_size != BASE_FONT_SIZE:
                 current = app.styleSheet()
                 font_override = f"* {{ font-size: {font_size}px !important; }}"
                 app.setStyleSheet(current + "\n" + font_override)
@@ -593,7 +610,7 @@ class MainWindow(QMainWindow):
     def _apply_scale_to_fixed_widgets(self, font_size: int, scale: float):
         """根据字号和缩放比例动态调整固定尺寸的控件，避免文字挤压。"""
         # 按钮高度：基准 34px，字号每增大 1px 高度 +2px，缩放额外影响
-        btn_h = max(28, int(34 * scale + (font_size - 13) * 1.5))
+        btn_h = max(28, int(34 * scale + (font_size - BASE_FONT_SIZE) * 1.5))
         for btn_attr in (
             "_btn_start",
             "_btn_pause",
@@ -608,25 +625,25 @@ class MainWindow(QMainWindow):
                 btn.setFixedHeight(btn_h)
 
         # 工具栏按钮高度
-        capture_h = max(26, int(30 * scale + (font_size - 13) * 1.2))
+        capture_h = max(26, int(30 * scale + (font_size - BASE_FONT_SIZE) * 1.2))
         for btn_attr in ("_btn_capture", "_btn_open", "_btn_batch_clear"):
             btn = getattr(self, btn_attr, None)
             if btn:
                 btn.setFixedHeight(capture_h)
 
         # 状态栏高度：至少 28px，随字体和缩放增长
-        bar_h = max(28, int(30 * scale + (font_size - 12) * 1.2))
+        # （基准统一为 BASE_FONT_SIZE；此处原为 12，与按钮的 13 不一致，实为笔误）
+        bar_h = max(28, int(30 * scale + (font_size - BASE_FONT_SIZE) * 1.2))
         self._status_bar.setMinimumHeight(bar_h)
 
         # 进度条高度
         prog_h = max(14, int(18 * scale))
         self._progress_bar.setMaximumHeight(prog_h)
 
-        # 分隔线高度
+        # 分隔线高度（引用由 BottomBarView.build 持有，避免 findChildren 字符串反射）
         sep_h = max(18, int(24 * scale))
-        for sep in self._main_splitter.findChildren(QFrame):
-            if sep.objectName() == "barSeparator":
-                sep.setFixedHeight(sep_h)
+        for sep in getattr(self, "_bar_separators", ()):
+            sep.setFixedHeight(sep_h)
 
     def _on_template_quick_selected(self, name: str):
         """快速模板下拉框选中。"""
@@ -642,7 +659,7 @@ class MainWindow(QMainWindow):
             if desc:
                 sb = self.statusBar()
                 if sb:
-                    sb.showMessage(f"模板: {name} — {desc}", 3000)
+                    sb.showMessage(_("模板: {name} — {desc}").format(name=name, desc=desc), 3000)
         self._config_panel.select_template(name)
         self._sync_region_defaults()
         # 同步菜单栏
@@ -806,16 +823,17 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     logger.warning("FFmpeg 清理失败: %s", e)
 
-        # ── 第四步：后台清理 worker 线程（不阻塞关闭）──
-        def _cleanup_workers():
-            try:
-                self._workflow.cleanup()
-            except Exception as e:
-                logger.warning("Worker 清理异常: %s", e)
-
-        import threading
-
-        threading.Thread(target=_cleanup_workers, daemon=True).start()
+        # ── 第四步：同步清理 worker 线程 ──
+        # 此前把 cleanup() 丢进裸 threading.Thread「后台静默清理」。那是有害的：
+        # 主线程随即从 closeEvent 返回并拆除 QApplication，而清理线程仍在访问
+        # 主线程亲和（affinity）的 QThread/QObject，且进程退出会中途杀死它 ——
+        # 典型的关窗崩溃 / 子进程残留来源。
+        # 窗口已在第二步隐藏，用户已感知关闭；cleanup() 内部使用**全局**等待预算
+        # （默认 3s）而非每线程 2s，因此这里同步调用不会把关闭拖成 N×2s。
+        try:
+            self._workflow.cleanup()
+        except Exception as e:
+            logger.warning("Worker 清理异常: %s", e)
 
         # 立即接受关闭事件
         super().closeEvent(ev)
@@ -943,13 +961,13 @@ class MainWindow(QMainWindow):
         # 使 combo/_current_template/菜单/prompt_text 四者一致指向刚保存的模板
         if name in self._prompt_mgr.get_template_names():
             self._template_combo.setCurrentText(name)
-        self._status_label.setText(f"✅ 模板 [{name}] 已保存")
+        self._status_label.setText(_("✅ 模板 [{name}] 已保存").format(name=name))
 
     def _on_config_template_deleted(self, name: str):
         """配置面板删除模板。"""
         self._prompt_mgr.remove_template(name)
         self._refresh_template_list()
-        self._status_label.setText(f"🗑 模板 [{name}] 已删除")
+        self._status_label.setText(_("🗑 模板 [{name}] 已删除").format(name=name))
 
     # ── 硬件加速 ──
     def _on_hw_accel_changed(self, enabled: bool):
@@ -959,24 +977,24 @@ class MainWindow(QMainWindow):
         self._engine_mgr.set_hw_accel(enabled)
         self._asr_mgr.set_hw_accel(enabled)
         self._video_preview.set_hw_accel(enabled)
-        self._status_label.setText(f"{'✅ GPU 加速已启用' if enabled else '🔲 GPU 加速已关闭'}")
+        self._status_label.setText(_("✅ GPU 加速已启用") if enabled else _("🔲 GPU 加速已关闭"))
 
     # ── 过滤器管理 ──
     def _on_filter_add(self, keyword: str):
         if self._filter_mgr.add_keyword(keyword):
-            self._status_label.setText(f"✅ 已添加过滤器: {keyword}")
+            self._status_label.setText(_("✅ 已添加过滤器: {keyword}").format(keyword=keyword))
 
     def _on_filter_remove(self, keyword: str):
         logger.info("收到删除过滤关键词请求: '%s'", keyword[:40])
         if self._filter_mgr.remove_keyword(keyword):
-            self._status_label.setText(f"🗑 已移除过滤器: {keyword}")
+            self._status_label.setText(_("🗑 已移除过滤器: {keyword}").format(keyword=keyword))
         else:
-            self._status_label.setText(f"⚠ 移除失败: 关键词 '{keyword[:30]}' 不存在")
+            self._status_label.setText(_("⚠ 移除失败: 关键词 '{keyword}' 不存在").format(keyword=keyword[:30]))
 
     def _on_result_filter(self, raw_text: str):
         """表格行'加入过滤器'按钮 → 将整条 raw 文本加入过滤。"""
         if self._filter_mgr.add_keyword(raw_text):
-            self._status_label.setText(f"✅ 已添加过滤器: {raw_text[:40]}")
+            self._status_label.setText(_("✅ 已添加过滤器: {keyword}").format(keyword=raw_text[:40]))
 
     # ── 批量文件队列 ──
     def _on_batch_files_dropped(self, paths: list):
@@ -990,9 +1008,10 @@ class MainWindow(QMainWindow):
             self._video_preview.load_image(first)
         else:
             self._load_audio_file(first)
-        from PySide6.QtCore import QCoreApplication
-
-        QCoreApplication.processEvents()
+        # 注：此处此前调用 QCoreApplication.processEvents() 强制刷新。它是无用的
+        # （预览加载是异步 QThread，处理事件不会让它更快完成）且有害 —— 它会在
+        # 本处理函数尚未返回时重入事件循环，允许用户再次拖放/点击停止/关窗，
+        # 造成状态错乱。只更新标签即可。
         self._update_batch_label()
 
     def _on_batch_clear(self):
@@ -1007,7 +1026,7 @@ class MainWindow(QMainWindow):
 
     # ── 事件 ──
     def _on_video_loaded(self, path):
-        self._status_label.setText(f"已加载: {Path(path).name}")
+        self._status_label.setText(_("已加载: {name}").format(name=Path(path).name))
         self._config_mgr.add_recent_video(path)
         self._config_mgr.set("last_directory", str(Path(path).parent))
         self._config_mgr.save_settings()
@@ -1037,7 +1056,9 @@ class MainWindow(QMainWindow):
 
         self._env_worker = EnvExtractWorker(self._corrector, all_texts)
         self._env_worker.finished.connect(self._on_env_extracted)
-        self._env_worker.error.connect(lambda e: self._status_label.setText(f"⚠ 环境提取失败: {e[:30]}"))
+        self._env_worker.error.connect(
+            lambda e: self._status_label.setText(_("⚠ 环境提取失败: {err}").format(err=e[:30]))
+        )
         self._env_worker.start()
 
     def _on_env_extracted(self, env: str):
@@ -1084,7 +1105,7 @@ class MainWindow(QMainWindow):
         fm = self._filter_mgr
         deleted = self._result_table.delete_by_filter(lambda raw, corrected: fm.matches(raw + " " + corrected))
         if deleted:
-            self._status_label.setText(f"🗑 已删除 {deleted} 条包含关键词的结果")
+            self._status_label.setText(_("🗑 已删除 {deleted} 条包含关键词的结果").format(deleted=deleted))
         else:
             self._status_label.setText(_("⚠ 无匹配关键词的结果"))
 
@@ -1099,19 +1120,19 @@ class MainWindow(QMainWindow):
         # 图片禁止跳转
         if vp.is_image:
             return
-        # 跳转并渲染帧
-        if self._is_audio_file():
-            # 音频：停止播放 → 设置位置 → 更新 UI
-            vp._on_stop_playback()
-            vp._current_position = ts
-            vp._set_slider(ts)
-            vp._update_preview_label()
-            if vp._audio_player:
-                vp._audio_player.setPosition(int(ts * 1000))
-        else:
-            vp._on_stop_playback()
-            vp.seek_to(ts)
-        self._status_label.setText(f"已跳转到 {r.get('time', '--:--')}")
+        # 停止播放但**不要回到起点**。
+        # 此前这里调用 _on_stop_playback()（内部 seek_to(0.0)），它会 emit
+        # position_changed(0.0)，结果表随即 sync_play_position(0) 高亮并滚动到覆盖
+        # 0 秒的首行 —— 用户看到的就是"双击结果跳转到结果列表初始行"。
+        # 音频分支尤其明显：它手工设置 _current_position/_set_slider 后**不再 emit**，
+        # 于是视图永久停在首行（视频分支靠随后的 seek_to(ts) 侥幸纠正，但仍有闪跳）。
+        vp.stop_playback(reset_position=False)
+        if self._is_audio_file() and vp._audio_player:
+            vp._audio_player.setPosition(int(ts * 1000))
+        # 统一由 seek_to 负责：更新滑块/标签/当前位置，并 emit position_changed(ts)
+        # 驱动结果表高亮与滚动到目标行（音频下 _do_seek 无 ffmpeg 会自然跳过）。
+        vp.seek_to(ts)
+        self._status_label.setText(_("已跳转到 {time}").format(time=r.get("time", "--:--")))
 
     def _on_video_position_changed(self, ts: float):
         """视频播放或跳转时同步表格高亮及画面字幕叠加。"""
@@ -1159,36 +1180,35 @@ class MainWindow(QMainWindow):
     # ── 模板导入/导出 ──
     def _on_template_import(self):
         d = self._config_mgr.get_last_directory() or ""
-        p, _ = QFileDialog.getOpenFileName(self, "导入模板", d, "JSON 文件 (*.json);;所有文件 (*.*)")
+        p = self._message_service.open_file("导入模板", d, "JSON 文件 (*.json);;所有文件 (*.*)")
         if not p:
             return
         try:
             count = self._prompt_mgr.import_templates(p)
             self._refresh_template_list()
-            self._status_label.setText(f"✅ 已导入 {count} 个模板")
+            self._status_label.setText(_("✅ 已导入 {count} 个模板").format(count=count))
         except Exception as e:
-            self._message_service.error("导入失败", f"模板导入失败:\n{e}")
+            self._message_service.error("导入失败", _("模板导入失败:\n{err}").format(err=e))
 
     def _on_template_export(self):
         d = self._config_mgr.get_last_directory() or ""
-        p, _ = QFileDialog.getSaveFileName(
-            self, "导出模板", d + "/prompt_templates_export.json", "JSON 文件 (*.json);;所有文件 (*.*)"
+        p = self._message_service.save_file(
+            "导出模板", d + "/prompt_templates_export.json", "JSON 文件 (*.json);;所有文件 (*.*)"
         )
         if not p:
             return
         try:
             self._prompt_mgr.export_templates(p)
-            self._status_label.setText(f"✅ 已导出模板到: {Path(p).name}")
+            self._status_label.setText(_("✅ 已导出模板到: {name}").format(name=Path(p).name))
         except Exception as e:
-            self._message_service.error("导出失败", f"模板导出失败:\n{e}")
+            self._message_service.error("导出失败", _("模板导出失败:\n{err}").format(err=e))
 
     def _on_capture_test_frame(self):
         self._video_preview.capture_test_frame()
 
     def _on_open_video(self):
         d = self._config_mgr.get_last_directory() or ""
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
+        files = self._message_service.open_files(
             "打开文件",
             d,
             "媒体文件 (*.mp4 *.mkv *.avi *.mov *.webm *.mp3 *.wav *.flac *.ogg *.m4a *.aac *.wma *.opus "
@@ -1225,15 +1245,14 @@ class MainWindow(QMainWindow):
                 self._video_preview.load_video(first)
             elif ext in (".png", ".jpg", ".jpeg", ".bmp"):
                 self._video_preview.load_image(first)
-            from PySide6.QtCore import QCoreApplication
-
-            QCoreApplication.processEvents()
+            # 同 _on_batch_files_dropped：移除无用的 processEvents()
+            # （重入事件循环会让用户在队列替换中途再次拖放/停止/关窗）
             self._update_batch_label()
 
     def _load_audio_file(self, path: str):
         """加载纯音频文件 —— 使用与视频一致的播放控件。"""
         self._video_preview.load_audio(path)
-        self._status_label.setText(f"已加载音频: {Path(path).name}（仅支持 ASR 和纠错）")
+        self._status_label.setText(_("已加载音频: {name}（仅支持 ASR 和纠错）").format(name=Path(path).name))
 
     # ── 统一处理入口（单文件 / 批量）──
     def _on_start_processing(self):
@@ -1269,10 +1288,14 @@ class MainWindow(QMainWindow):
 
     def _on_process_progress(self, cur, total, qs, sentinel):
         if total > 0:
-            self._progress_bar.setValue(min(100, int(cur * 100 / total)))
+            # 走统一的平滑动画入口：此前直接 setValue，OCR 逐帧进度会突跳
+            # （而 workflow 的 progress_val 是动画的，两条路径表现不一致）
+            self._set_progress_animated(min(100, int(cur * 100 / total)))
         m1, s1 = divmod(int(cur), 60)
         m2, s2 = divmod(int(total), 60)
-        self._status_label.setText(f"处理中... {cur}s / {total}s | 哨兵: {sentinel}")
+        self._status_label.setText(
+            _("处理中... {cur}s / {total}s | 哨兵: {sentinel}").format(cur=cur, total=total, sentinel=sentinel)
+        )
 
     # ── WorkflowManager 配置 ──
     def _configure_workflow(self):
@@ -1356,16 +1379,14 @@ class MainWindow(QMainWindow):
 
     def _on_batch_correction_finished(self):
         """批量纠错全部完成。"""
-        self._btn_correction_all.setEnabled(True)
-        self._btn_correction.setEnabled(True)
+        self.set_correction_enabled(True)
         n = self._result_table._table.model().rowCount()
-        self._status_label.setText(f"✅ 完成: {n} 条结果 | 批量纠错完成")
+        self._status_label.setText(_("✅ 完成: {n} 条结果 | 批量纠错完成").format(n=n))
 
     def _on_batch_correction_error(self, err):
         """批量纠错出错。"""
-        self._btn_correction_all.setEnabled(True)
-        self._btn_correction.setEnabled(True)
-        self._status_label.setText(f"⚠ 批量纠错出错: {err}")
+        self.set_correction_enabled(True)
+        self._status_label.setText(_("⚠ 批量纠错出错: {err}").format(err=err))
 
     def _on_process_result(self, ts, t_str, rname, ename, raw, conf: float = 0.0, end_sec: float = 0.0):
         # 过滤器：包含任一关键词则跳过（WorkflowManager 已过滤，此处为双重保险）
@@ -1446,15 +1467,13 @@ class MainWindow(QMainWindow):
                 last_r["end_sec"] = (last_r.get("time_sec", 0.0) or 0.0) + sub_dur
 
     def _on_process_error(self, err):
-        self._btn_start.setEnabled(True)
-        self._btn_stop.setEnabled(False)
-        self._btn_pause.setEnabled(False)
+        # 经统一点复位为空闲态（此前手工逐个 setEnabled 且漏了 polish/polish_all，
+        # 处理出错后润色按钮会一直保持禁用）
+        self.reset_workflow_buttons()
         self._paused = False
         self._btn_pause.setText(_("⏸ 暂停"))
-        self._btn_correction.setEnabled(True)
-        self._btn_correction_all.setEnabled(True)
         self._progress_bar.setValue(0)
-        self._status_label.setText(f"❌ 处理失败: {err}")
+        self._status_label.setText(_("❌ 处理失败: {err}").format(err=err))
 
     # ── 导出 ──
     def _on_export(self, fmt, path):
@@ -1502,6 +1521,6 @@ class MainWindow(QMainWindow):
                 # R12：export_keep_original 无 UI 无默认值（恒 False），死读清理
                 srt_mode=srt_mode,
             )
-            self._status_label.setText(f"✅ 已导出: {Path(path).name}")
+            self._status_label.setText(_("✅ 已导出: {name}").format(name=Path(path).name))
         except Exception as e:
             self._message_service.error("导出失败", str(e))

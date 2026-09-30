@@ -9,6 +9,7 @@ from copy import deepcopy
 
 from core.config_manager import BASE_DIR, ConfigManager
 from core.config_schemas import AI_CORRECTION_SCHEMA, ASR_ENGINES_SCHEMA, OCR_ENGINES_SCHEMA
+from core.prompts import DEFAULT_CORRECTION_PROMPT, DEFAULT_POLISH_PROMPT
 from core.settings.base import ConfigObject
 
 # ── OCR 版本规范 token（R4：存储值=token，显示文案由 UI 单独映射）──
@@ -114,14 +115,13 @@ class CorrectionConfig(ConfigObject):
     DEFAULTS = {
         "enabled": False,
         "engine": "llamacpp",
-        "correction_prompt": "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。",
+        "correction_prompt": DEFAULT_CORRECTION_PROMPT,
         "retry_on_failure": 2,
         "api_key": "",
         "base_url": "http://127.0.0.1:8080",
         "model": "",
         "timeout": 30,
         "batch_size": 5,
-        "context_window": 4,
         "summary_prompt": "",
         "correction_system_prompt": "",
         "output_format": "",
@@ -132,7 +132,7 @@ class CorrectionConfig(ConfigObject):
         "extract_environment": False,
         "seg_time_gap": 3.0,
         "enable_polish": False,
-        "polish_prompt": "你是一个专业的字幕润色专家。请对翻译/纠错后的字幕进行润色...",
+        "polish_prompt": DEFAULT_POLISH_PROMPT,
     }
     KEY_MAP = {
         "corr_enabled": "enabled",

@@ -62,6 +62,52 @@ MODE_OCR_ONLY = "仅 OCR"
 MODE_ASR_ONLY = "仅语音识别 (ASR)"
 MODE_OCR_ASR_FULL = "OCR + ASR（完整流程）"
 
+# 字幕检测模式（唯一规范 token）
+SUBTITLE_MODE_STREAM = "stream"
+SUBTITLE_MODE_REGULAR = "regular"
+
+# 旧配置 / 本地化文本 → 规范 token
+_SUBTITLE_MODE_ALIASES = {
+    "stream": SUBTITLE_MODE_STREAM,
+    "streaming": SUBTITLE_MODE_STREAM,
+    "流式": SUBTITLE_MODE_STREAM,
+    "流式字幕": SUBTITLE_MODE_STREAM,
+    "流式字幕（去重）": SUBTITLE_MODE_STREAM,
+    "流式字幕(去重)": SUBTITLE_MODE_STREAM,
+    "regular": SUBTITLE_MODE_REGULAR,
+    "fixed": SUBTITLE_MODE_REGULAR,
+    "常规": SUBTITLE_MODE_REGULAR,
+    "常规字幕": SUBTITLE_MODE_REGULAR,
+    "常规字幕（固定间隔）": SUBTITLE_MODE_REGULAR,
+    "常规字幕(固定间隔)": SUBTITLE_MODE_REGULAR,
+    "固定间隔": SUBTITLE_MODE_REGULAR,
+    # ja_JP 界面标签
+    "ストリーミング（重複除去）": SUBTITLE_MODE_STREAM,
+    "ストリーミング(重複除去)": SUBTITLE_MODE_STREAM,
+    "通常（固定間隔）": SUBTITLE_MODE_REGULAR,
+    "通常(固定間隔)": SUBTITLE_MODE_REGULAR,
+}
+
+
+def normalize_subtitle_mode(value: object) -> str:
+    """把任意历史/本地化写法归一为规范 token（stream / regular）。
+
+    未知值回落到 stream（历史默认），保证下游只需比较 token。
+    """
+    text = str(value or "").strip()
+    if not text:
+        return SUBTITLE_MODE_STREAM
+    alias = _SUBTITLE_MODE_ALIASES.get(text)
+    if alias is not None:
+        return alias
+    # 兜底：容忍 "流式字幕（去重）" 之类的变体写法
+    if "流式" in text or "stream" in text.lower():
+        return SUBTITLE_MODE_STREAM
+    if "常规" in text or "固定间隔" in text or "固定間隔" in text or "regular" in text.lower():
+        return SUBTITLE_MODE_REGULAR
+    return SUBTITLE_MODE_STREAM
+
+
 # 默认值
 DEFAULT_OCR_TEMPLATE = "通用OCR"
 DEFAULT_ASR_MODEL_DIR = str(_BASE_DIR / "models" / "asr")

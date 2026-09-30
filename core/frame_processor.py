@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from core.ocr_engine import OCREngineManager
-from core.utils import format_time, get_similarity
+from core.utils import SUBTITLE_MODE_REGULAR, format_time, get_similarity, normalize_subtitle_mode
 
 if TYPE_CHECKING:
     from core.filter_manager import FilterManager
@@ -242,7 +242,7 @@ class FrameProcessor:
         all_results = []
         frame_idx = 0
 
-        is_regular = "regular" in self._subtitle_mode or "常规" in self._subtitle_mode
+        is_regular = normalize_subtitle_mode(self._subtitle_mode) == SUBTITLE_MODE_REGULAR
         last_regular_sec = -999.0
 
         self._log(f"🎬 开始: {os.path.basename(video_path)} FPS={fps:.1f} 字幕模式={self._subtitle_mode}")

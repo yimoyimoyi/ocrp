@@ -1,7 +1,7 @@
 """弹窗/文件对话框统一封装 —— 替代信号直连 QMessageBox，可注入 mock 测试。"""
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, Qt
-from PySide6.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QLabel, QMessageBox
 
 
 class MessageService:
@@ -118,3 +118,9 @@ class MessageService:
     def save_file(self, title: str, directory: str = "", filter_str: str = "") -> str | None:
         path, _ = QFileDialog.getSaveFileName(self._parent, title, directory, filter_str)
         return path or None
+
+    # ── 文本输入对话框 ──
+    def get_text(self, title: str, label: str, text: str = "") -> tuple[str, bool]:
+        """单行文本输入对话框，返回 (输入文本, 用户是否确认)。"""
+        result, ok = QInputDialog.getText(self._parent, title, label, text=text)
+        return result, bool(ok)

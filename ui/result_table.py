@@ -16,13 +16,11 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
-    QFileDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QStyledItemDelegate,
     QTableView,
     QTextEdit,
@@ -33,32 +31,43 @@ from PySide6.QtWidgets import (
 
 from core.i18n import _
 from core.logger import get_logger
+from ui.services import MessageService
+from ui.theme_tokens import FONT_FAMILY, focus_outline_color, muted_text_style
 
 logger = get_logger(__name__)
 
 _CELL_FONT = None
+
+
 # 注意：编辑器背景不透明（autoFillBackground + palette Base），
 # 否则 view 绘制的单元格文本与编辑器文本重叠显示（QTableView 编辑场景）
-_CELL_STYLE = (
-    "QLineEdit, QTextEdit {"
-    "  border: none; padding: 3px 6px;"
-    "  font-size: 15px;"
-    "}"
-    "QLineEdit:focus, QTextEdit:focus {"
-    "  outline: 1px solid #58a6ff; outline-offset: 0;"
-    "}"
-)
+# 聚焦描边随主题取色：此前写死 #58a6ff（深色主题蓝），浅色主题下对比度不足
+def _cell_style(widget=None) -> str:
+    """单元格编辑器 QSS（聚焦描边随主题取色）。"""
+    return (
+        "QLineEdit, QTextEdit {"
+        "  border: none; padding: 3px 6px;"
+        "  font-size: 15px;"
+        "}"
+        "QLineEdit:focus, QTextEdit:focus {"
+        f"  outline: 1px solid {focus_outline_color(widget)}; outline-offset: 0;"
+        "}"
+    )
+
 
 # 搜索高亮颜色
 _MATCH_BG = QColor(45, 160, 60, 60)
 _CUR_BG = QColor(50, 200, 70, 100)
 _PLAYING_BG = QColor(66, 165, 245, 50)
 
+#: 兜底绘制字号（painter 绘制非编辑态文本）
+_FALLBACK_FONT_PT = 10
+
 
 def _get_cell_font():
     global _CELL_FONT
     if _CELL_FONT is None:
-        _CELL_FONT = QFont("Microsoft YaHei", 12)
+        _CELL_FONT = QFont(FONT_FAMILY, 12)
         _CELL_FONT.setStyleHint(QFont.SansSerif)
     return _CELL_FONT
 
@@ -308,7 +317,7 @@ class _CellDelegate(QStyledItemDelegate):
             editor = QLineEdit(parent)
             editor.setFrame(False)
         editor.setFont(_get_cell_font())
-        editor.setStyleSheet(_CELL_STYLE)
+        editor.setStyleSheet(_cell_style(editor))
         # 不透明背景：编辑时遮挡 view 绘制的单元格文本，避免重叠
         editor.setAutoFillBackground(True)
         pal = editor.palette()
@@ -395,7 +404,7 @@ class _ResultsTableView(QTableView):
         if model is not None and model.rowCount() == 0:
             painter = QPainter(self.viewport())
             painter.setRenderHint(QPainter.Antialiasing)
-            painter.setFont(QFont("Microsoft YaHei", 10))
+            painter.setFont(QFont(FONT_FAMILY, _FALLBACK_FONT_PT))
             painter.setPen(QColor(130, 140, 155, 160))
             rect = self.viewport().rect()
             text = _("📋 暂无识别结果\n\n拖入音视频文件后，点击下方「开始」或按 Space 播放以提取字幕")
@@ -413,8 +422,9 @@ class ResultTableWidget(QWidget):
     delete_filtered_requested = Signal()
     cell_edit_activated = Signal(int)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, message_service: MessageService | None = None):
         super().__init__(parent)
+        self._message_service = message_service or MessageService(self)
         self._results: list[dict] = []
         self._is_templated = False
         self._search_matches: list[int] = []
@@ -609,7 +619,7 @@ class ResultTableWidget(QWidget):
         sbl.setContentsMargins(6, 3, 6, 3)
         sbl.setSpacing(6)
         self._selection_label = QLabel(_("共 0 行，未选中任何行"))
-        self._selection_label.setStyleSheet("color: #78909c; font-size: 12px;")
+        self._selection_label.setStyleSheet(muted_text_style(self))
         sbl.addWidget(self._selection_label)
 
         # 批量操作按钮组
@@ -654,13 +664,13 @@ class ResultTableWidget(QWidget):
         count = len(self._model._checked_rows)
         total = len(self._results)
         if count == 0:
-            self._selection_label.setText(f"共 {total} 行，未选中任何行")
-            self._selection_label.setStyleSheet("color: #78909c; font-size: 12px;")
+            self._selection_label.setText(_("共 {total} 行，未选中任何行").format(total=total))
+            self._selection_label.setStyleSheet(muted_text_style(self))
             self._btn_batch_delete.setEnabled(False)
             self._btn_batch_clear.setEnabled(False)
         else:
-            self._selection_label.setText(f"已选中 {count} / {total} 行")
-            self._selection_label.setStyleSheet("color: #42a5f5; font-size: 12px; font-weight: bold;")
+            self._selection_label.setText(_("已选中 {count} / {total} 行").format(count=count, total=total))
+            self._selection_label.setStyleSheet(muted_text_style(self, bold=True))
             self._btn_batch_delete.setEnabled(True)
             self._btn_batch_clear.setEnabled(True)
 
@@ -956,10 +966,10 @@ class ResultTableWidget(QWidget):
 
     def _on_export(self, fmt: str):
         if not self._results:
-            QMessageBox.information(self, _("提示"), _("暂无识别结果可导出。"))
+            self._message_service.info(_("提示"), _("暂无识别结果可导出。"))
             return
-        file_path, _filter = QFileDialog.getSaveFileName(
-            self, f"导出为 {fmt.upper()}", "", f"{fmt.upper()} Files (*.{fmt});;All Files (*.*)"
+        file_path = self._message_service.save_file(
+            _("导出为 {fmt}").format(fmt=fmt.upper()), "", f"{fmt.upper()} Files (*.{fmt});;All Files (*.*)"
         )
         if file_path:
             self.export_requested.emit(fmt, file_path)
@@ -993,7 +1003,7 @@ class ResultTableWidget(QWidget):
         self.delete_filtered_requested.emit()
 
     def _update_count(self):
-        self._count_label.setText(f"({len(self._results)} 条)")
+        self._count_label.setText(_("({count} 条)").format(count=len(self._results)))
 
     def _retranslate_strings(self):
         """重新翻译所有用户可见字符串（语言切换时调用）。"""
@@ -1015,9 +1025,9 @@ class ResultTableWidget(QWidget):
         self._batch_count_label.setVisible(visible)
         if visible:
             if total_size > 0:
-                self._batch_count_label.setText(f"{count}/{total_size} 个文件")
+                self._batch_count_label.setText(_("{count}/{total} 个文件").format(count=count, total=total_size))
             else:
-                self._batch_count_label.setText(f"{count} 个文件")
+                self._batch_count_label.setText(_("{count} 个文件").format(count=count))
 
     # ── 搜索/替换 ──
 

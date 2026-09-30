@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QPushButton,
     QSpinBox,
     QStyle,
@@ -23,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.i18n import _
+from ui.services import MessageService
 
 
 class _RegionItemDelegate(QStyledItemDelegate):
@@ -66,8 +66,9 @@ class RegionManagerWidget(QWidget):
     region_removed = Signal(int)
     regions_cleared = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, message_service: MessageService | None = None):
         super().__init__(parent)
+        self._message_service = message_service or MessageService(self)
         self._regions: list[dict] = []
         self._current_index: int = -1
         self._engine_names: list[str] = ["paddleocr"]
@@ -425,10 +426,7 @@ class RegionManagerWidget(QWidget):
             self.region_removed.emit(self._current_index)
 
     def _on_clear_all(self):
-        reply = QMessageBox.question(
-            self, _("确认清空"), _("确定要清空所有区域吗？"), QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
+        if self._message_service.question(_("确认清空"), _("确定要清空所有区域吗？")):
             self.regions_cleared.emit()
 
     def _set_editor_enabled(self, enabled: bool):

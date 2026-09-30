@@ -10,6 +10,7 @@
 import json
 import os
 import re
+import threading
 from collections.abc import Callable
 from pathlib import Path
 
@@ -18,6 +19,20 @@ import numpy as np
 from core.config_manager import load_json_with_comments
 from core.llm_utils import ask_llm
 from core.logger import get_logger
+
+# 默认提示词单一来源（P23 去重）：此前三处副本已漂移，polish_prompt 因域对象
+# 默认值被截断而完全丢失 {待校对文本} 占位符，导致润色把"无正文提示词"发给模型。
+from core.prompts import (
+    DEFAULT_CORRECTION_PROMPT,
+    DEFAULT_CORRECTION_SYSTEM_PROMPT,
+    DEFAULT_OUTPUT_FORMAT,
+    DEFAULT_POLISH_PROMPT,
+    DEFAULT_POLISH_SYSTEM_PROMPT,
+    DEFAULT_SUMMARY_PROMPT,
+    DEFAULT_TRANSLATE_SYSTEM_PROMPT,
+    POLISH_TEXT_PLACEHOLDER,
+    is_placeholder_free_polish_prompt,
+)
 
 BASE_DIR = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = BASE_DIR / "config"
@@ -70,20 +85,24 @@ def _clean_content(text: str) -> str:
     return text.strip()
 
 
-_DEFAULT_SUMMARY_PROMPT = (
-    "请根据以下OCR识别文本，总结出这段内容的：\n"
-    "1. 领域/类型（如：小说、新闻、游戏对话、学术论文等）\n"
-    "2. 整体氛围/语气（如：严肃、欢快、悲伤、紧张等）\n"
-    "3. 主要内容/主题（一句话概括）\n\n"
-    "请用简洁的中文回答，格式：\n"
-    "领域：xxx\n氛围：xxx\n内容：xxx"
-)
-
-
 def _clean_summary_prompt(value) -> str:
     """清洗 summary_prompt：历史版本可能写入字面量 "None"（旧 P2 bug 污染）。"""
     if not value or str(value).strip().lower() in ("none", "null"):
-        return _DEFAULT_SUMMARY_PROMPT
+        return DEFAULT_SUMMARY_PROMPT
+    return str(value)
+
+
+def _clean_polish_prompt(value) -> str:
+    """清洗 polish_prompt：无正文占位符的提示词无法注入待润色文本。
+
+    历史域对象/建文件模板写入的是被截断的 "……进行润色..."，没有任何占位符，
+    会把"不含正文的提示词"发给模型。此类值在内存中回落内置默认（不写盘，
+    用户仍可在设置里看到并修改原值）。
+    """
+    if is_placeholder_free_polish_prompt(value):
+        if str(value or "").strip():
+            logger.warning("polish_prompt 缺少正文占位符，本次运行使用内置默认提示词")
+        return DEFAULT_POLISH_PROMPT
     return str(value)
 
 
@@ -133,9 +152,7 @@ class AICorrector:
         self._config = config or load_correction_config()
         self._enabled = self._config.get("enabled", False)
         self._retry = self._config.get("retry_on_failure", 2)
-        self._prompt_template = self._config.get(
-            "correction_prompt", "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。"
-        )
+        self._prompt_template = self._config.get("correction_prompt", DEFAULT_CORRECTION_PROMPT)
         self._engine_name = self._config.get("engine", "llamacpp")
         self._preset_name = preset_name
         api_cfg = _resolve_api_config(self._config, preset_name)
@@ -146,6 +163,8 @@ class AICorrector:
         self._engine_manager = engine_manager
         self._env_context: str = ""
         self._extract_env: bool = self._config.get("extract_environment", False)
+        #: 最近一次 _call_llm 的最终结果是否被 max_tokens 截断（消费方据此回退）
+        self._last_truncated: bool = False
         # 翻译模式（设置同步 R11：由配置读取，_open_settings 重建实例后保持 UI 勾选，
         # 此前 __init__ 硬编码 False 导致对话框 accept 后 translate 永久失效）
         self._translate_mode: bool = bool(self._config.get("translate_mode", False))
@@ -153,26 +172,13 @@ class AICorrector:
         self._stream_mode: bool = bool(self._config.get("stream_mode", False))  # 流式输出模式
         self._json_mode: bool = bool(self._config.get("json_mode", False))  # JSON 输出模式
         # ── 自定义提示词字段 ──
-        self._summary_prompt = _clean_summary_prompt(self._config.get("summary_prompt", _DEFAULT_SUMMARY_PROMPT))
-        self._correction_system_prompt = self._config.get(
-            "correction_system_prompt",
-            "你是一个专业的字幕校对助手。你接收带有时间轴的OCR识别文本列表，"
-            "逐行校对，保持行数不变，只修正明显错误，不要合并或拆分条目。"
-            "用户自定义提示词作为额外参考。只返回修正后的结果。",
-        )
-        self._output_format = self._config.get("output_format", "[纠正后文本]")
+        self._summary_prompt = _clean_summary_prompt(self._config.get("summary_prompt", DEFAULT_SUMMARY_PROMPT))
+        self._correction_system_prompt = self._config.get("correction_system_prompt", DEFAULT_CORRECTION_SYSTEM_PROMPT)
+        self._output_format = self._config.get("output_format", DEFAULT_OUTPUT_FORMAT)
         self._seg_time_gap: float = self._config.get("seg_time_gap", 3.0)
         # ── 润色模式字段 ──
         self._polish_enabled: bool = self._config.get("enable_polish", False)
-        self._polish_prompt = self._config.get(
-            "polish_prompt",
-            "你是一个专业的字幕润色专家。请对以下已翻译/纠错后的字幕文本进行润色：\n"
-            "1. 调整语序使表达更自然流畅\n2. 统一术语和风格\n3. 精简冗余表达\n"
-            "4. 确保符合中文字幕习惯\n\n"
-            "原始文本：{原始结果}\n"
-            "待润色文本：{待校对文本}\n\n"
-            "请直接输出润色后的文本，不要附加说明。",
-        )
+        self._polish_prompt = _clean_polish_prompt(self._config.get("polish_prompt", ""))
 
     @property
     def enabled(self) -> bool:
@@ -195,34 +201,19 @@ class AICorrector:
         self._config = load_correction_config()
         self._enabled = self._config.get("enabled", False)
         self._retry = self._config.get("retry_on_failure", 2)
-        self._prompt_template = self._config.get(
-            "correction_prompt", "你是一个文本校对专家。请根据上下文纠正OCR识别结果中的明显错误，保留原格式。"
-        )
+        self._prompt_template = self._config.get("correction_prompt", DEFAULT_CORRECTION_PROMPT)
         self._engine_name = self._config.get("engine", "llamacpp")
         api_cfg = _resolve_api_config(self._config, self._preset_name)
         self._api_key = api_cfg.get("api_key", "").strip()
         self._base_url = api_cfg.get("base_url", "http://127.0.0.1:8080")
         self._model = api_cfg.get("model", "")
         self._timeout = api_cfg.get("timeout", 30)
-        self._summary_prompt = _clean_summary_prompt(self._config.get("summary_prompt", _DEFAULT_SUMMARY_PROMPT))
-        self._correction_system_prompt = self._config.get(
-            "correction_system_prompt",
-            "你是一个专业的字幕校对助手。你接收带有时间轴的OCR识别文本列表，"
-            "逐行校对，保持行数不变，只修正明显错误，不要合并或拆分条目。"
-            "用户自定义提示词作为额外参考。只返回修正后的结果。",
-        )
-        self._output_format = self._config.get("output_format", "[纠正后文本]")
+        self._summary_prompt = _clean_summary_prompt(self._config.get("summary_prompt", DEFAULT_SUMMARY_PROMPT))
+        self._correction_system_prompt = self._config.get("correction_system_prompt", DEFAULT_CORRECTION_SYSTEM_PROMPT)
+        self._output_format = self._config.get("output_format", DEFAULT_OUTPUT_FORMAT)
         self._seg_time_gap = self._config.get("seg_time_gap", 3.0)
         self._polish_enabled = self._config.get("enable_polish", False)
-        self._polish_prompt = self._config.get(
-            "polish_prompt",
-            "你是一个专业的字幕润色专家。请对以下已翻译/纠错后的字幕文本进行润色：\n"
-            "1. 调整语序使表达更自然流畅\n2. 统一术语和风格\n3. 精简冗余表达\n"
-            "4. 确保符合中文字幕习惯\n\n"
-            "原始文本：{原始结果}\n"
-            "待润色文本：{待校对文本}\n\n"
-            "请直接输出润色后的文本，不要附加说明。",
-        )
+        self._polish_prompt = _clean_polish_prompt(self._config.get("polish_prompt", ""))
 
         # 恢复运行时状态
         self._translate_mode = _translate
@@ -272,6 +263,15 @@ class AICorrector:
     def polish_enabled(self, val: bool):
         self._polish_enabled = val
 
+    @property
+    def env_context(self) -> str:
+        """已提取的环境上下文（供流程层展示/判断，公开 API）。"""
+        return self._env_context
+
+    def should_skip_env_extraction(self) -> bool:
+        """公开 API：是否跳过环境提取（见 ``_should_skip_env_extraction``）。"""
+        return self._should_skip_env_extraction()
+
     def apply_preset(self, preset_name: str):
         """切换 API 预设。"""
         self._preset_name = preset_name
@@ -281,6 +281,15 @@ class AICorrector:
         self._model = api_cfg.get("model", "")
         self._timeout = api_cfg.get("timeout", 30)
         logger.info("已切换 API 预设: %s", preset_name or "默认")
+
+    def is_default_correction_prompt(self) -> bool:
+        """判断 correction_prompt 是否仍为内置默认值。
+
+        取代此前 ``"文本校对" not in user_hint[:20]`` 的脆弱子串启发式：该写法
+        只看前 20 个字符，任何以"文本校对"开头的用户自定义提示词都会被误判为
+        默认值而丢弃；同时默认提示词一旦改写就会失效。
+        """
+        return str(self._prompt_template or "").strip() == DEFAULT_CORRECTION_PROMPT
 
     @property
     def extract_env(self) -> bool:
@@ -341,17 +350,23 @@ class AICorrector:
         支持的占位符:
             {原始结果} / [原始文本] → 当前 OCR 原始文本
             {上下文}               → 前后文文本
-            {环境信息}             → 全文环境提取结果
+            {环境信息} / {环境上下文} / {环境描述} → 全文环境提取结果
             {时间戳}               → 当前条目的时间戳
             {区域}                 → 区域名称（字幕/语音等）
             {引擎}                 → OCR 引擎名称
             {语言}                 → 检测/设置的语言
+
+        ``{环境上下文}``/``{环境描述}`` 是 ``{环境信息}`` 的同义写法：
+        ``_should_skip_env_extraction`` 一直把它们当作"用户自管环境"的判据，
+        但此前这里不替换它们，导致提示词里留下字面占位符且环境信息永久缺失。
         """
         result = template
         result = result.replace("{原始结果}", raw_text)
         result = result.replace("[原始文本]", raw_text)
         result = result.replace("{上下文}", context)
         result = result.replace("{环境信息}", env_context)
+        result = result.replace("{环境上下文}", env_context)
+        result = result.replace("{环境描述}", env_context)
         result = result.replace("{时间戳}", timestamp)
         result = result.replace("{区域}", region)
         result = result.replace("{引擎}", engine)
@@ -361,14 +376,7 @@ class AICorrector:
     def _build_system_prompt(self, env_context: str = "") -> str:
         """构建 system prompt（翻译/校对 + 环境上下文 + JSON 格式指令）。"""
         if self._translate_mode:
-            system_msg = (
-                "你是一个专业的字幕翻译助手。你接收带有时间轴（起止时间）的OCR识别文本列表，"
-                "将每行 OCR 文本翻译为中文。保持原始行号前缀 [ID:行号]，逐行翻译。"
-                "如果上下文显示某行是不完整的碎片（与上一行或下一行属于同一句话），"
-                "将完整语义合并到该行的翻译中，使每行译文语义完整自然。"
-                "保持输出行数与输入一致，每个 [ID:行号] 对应一行。"
-                "用户自定义提示词仅作为翻译风格参考。只返回翻译后的结果。"
-            )
+            system_msg = DEFAULT_TRANSLATE_SYSTEM_PROMPT
         else:
             system_msg = self._correction_system_prompt
 
@@ -384,6 +392,22 @@ class AICorrector:
 
         return system_msg
 
+    @staticmethod
+    def _estimate_max_tokens(output_source: str) -> int:
+        """按"需要生成多少字"估算输出预算。
+
+        此前纠错/润色调用**完全不传 max_tokens**，网关默认 2048 —— 输入较长时
+        输出会被硬切（润色把 480 字输入变成 43 字输出、批量纠错把半句写进表格行）。
+        中文大致 1 字 ≈ 1 token，这里留 1.6× 余量再加固定开销。
+
+        下限**不得低于网关默认值**：那样反而会把短行的预算从 2048 降到 1024，
+        比修复前更糟。上限用主流模型的输出上限，避免超限报错。
+        """
+        from core.llm_utils.llm_client import DEFAULT_MAX_TOKENS, TRUNCATION_ESCALATION_CEILING
+
+        needed = int(len(output_source or "") * 1.6) + 256
+        return max(DEFAULT_MAX_TOKENS, min(TRUNCATION_ESCALATION_CEILING, needed))
+
     def _call_llm(
         self,
         prompt: str,
@@ -393,10 +417,20 @@ class AICorrector:
         log_title: str = "default",
         _tag: str = "",
         no_cache: bool = False,
+        cancel_event: threading.Event | None = None,
+        output_token_source: str = "",
     ) -> str | dict | None:
         """调用统一 LLM 网关（封装 _get_engine_config → ask_llm）。
 
         这是 _call_api() 的替代方法，所有 LLM 调用统一走此入口。
+
+        ``cancel_event`` 透传给网关，使 worker 的 stop() 能中断在飞请求
+        （流式立即中断，非流式在请求返回后立即放弃重试）。
+
+        ``output_token_source`` 为"期望被完整复述/改写"的文本（批量输入或待润色
+        正文），用于按长度给足输出预算。留空则用 prompt 长度估算。
+
+        调用后 ``self._last_truncated`` 表示**最终**结果是否仍被 max_tokens 截断。
         """
         ec = self._get_engine_config()
         api_key = ec.get("api_key", "").strip()
@@ -405,19 +439,22 @@ class AICorrector:
         timeout = ec.get("timeout", 30)
 
         use_stream = self._stream_mode or stream_callback is not None
+        max_tokens = self._estimate_max_tokens(output_token_source or prompt)
 
         _alog(f"=== API REQUEST [{_tag}] prompt_len={len(prompt)} ===")
         _alog(f"  PROMPT: {prompt}")
 
         logger.info(
-            "AI 纠错 API 请求 | model=%s | stream=%s | json=%s | translate=%s",
+            "AI 纠错 API 请求 | model=%s | stream=%s | json=%s | translate=%s | max_tokens=%d",
             model,
             use_stream,
             self._json_mode,
             self._translate_mode,
+            max_tokens,
         )
         logger.debug("Prompt(%d chars): %s", len(prompt), prompt[:200])
 
+        truncated: list[bool] = []
         result = ask_llm(
             prompt=prompt,
             system_prompt=system_prompt,
@@ -430,8 +467,12 @@ class AICorrector:
             base_url=base_url,
             model=model,
             timeout=timeout,
+            max_tokens=max_tokens,
             no_cache=no_cache,
+            cancel_event=cancel_event,
+            truncated_out=truncated,
         )
+        self._last_truncated = bool(truncated and truncated[0])
 
         if result is None:
             _alog(f"  RESPONSE [{_tag}]: None (all retries exhausted)")
@@ -485,6 +526,7 @@ class AICorrector:
         image: np.ndarray | None = None,
         stream_callback: Callable[[str], None] | None = None,
         prompt_override: str = "",
+        cancel_event: threading.Event | None = None,
     ) -> str | None:
         """对一段原始 OCR 文本进行纠错（或重新识别）。
 
@@ -523,7 +565,9 @@ class AICorrector:
         elif self._translate_mode:
             user_hint = self._prompt_template.strip()
             custom = ""
-            if user_hint and "文本校对" not in user_hint[:20]:
+            # 仅在用户真正自定义过提示词时注入风格参考（默认为校对提示词，
+            # 作为翻译风格参考毫无意义）
+            if user_hint and not self.is_default_correction_prompt():
                 custom = f"\n风格参考：{user_hint}"
             prompt = (
                 f"{context_str}\n\n"
@@ -550,9 +594,17 @@ class AICorrector:
             resp_type=resp_type,
             log_title="correction",
             _tag="row",
+            cancel_event=cancel_event,
+            output_token_source=raw_text,
         )
 
         if result is None:
+            return None
+
+        # 输出被 max_tokens 截断：单行纠错拿到的就是残缺文本，绝不能写回字幕行。
+        # 返回 None 让调用方保留原文（fail-safe）。
+        if self._last_truncated:
+            logger.warning("单行纠错输出被截断，放弃本次结果（保留原文）: %s", raw_text[:40])
             return None
 
         content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
@@ -606,11 +658,15 @@ class AICorrector:
         texts: list[tuple[int, str]],
         max_retries: int | None = None,
         stream_callback: Callable[[str], None] | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> dict[int, str]:
         """批量对多条文本进行 AI 纠错/翻译。
 
         Args:
             texts: [(row_idx, text), ...]
+            max_retries: 解析失败时的最大重试次数
+            stream_callback: 流式回调
+            cancel_event: 协作式取消信号，置位后立即停止重试并返回原文填充结果
         """
         if not texts:
             return {}
@@ -626,6 +682,13 @@ class AICorrector:
 
         last_error = ""
         for attempt in range(max_retries + 1):
+            # 协作式取消：worker.stop() 置位后立即停止重试（不必等重试全部走完），
+            # 直接返回原文填充结果 —— 停止操作对用户即刻可见。
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("批量纠错已取消，用原文填充（attempt=%d）", attempt)
+                cancelled: dict[int, str] = {}
+                self._fill_missing_with_original(cancelled, id_map, original_map)
+                return cancelled
             result = self._call_llm(
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -633,12 +696,21 @@ class AICorrector:
                 resp_type=resp_type,
                 log_title="correction_batch",
                 _tag="correct_batch",
+                cancel_event=cancel_event,
+                output_token_source=batch_text,
             )
             if result is None:
                 last_error = "API 返回空"
                 logger.warning("批量纠错 API 返回空，ask_llm 内部重试已耗尽，跳出外层循环")
                 # ❌ 不继续外层重试：ask_llm 内部 @except_handler 已重试 4 次
                 break
+
+            # 输出被截断：最后一条 [ID:n] 可能只写了一半（例如 "[ID:3] 你好世"）。
+            # 若原样采纳就会把半句写进字幕行 —— 这里丢弃**最后一条**解析结果，
+            # 缺失行由 _fill_missing_with_original 用原文补齐，其余行照常生效。
+            truncated = self._last_truncated
+            if truncated:
+                logger.warning("批量纠错输出被截断，丢弃可能不完整的最后一条解析结果")
 
             content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
 
@@ -660,6 +732,8 @@ class AICorrector:
 
             # ── 文本模式 ──
             parsed = self._parse_batch_result(content)
+            if truncated and parsed:
+                parsed.pop(max(parsed), None)
             if not parsed and attempt < max_retries:
                 logger.warning("解析全空 (第%d次)，重试...", attempt + 1)
                 continue
@@ -670,6 +744,7 @@ class AICorrector:
                 return fallback
 
             corrected_map = self._build_result_map(parsed, id_map, original_map)
+            self._reconcile_batch_result(parsed, id_map, "批量纠错(文本)")
             if not corrected_map and attempt < max_retries:
                 logger.warning("所有行解析为空 (第%d次)，重试...", attempt + 1)
                 continue
@@ -695,10 +770,16 @@ class AICorrector:
         return id_map, "\n".join(lines), original_map
 
     def _build_correction_prompt(self, batch_text, is_1based: bool = False):
-        """构建纠错/翻译 prompt。"""
+        """构建纠错/翻译 prompt。
+
+        ``is_1based`` 保留仅为向后兼容（历史调用方传入）；ID 前缀一律由
+        ``_format_batch`` 生成，本函数不依赖行号基数，故不使用该参数。
+        """
         user_hint = self._prompt_template.strip()
         custom_hint = ""
-        if user_hint and "文本校对" not in user_hint[:20] and "翻译以下" not in user_hint[:20]:
+        # 仅注入真正自定义过的提示词（默认提示词已由 system prompt 承载；
+        # 此前用前 20 字符子串启发式判断，会误伤以相同字样开头的自定义提示词）
+        if user_hint and not self.is_default_correction_prompt():
             custom_hint = f"用户额外参考（按需采纳）：{user_hint}\n"
 
         if self._translate_mode:
@@ -737,6 +818,33 @@ class AICorrector:
             )
         return prompt
 
+    @staticmethod
+    def _reconcile_batch_result(parsed: dict, id_map: dict, log_title: str) -> None:
+        """核对模型返回的批次行覆盖情况（诊断，不改变返回值）。
+
+        批量纠错依赖模型回传**每一行**的 ``[ID:n]``。缺失行会被
+        ``_fill_missing_with_original`` 用原文补齐 —— 这是安全兜底，但它**静默**
+        掩盖了"模型只处理了前几行"这类系统性问题（典型原因：max_tokens 截断、
+        模型提前收尾），让人误以为整批纠错已生效。此处显式记录缺失/多余行号。
+        """
+        try:
+            seen = {int(k) for k in parsed}
+        except (TypeError, ValueError):
+            return
+        missing = sorted(set(id_map) - seen)
+        extra = sorted(seen - set(id_map))
+        if missing:
+            logger.warning(
+                "%s：模型仅返回 %d/%d 行，缺失 %d 行将由原文补齐（批次下标示例: %s）",
+                log_title,
+                len(set(id_map) & seen),
+                len(id_map),
+                len(missing),
+                missing[:10],
+            )
+        if extra:
+            logger.warning("%s：模型返回了 %d 个不存在的行号，已忽略（示例: %s）", log_title, len(extra), extra[:10])
+
     def _try_parse_json_batch(self, result, id_map, original_map):
         """尝试从 JSON 响应解析批量结果。成功返回 dict，失败返回 None，全空返回 {}。
 
@@ -749,6 +857,7 @@ class AICorrector:
             if isinstance(result, str):
                 parsed = self._parse_batch_result(result)
                 if parsed:
+                    self._reconcile_batch_result(parsed, id_map, "批量纠错(文本回退)")
                     return self._build_result_map(parsed, id_map, original_map)
             return None
         items = None
@@ -757,6 +866,7 @@ class AICorrector:
         if not isinstance(items, list):
             return None
         corrected_map = {}
+        seen: dict[int, str] = {}
         for entry in items:
             if not isinstance(entry, dict):
                 continue
@@ -768,11 +878,13 @@ class AICorrector:
                 idx_in_batch = int(eid)
             except (ValueError, TypeError):
                 continue
+            seen[idx_in_batch] = etext
             if idx_in_batch in id_map:
                 row_idx = id_map[idx_in_batch]
                 clean = _clean_content(etext)
                 if clean and clean != original_map.get(row_idx, "").strip():
                     corrected_map[row_idx] = clean
+        self._reconcile_batch_result(seen, id_map, "批量纠错(JSON)")
         return corrected_map
 
     def _build_result_map(self, parsed, id_map, original_map):
@@ -884,12 +996,18 @@ class AICorrector:
 
     # ── 润色模式 ─────────────────────────────────────────────
 
-    def polish(self, original_text: str, corrected_text: str) -> str | None:
+    def polish(
+        self,
+        original_text: str,
+        corrected_text: str,
+        cancel_event: threading.Event | None = None,
+    ) -> str | None:
         """对纠错/翻译后的文本进行润色。
 
         Args:
             original_text: OCR 原始文本
             corrected_text: 已纠错或翻译后的文本
+            cancel_event: 协作式取消信号，置位后放弃润色并返回原纠错文本
 
         Returns:
             润色后的文本，失败返回 None
@@ -897,6 +1015,8 @@ class AICorrector:
         if not self._polish_enabled:
             return corrected_text
         if not original_text.strip() or not corrected_text.strip():
+            return corrected_text
+        if cancel_event is not None and cancel_event.is_set():
             return corrected_text
 
         prompt = self._resolve_placeholders(
@@ -906,20 +1026,41 @@ class AICorrector:
             env_context=self._env_context,
         )
         # 额外替换 {待校对文本}
-        prompt = prompt.replace("{待校对文本}", corrected_text)
-        # 若 prompt 中不含环境信息但 _env_context 已设置，强制附加
-        if self._env_context and "环境" not in prompt:
+        prompt = prompt.replace(POLISH_TEXT_PLACEHOLDER, corrected_text)
+        # 不变量：提示词必须真的包含待润色正文。用户/历史配置的 polish_prompt 可能
+        # 完全不含占位符（域对象旧默认值即是被截断的无占位符句子），此时上面两步都是
+        # 空操作，会把"没有正文的提示词"发给模型，返回内容与输入无关 —— 静默污染结果。
+        if corrected_text not in prompt:
+            logger.warning(
+                "润色提示词缺少 %s 占位符（提示词=%r），已自动追加待润色正文",
+                POLISH_TEXT_PLACEHOLDER,
+                prompt[:60],
+            )
+            prompt = f"{prompt}\n\n原始文本：\n{original_text}\n待润色文本：\n{corrected_text}"
+        # 环境上下文：判断"是否已注入"要看**环境正文本身是否出现**，而不是
+        # 提示词里有没有"环境"两个字 —— 提示词正文（如"符合中文字幕习惯"段落）
+        # 或用户自定义文案里出现该词就会让环境信息被永久跳过。
+        if self._env_context and self._env_context not in prompt:
             prompt += f"\n\n【环境上下文（参考）】\n{self._env_context}"
 
         result = self._call_llm(
             prompt=prompt,
-            system_prompt="你是一个专业的字幕润色专家。只输出最终的润色结果文本。",
+            system_prompt=DEFAULT_POLISH_SYSTEM_PROMPT,
             resp_type=None,
             log_title="polish",
             _tag="polish",
+            cancel_event=cancel_event,
+            output_token_source=corrected_text,
         )
         if result is None:
             logger.warning("润色 API 失败 (row)，使用原文")
             return corrected_text
         content = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
+        # 输出被 max_tokens 截断：润色结果是"改写后的全文"，被切掉尾部就是内容丢失
+        # （实测 480 字输入只回来 43 字）。此时宁可保留未润色的纠错文本。
+        if self._last_truncated:
+            logger.warning(
+                "润色输出被截断（输入 %d 字，返回 %d 字），保留未润色文本", len(corrected_text), len(content)
+            )
+            return corrected_text
         return content.strip() or corrected_text

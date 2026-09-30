@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
-    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -21,16 +20,17 @@ from PySide6.QtWidgets import (
 from core.i18n import _
 from core.logger import get_logger
 from core.utils import fetch_models_from_url, populate_model_combo
+from ui.services import MessageService
 
 logger = get_logger(__name__)
-
 
 
 class PresetManageDialog(QDialog):
     """API 预设管理对话框。"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, message_service: MessageService | None = None):
         super().__init__(parent)
+        self._message_service = message_service or MessageService(self)
         self.setWindowTitle(_("API 预设管理"))
         self.setMinimumWidth(500)
         from core.api_preset_manager import APIPresetManager
@@ -127,7 +127,7 @@ class PresetManageDialog(QDialog):
         bridge.done.connect(self._on_fetch_done)
 
         def _on_err(msg: str):
-            self._model_status.setText(f"❌ {msg[:40]}")
+            self._model_status.setText(_("❌ {msg}").format(msg=msg[:40]))
             self._model_status.setToolTip(msg)
 
         bridge.err.connect(_on_err)
@@ -177,17 +177,17 @@ class PresetManageDialog(QDialog):
         name = self._list.currentItem().text() if self._list.currentItem() else ""
         if not name:
             return
-        reply = QMessageBox.question(
-            self, _("确认删除"), _(f"确定要删除预设「{name}」吗？"), QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-        )
-        if reply == QMessageBox.Yes:
+        if self._message_service.question(
+            _("确认删除"),
+            _("确定要删除预设「{name}」吗？").format(name=name),
+        ):
             self._mgr.delete_preset(name)
             self._refresh_list()
 
     def _on_save(self):
         name = self._name_edit.text().strip()
         if not name:
-            QMessageBox.warning(self, _("提示"), _("请输入预设名称。"))
+            self._message_service.warning(_("提示"), _("请输入预设名称。"))
             return
         cfg = {
             "api_key": self._key_edit.text(),

@@ -317,6 +317,9 @@ msgstr "(空)"
 msgid "全选"
 msgstr "すべて選択"
 
+msgid "输入要过滤的关键词，回车添加..."
+msgstr "フィルタするキーワードを入力し、Enter で追加..."
+
 msgid "未选中任何行"
 msgstr "行が選択されていません"
 
@@ -388,6 +391,18 @@ msgstr "削除確認"
 
 msgid "请输入预设名称。"
 msgstr "プリセット名を入力してください。"
+
+msgid "确定要删除预设「{name}」吗？"
+msgstr "プリセット「{name}」を削除しますか？"
+
+msgid "找到 {count} 个匹配项"
+msgstr "{count} 件一致しました"
+
+msgid "❌ 加载失败: {msg}\n拖放视频文件到此处"
+msgstr "❌ 読み込み失敗: {msg}\nここに動画ファイルをドロップ"
+
+msgid "❌ 加载失败: {msg}\n拖放文件到此处"
+msgstr "❌ 読み込み失敗: {msg}\nここにファイルをドロップ"
 
 msgid "https://api.openai.com/v1"
 msgstr "https://api.openai.com/v1"
@@ -746,8 +761,6 @@ msgstr "リトライ回数:"
 msgid "处理模式:"
 msgstr "処理モード:"
 
-msgid "帧间隔:"
-msgstr "フレーム間隔:"
 
 msgid "Beam Size:"
 msgstr "Beam Size:"
@@ -941,8 +954,6 @@ msgstr "新しい名前:"
 msgid "重命名失败"
 msgstr "名前変更失敗"
 
-msgid "确认清空"
-msgstr "クリア確認"
 
 msgid "留空使用默认缓存"
 msgstr "空欄でデフォルトキャッシュ"
@@ -1057,3 +1068,108 @@ msgstr "原版"
 
 msgid "自动提取的全文环境信息（领域/氛围/摘要），可手动修改，不随设置保存"
 msgstr "自動抽出された全文環境情報（分野/雰囲気/要約）、手動編集可能"
+
+msgid "模板: {name} — {desc}"
+msgstr "テンプレート: {name} — {desc}"
+
+msgid "✅ 模板 [{name}] 已保存"
+msgstr "✅ テンプレート [{name}] 保存"
+
+msgid "🗑 模板 [{name}] 已删除"
+msgstr "🗑 テンプレート [{name}] 削除"
+
+msgid "✅ 已添加过滤器: {keyword}"
+msgstr "✅ フィルター追加: {keyword}"
+
+msgid "🗑 已移除过滤器: {keyword}"
+msgstr "🗑 フィルター削除: {keyword}"
+
+msgid "⚠ 移除失败: 关键词 '{keyword}' 不存在"
+msgstr "⚠ 削除失敗: キーワード '{keyword}' が存在しません"
+
+msgid "已加载: {name}"
+msgstr "読込済: {name}"
+
+msgid "已加载音频: {name}（仅支持 ASR 和纠错）"
+msgstr "音声読込済: {name}（ASRと修正のみ対応）"
+
+msgid "⚠ 环境提取失败: {err}"
+msgstr "⚠ 環境抽出失敗: {err}"
+
+msgid "🗑 已删除 {deleted} 条包含关键词的结果"
+msgstr "🗑 キーワードを含む結果を {deleted} 件削除しました"
+
+msgid "已跳转到 {time}"
+msgstr "{time} にジャンプ"
+
+msgid "✅ 已导入 {count} 个模板"
+msgstr "✅ {count} 個のテンプレートを読込"
+
+msgid "✅ 已导出模板到: {name}"
+msgstr "✅ テンプレートを書出: {name}"
+
+msgid "处理中... {cur}s / {total}s | 哨兵: {sentinel}"
+msgstr "処理中... {cur}s / {total}s | センチネル: {sentinel}"
+
+msgid "✅ 完成: {n} 条结果 | 批量纠错完成"
+msgstr "✅ 完了: {n} 件の結果 | 一括修正完了"
+
+msgid "⚠ 批量纠错出错: {err}"
+msgstr "⚠ 一括修正エラー: {err}"
+
+msgid "❌ 处理失败: {err}"
+msgstr "❌ 処理失敗: {err}"
+
+msgid "✅ 已导出: {name}"
+msgstr "✅ エクスポート完了: {name}"
+
+msgid "共 {total} 行，未选中任何行"
+msgstr "全 {total} 行、未選択"
+
+msgid "已选中 {count} / {total} 行"
+msgstr "{count} / {total} 行を選択中"
+
+msgid "({count} 条)"
+msgstr "({count} 件)"
+
+msgid "{count}/{total} 个文件"
+msgstr "{count}/{total} ファイル"
+
+msgid "{count} 个文件"
+msgstr "{count} ファイル"
+
+msgid "导出为 {fmt}"
+msgstr "{fmt}にエクスポート"
+
+msgid "❌ {msg}"
+msgstr "❌ {msg}"
+
+msgid "✅ {msg}"
+msgstr "✅ {msg}"
+
+msgid "✅ 已保存: {name}"
+msgstr "✅ 保存しました: {name}"
+
+msgid "{title} ·高级"
+msgstr "{title} ·詳細設定"
+
+msgid "在光标位置插入 {ph}"
+msgstr "カーソル位置に {ph} を挿入"
+
+msgid "区域{idx}"
+msgstr "領域{idx}"
+
+msgid "模板导入失败:\n{err}"
+msgstr "テンプレート読込失敗:\n{err}"
+
+msgid "模板导出失败:\n{err}"
+msgstr "テンプレート書出失敗:\n{err}"
+
+msgid "润色提示词:"
+msgstr "推敲プロンプト:"
+
+msgid "润色提示词（必须包含 {待校对文本} 占位符）"
+msgstr "推敲プロンプト（{待校对文本} プレースホルダー必須）"
+
+msgid "润色必须包含 {待校对文本} 占位符；缺少占位符时会自动回落内置默认提示词"
+msgstr "推敲プロンプトには {待校对文本} プレースホルダーが必要です。無い場合は組み込みの既定プロンプトに戻ります。"
